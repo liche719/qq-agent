@@ -1,6 +1,7 @@
 package com.liche.wechatagent.memory;
 
 import com.liche.wechatagent.exception.BizException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,10 +14,15 @@ public class CoreMemoryService {
 
     private final UserCoreMemoryRepository coreRepository;
     private final MemoryChangeLogRepository changeLogRepository;
+    private final MemoryContentSimilarity similarity;
 
-    public CoreMemoryService(UserCoreMemoryRepository coreRepository, MemoryChangeLogRepository changeLogRepository) {
+    @Autowired
+    public CoreMemoryService(UserCoreMemoryRepository coreRepository,
+                             MemoryChangeLogRepository changeLogRepository,
+                             MemoryContentSimilarity similarity) {
         this.coreRepository = coreRepository;
         this.changeLogRepository = changeLogRepository;
+        this.similarity = similarity;
     }
 
     public List<UserCoreMemory> list(String userId) {
@@ -36,11 +42,12 @@ public class CoreMemoryService {
     public UserCoreMemory add(String userId, String content, String operator, MemoryProvenance provenance) {
         String normalized = normalizeContent(content);
         UserCoreMemory existing = coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
-                .filter(memory -> normalized.equalsIgnoreCase(memory.getContent().trim()))
+                .filter(CoreMemoryService::isActive)
+                .filter(memory -> similarity.isDuplicate(normalized, memory.getContent()))
                 .findFirst()
                 .orElse(null);
         if (existing != null) {
-            applyProvenance(existing, provenance);
+            applyProvenance(existing, provenance, true);
             existing.setLastConfirmedAt(LocalDateTime.now());
             existing.setUpdatedAt(LocalDateTime.now());
             coreRepository.save(existing);
@@ -49,7 +56,7 @@ public class CoreMemoryService {
             return existing;
         }
         UserCoreMemory mem = coreRepository.save(new UserCoreMemory(userId, normalized));
-        applyProvenance(mem, provenance);
+        applyProvenance(mem, provenance, false);
         mem.setLastConfirmedAt(LocalDateTime.now());
         coreRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "ADD", "CORE", mem.getId(), null, normalized,
@@ -75,7 +82,7 @@ public class CoreMemoryService {
         mem.setUpdatedAt(LocalDateTime.now());
         mem.setLastConfirmedAt(LocalDateTime.now());
         mem.setStatus(MemoryStatus.ACTIVE.name());
-        applyProvenance(mem, provenance);
+        applyProvenance(mem, provenance, false);
         coreRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "UPDATE", "CORE", coreId, before, mem.getContent(),
                 reason, operator));
@@ -110,11 +117,19 @@ public class CoreMemoryService {
                 || MemoryStatus.ACTIVE.name().equals(memory.getStatus()));
     }
 
-    private void applyProvenance(UserCoreMemory memory, MemoryProvenance provenance) {
+    private void applyProvenance(UserCoreMemory memory, MemoryProvenance provenance, boolean mergeExisting) {
         MemoryProvenance normalized = provenance == null ? MemoryProvenance.automatic("extraction") : provenance;
+        if (mergeExisting) {
+            normalized = storedProvenance(memory).merge(normalized);
+        }
         memory.setSourceType(normalized.sourceType());
         memory.setConfidence(normalized.confidence());
         memory.setSourceMessageIds(normalized.messageIdsColumn());
         memory.setSourceMediaIds(normalized.mediaIdsColumn());
+    }
+
+    private MemoryProvenance storedProvenance(UserCoreMemory memory) {
+        return MemoryProvenance.fromStored(memory.getSourceType(), memory.getConfidence(),
+                memory.getSourceMessageIds(), memory.getSourceMediaIds());
     }
 }

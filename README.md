@@ -69,8 +69,9 @@
 | LLM 语义判重（>80% 不新增） | 提取提示词内完成 |
 | 长期目标和稳定身份自动晋升核心记忆 | `MemoryExtractor` → `CoreMemoryService`，无需确认弹窗 |
 | 用户明确修改已有事实时自动更新 | 核心/工作记忆更新均写变更日志，可审计回溯 |
-| 记忆生命周期 | 工作记忆具备有效期、完成/过期状态、最后确认/使用时间与来源；核心长期目标不自动过期 |
-| 文件与记忆关联 | 自动记忆保留来源消息和已保存资料 ID，可由 `/memory` 查看关联资料 |
+| 记忆生命周期 | 工作记忆具备有效期、完成/过期状态、最后确认/实际使用时间与来源；核心长期目标不自动过期 |
+| 记忆去重与确认 | 模型语义判重外增加保守的本地去重；重复事实合并来源消息/资料并更新最后确认时间 |
+| 文件与记忆关联 | 自动记忆保留来源消息和已保存资料 ID；上下文与 `/memory` 均展示当前用户自己的关联资料名称 |
 | 用户自行核对和管理记忆 | `/memory` 确定性查询，不向 Agent 暴露存储查询工具 |
 | 自然语言删除记忆 | `/memory forget 南京理工`，多条命中时要求指定编号，避免误删 |
 | 超 20 条归档压缩（不删除、可回溯） | `MemoryArchiveService` + `memory_archive` |
@@ -129,6 +130,7 @@ src/main/java/com/liche/wechatagent
 | QQ_SANDBOX | true | QQ 官方沙箱环境开关；生产机器人应设置为 false |
 | QQ_GROUP_ENABLED | false | 群聊开关；默认关闭，当前版本不启用 |
 | MEMORY_LIFECYCLE_SCAN_INTERVAL_MS | 3600000 | 工作记忆到期扫描间隔（毫秒） |
+| MEMORY_USAGE_TOUCH_INTERVAL_MINUTES | 15 | 同一条记忆再次被用于回复前，至少间隔多久才更新“最后使用时间” |
 | CARE_SCAN_INTERVAL_MS | 60000 | 主动关怀到期扫描间隔（毫秒） |
 | WEB_MAX_RESPONSE_BYTES | 2097152 | 单个网页最大响应字节数（2 MB） |
 | WEB_MAX_TEXT_CHARS | 12000 | 交给模型的网页正文最大长度 |

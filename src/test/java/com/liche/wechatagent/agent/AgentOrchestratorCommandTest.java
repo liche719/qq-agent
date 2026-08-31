@@ -33,6 +33,7 @@ class AgentOrchestratorCommandTest {
             MessageIdempotency idempotency = mock(MessageIdempotency.class);
             UserService userService = mock(UserService.class);
             CommandRegistry commandRegistry = mock(CommandRegistry.class);
+            MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
             WeChatChannel channel = mock(WeChatChannel.class);
             when(idempotency.tryAcquire("user-a", "message-a")).thenReturn(true);
             when(channel.channel()).thenReturn("qq");
@@ -47,7 +48,7 @@ class AgentOrchestratorCommandTest {
                     mock(MemoryLoader.class),
                     mock(AgentLoop.class),
                     new InboundMessageBatcher(batchScheduler, 0),
-                    mock(MemoryExtractionScheduler.class),
+                    extractionScheduler,
                     new ToolStatusService(List.of(channel)),
                     mock(DocumentExtractionService.class),
                     mock(MediaToolContextService.class),
@@ -58,6 +59,7 @@ class AgentOrchestratorCommandTest {
 
             verify(channel, timeout(1_000)).sendTextReplyFrom("qq", "user-a", "message-a", "可用指令");
             verify(channel, never()).createStreamSink("user-a", "message-a");
+            verify(extractionScheduler, never()).cancelPending("user-a");
         } finally {
             perUserExecutors.shutdown();
             batchScheduler.shutdownNow();

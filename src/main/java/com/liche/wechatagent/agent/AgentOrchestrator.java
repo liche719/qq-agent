@@ -203,14 +203,14 @@ public class AgentOrchestrator {
         if (content == null || content.isBlank()) {
             content = hasImages ? "[图片]" : hasAttachments ? "[文件]" : "[引用消息]";
         }
-        // 新消息到达 → 取消该用户挂起的记忆提取（3 秒静默窗口重置）
-        extractionScheduler.cancelPending(userId);
-
         // 1) 斜杠指令（不经过大模型）
         Optional<String> commandReply = commandRegistry.tryHandle(content, userId);
         if (commandReply.isPresent()) {
             return new HandledReply(commandReply.get(), null);
         }
+
+        // 新的正常对话到达 → 取消该用户挂起的记忆提取（3 秒静默窗口重置）
+        extractionScheduler.cancelPending(userId);
 
         // 2) 正常对话：加载记忆 → 大模型对话（含工具）
         UserProfile profile = userService.get(userId);

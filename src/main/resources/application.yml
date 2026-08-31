@@ -116,6 +116,7 @@ memory:
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
   dedup-threshold: 0.8
+  usage-touch-interval-minutes: ${MEMORY_USAGE_TOUCH_INTERVAL_MINUTES:15}
   extraction-recent-turns: 20
   lifecycle-scan-interval-ms: ${MEMORY_LIFECYCLE_SCAN_INTERVAL_MS:3600000}
   lifecycle-initial-delay-ms: ${MEMORY_LIFECYCLE_INITIAL_DELAY_MS:60000}

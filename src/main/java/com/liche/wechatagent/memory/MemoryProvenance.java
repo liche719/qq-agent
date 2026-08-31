@@ -24,12 +24,58 @@ public record MemoryProvenance(String sourceType, int confidence, List<String> s
         return new MemoryProvenance("USER_EXPLICIT", 100, sourceMessageIds, sourceMediaIds);
     }
 
+    public static MemoryProvenance fromStored(String sourceType, Integer confidence,
+                                              String sourceMessageIds, String sourceMediaIds) {
+        return new MemoryProvenance(sourceType, confidence == null ? 100 : confidence,
+                splitStrings(sourceMessageIds), splitLongs(sourceMediaIds));
+    }
+
+    public MemoryProvenance merge(MemoryProvenance newer) {
+        if (newer == null) {
+            return this;
+        }
+        List<String> messages = new ArrayList<>(sourceMessageIds);
+        messages.addAll(newer.sourceMessageIds());
+        List<Long> media = new ArrayList<>(sourceMediaIds);
+        media.addAll(newer.sourceMediaIds());
+        return new MemoryProvenance(preferredSourceType(sourceType, newer.sourceType()),
+                Math.max(confidence, newer.confidence()), messages, media);
+    }
+
     public String messageIdsColumn() {
         return String.join("|", sourceMessageIds);
     }
 
     public String mediaIdsColumn() {
         return sourceMediaIds.stream().map(String::valueOf).reduce((left, right) -> left + "|" + right).orElse("");
+    }
+
+    private static String preferredSourceType(String current, String newer) {
+        if ("USER_EXPLICIT".equalsIgnoreCase(current) || "USER_EXPLICIT".equalsIgnoreCase(newer)) {
+            return "USER_EXPLICIT";
+        }
+        return newer == null || newer.isBlank() ? current : newer;
+    }
+
+    private static List<String> splitStrings(String stored) {
+        if (stored == null || stored.isBlank()) {
+            return List.of();
+        }
+        return List.of(stored.split("\\|"));
+    }
+
+    private static List<Long> splitLongs(String stored) {
+        if (stored == null || stored.isBlank()) {
+            return List.of();
+        }
+        List<Long> result = new ArrayList<>();
+        for (String value : stored.split("\\|")) {
+            try {
+                result.add(Long.parseLong(value));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return result;
     }
 
     private static List<String> normalizedStrings(List<String> values) {

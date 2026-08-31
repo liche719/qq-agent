@@ -1,6 +1,7 @@
 package com.liche.wechatagent.memory;
 
 import com.liche.wechatagent.exception.BizException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,10 +14,19 @@ public class WorkMemoryService {
 
     private final UserWorkMemoryRepository workRepository;
     private final MemoryChangeLogRepository changeLogRepository;
+    private final MemoryContentSimilarity similarity;
 
-    public WorkMemoryService(UserWorkMemoryRepository workRepository, MemoryChangeLogRepository changeLogRepository) {
+    @Autowired
+    public WorkMemoryService(UserWorkMemoryRepository workRepository,
+                             MemoryChangeLogRepository changeLogRepository,
+                             MemoryContentSimilarity similarity) {
         this.workRepository = workRepository;
         this.changeLogRepository = changeLogRepository;
+        this.similarity = similarity;
+    }
+
+    WorkMemoryService(UserWorkMemoryRepository workRepository, MemoryChangeLogRepository changeLogRepository) {
+        this(workRepository, changeLogRepository, new MemoryContentSimilarity(0.8d));
     }
 
     @Transactional
@@ -28,8 +38,27 @@ public class WorkMemoryService {
     public UserWorkMemory add(String userId, String content, Integer priority, String source, String operator,
                               MemoryProvenance provenance, LocalDateTime validUntil) {
         String normalized = normalizeContent(content);
+        LocalDateTime now = LocalDateTime.now();
+        UserWorkMemory existing = workRepository.findByUserIdAndArchivedFalse(userId).stream()
+                .filter(memory -> isActive(memory, now))
+                .filter(memory -> similarity.isDuplicate(normalized, memory.getContent()))
+                .findFirst()
+                .orElse(null);
+        if (existing != null) {
+            existing.setPriority(Math.max(existing.getPriority() == null ? 3 : existing.getPriority(), normalizedPriority(priority)));
+            existing.setLastConfirmedAt(now);
+            existing.setUpdatedAt(now);
+            if (validUntil != null && (existing.getValidUntil() == null || existing.getValidUntil().isBefore(validUntil))) {
+                existing.setValidUntil(validUntil);
+            }
+            applyProvenance(existing, provenance, true);
+            workRepository.save(existing);
+            changeLogRepository.save(new MemoryChangeLog(userId, "CONFIRM", "WORK", existing.getId(),
+                    existing.getContent(), existing.getContent(), "用户再次明确确认已有工作记忆", operator));
+            return existing;
+        }
         UserWorkMemory mem = workRepository.save(new UserWorkMemory(userId, normalized, normalizedPriority(priority), source));
-        applyLifecycle(mem, provenance, validUntil);
+        applyLifecycle(mem, provenance, validUntil, false);
         workRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "ADD", "WORK", mem.getId(), null, normalized,
                 "archive_summary".equals(source) ? "归档摘要回填" : "自动记忆提取", operator));
@@ -88,7 +117,7 @@ public class WorkMemoryService {
         mem.setUpdatedAt(LocalDateTime.now());
         mem.setLastConfirmedAt(LocalDateTime.now());
         mem.setStatus(MemoryStatus.ACTIVE.name());
-        applyLifecycle(mem, provenance, validUntil);
+        applyLifecycle(mem, provenance, validUntil, false);
         workRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "UPDATE", "WORK", workId, before, mem.getContent(),
                 "用户明确陈述的新事实替代旧事实", "AUTO"));
@@ -140,7 +169,7 @@ public class WorkMemoryService {
         mem.setStatus(MemoryStatus.COMPLETED.name());
         mem.setUpdatedAt(LocalDateTime.now());
         mem.setLastConfirmedAt(LocalDateTime.now());
-        applyLifecycle(mem, provenance, mem.getValidUntil());
+        applyProvenance(mem, provenance, true);
         workRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "COMPLETE", "WORK", workId, mem.getContent(), mem.getContent(),
                 reason == null || reason.isBlank() ? "用户明确表示该事项已完成" : reason, "AUTO"));
@@ -176,17 +205,30 @@ public class WorkMemoryService {
                 || MemoryStatus.ACTIVE.name().equals(memory.getStatus());
     }
 
-    private void applyLifecycle(UserWorkMemory memory, MemoryProvenance provenance, LocalDateTime validUntil) {
-        MemoryProvenance normalized = provenance == null ? MemoryProvenance.automatic(memory.getSource()) : provenance;
-        memory.setSourceType(normalized.sourceType());
-        memory.setConfidence(normalized.confidence());
-        memory.setSourceMessageIds(normalized.messageIdsColumn());
-        memory.setSourceMediaIds(normalized.mediaIdsColumn());
+    private void applyLifecycle(UserWorkMemory memory, MemoryProvenance provenance, LocalDateTime validUntil,
+                                boolean mergeExisting) {
+        applyProvenance(memory, provenance, mergeExisting);
         if (memory.getValidFrom() == null) {
             memory.setValidFrom(LocalDateTime.now());
         }
         if (validUntil != null) {
             memory.setValidUntil(validUntil);
         }
+    }
+
+    private void applyProvenance(UserWorkMemory memory, MemoryProvenance provenance, boolean mergeExisting) {
+        MemoryProvenance normalized = provenance == null ? MemoryProvenance.automatic(memory.getSource()) : provenance;
+        if (mergeExisting) {
+            normalized = storedProvenance(memory).merge(normalized);
+        }
+        memory.setSourceType(normalized.sourceType());
+        memory.setConfidence(normalized.confidence());
+        memory.setSourceMessageIds(normalized.messageIdsColumn());
+        memory.setSourceMediaIds(normalized.mediaIdsColumn());
+    }
+
+    private MemoryProvenance storedProvenance(UserWorkMemory memory) {
+        return MemoryProvenance.fromStored(memory.getSourceType(), memory.getConfidence(),
+                memory.getSourceMessageIds(), memory.getSourceMediaIds());
     }
 }

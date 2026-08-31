@@ -18,5 +18,7 @@ public interface StoredMediaRepository extends JpaRepository<StoredMedia, Long> 
 
     Optional<StoredMedia> findByIdAndUserIdAndStatus(Long id, String userId, String status);
 
+    List<StoredMedia> findByUserIdAndIdInAndStatus(String userId, List<Long> ids, String status);
+
     List<StoredMedia> findByUserIdAndSourceMessageIdInAndStatus(String userId, List<String> sourceMessageIds, String status);
 }

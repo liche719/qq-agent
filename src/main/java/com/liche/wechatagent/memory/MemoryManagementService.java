@@ -1,11 +1,18 @@
 package com.liche.wechatagent.memory;
 
 import com.liche.wechatagent.exception.BizException;
+import com.liche.wechatagent.media.StoredMedia;
+import com.liche.wechatagent.media.StoredMediaRepository;
 import com.liche.wechatagent.user.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -16,13 +23,23 @@ public class MemoryManagementService {
     private final UserService userService;
     private final CoreMemoryService coreMemoryService;
     private final WorkMemoryService workMemoryService;
+    private final StoredMediaRepository storedMediaRepository;
 
+    @Autowired
     public MemoryManagementService(UserService userService,
                                    CoreMemoryService coreMemoryService,
-                                   WorkMemoryService workMemoryService) {
+                                   WorkMemoryService workMemoryService,
+                                   StoredMediaRepository storedMediaRepository) {
         this.userService = userService;
         this.coreMemoryService = coreMemoryService;
         this.workMemoryService = workMemoryService;
+        this.storedMediaRepository = storedMediaRepository;
+    }
+
+    MemoryManagementService(UserService userService,
+                            CoreMemoryService coreMemoryService,
+                            WorkMemoryService workMemoryService) {
+        this(userService, coreMemoryService, workMemoryService, null);
     }
 
     public String overview(String userId) {
@@ -35,6 +52,7 @@ public class MemoryManagementService {
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(10)
                 .toList();
+        Map<Long, StoredMedia> linkedMedia = linkedMedia(userId, core, work, inactive);
         StringBuilder text = new StringBuilder("自动记忆：")
                 .append(userService.isMemoryEnabled(userId) ? "开启" : "关闭")
                 .append("\n\n【核心记忆】\n");
@@ -42,14 +60,14 @@ public class MemoryManagementService {
             text.append("（暂无）\n");
         } else {
             core.forEach(memory -> text.append("C").append(memory.getId()).append("：").append(memory.getContent())
-                    .append(metadata(memory)).append("\n"));
+                    .append(metadata(memory, linkedMedia)).append("\n"));
         }
         text.append("\n【工作记忆】\n");
         if (work.isEmpty()) {
             text.append("（暂无）\n");
         } else {
             work.forEach(memory -> text.append("W").append(memory.getId()).append("：").append(memory.getContent())
-                    .append(metadata(memory)).append("\n"));
+                    .append(metadata(memory, linkedMedia)).append("\n"));
         }
         if (!inactive.isEmpty()) {
             text.append("\n【近期已结束/过期的工作记忆】\n");
@@ -142,26 +160,60 @@ public class MemoryManagementService {
         return result;
     }
 
-    private String metadata(UserCoreMemory memory) {
+    private String metadata(UserCoreMemory memory, Map<Long, StoredMedia> linkedMedia) {
         StringBuilder result = new StringBuilder("（来源=").append(blank(memory.getSourceType(), "USER_EXPLICIT"))
                 .append("，最后确认=").append(format(memory.getLastConfirmedAt()));
-        if (memory.getSourceMediaIds() != null && !memory.getSourceMediaIds().isBlank()) {
-            result.append("，关联资料 #").append(memory.getSourceMediaIds().replace('|', '、'));
-        }
+        appendMediaLabels(result, memory.getSourceMediaIds(), linkedMedia);
         return result.append('）').toString();
     }
 
-    private String metadata(UserWorkMemory memory) {
+    private String metadata(UserWorkMemory memory, Map<Long, StoredMedia> linkedMedia) {
         StringBuilder result = new StringBuilder("（");
         if (memory.getValidUntil() != null) {
             result.append("有效至=").append(format(memory.getValidUntil())).append("，");
         }
         result.append("来源=").append(blank(memory.getSourceType(), "USER_EXPLICIT"))
                 .append("，最后确认=").append(format(memory.getLastConfirmedAt()));
-        if (memory.getSourceMediaIds() != null && !memory.getSourceMediaIds().isBlank()) {
-            result.append("，关联资料 #").append(memory.getSourceMediaIds().replace('|', '、'));
-        }
+        appendMediaLabels(result, memory.getSourceMediaIds(), linkedMedia);
         return result.append('）').toString();
+    }
+
+    private Map<Long, StoredMedia> linkedMedia(String userId, List<UserCoreMemory> core,
+                                                List<UserWorkMemory> work, List<UserWorkMemory> inactive) {
+        if (storedMediaRepository == null) {
+            return Map.of();
+        }
+        Set<Long> mediaIds = new LinkedHashSet<>();
+        core.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        work.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        inactive.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        if (mediaIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, StoredMedia> result = new HashMap<>();
+        storedMediaRepository.findByUserIdAndIdInAndStatus(userId, List.copyOf(mediaIds), StoredMedia.ACTIVE)
+                .forEach(media -> result.put(media.getId(), media));
+        return result;
+    }
+
+    private void appendMediaLabels(StringBuilder result, String sourceMediaIds,
+                                   Map<Long, StoredMedia> linkedMedia) {
+        List<Long> ids = mediaIds(sourceMediaIds);
+        if (ids.isEmpty()) {
+            return;
+        }
+        List<String> labels = ids.stream().map(linkedMedia::get).filter(media -> media != null)
+                .map(media -> "#" + media.getId() + " " + media.getFileName())
+                .toList();
+        if (labels.isEmpty()) {
+            result.append("，关联资料 #").append(sourceMediaIds.replace('|', '、'));
+            return;
+        }
+        result.append("，关联资料 ").append(String.join("、", labels));
+    }
+
+    private List<Long> mediaIds(String sourceMediaIds) {
+        return MemoryProvenance.fromStored("USER_EXPLICIT", 100, "", sourceMediaIds).sourceMediaIds();
     }
 
     private String displayStatus(UserWorkMemory memory) {

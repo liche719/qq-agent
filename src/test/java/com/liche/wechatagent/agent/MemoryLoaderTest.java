@@ -3,14 +3,19 @@ package com.liche.wechatagent.agent;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
 import com.liche.wechatagent.memory.UserWorkMemory;
 import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import com.liche.wechatagent.memory.UserCoreMemory;
+import com.liche.wechatagent.media.StoredMedia;
+import com.liche.wechatagent.media.StoredMediaRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MemoryLoaderTest {
@@ -29,6 +34,33 @@ class MemoryLoaderTest {
 
         assertTrue(loaded.workSection().contains("Android"));
         assertFalse(loaded.workSection().contains("摄影"));
+    }
+
+    @Test
+    void loadsOnlyCurrentUsersLinkedMediaAndRecordsActualMemoryUse() {
+        UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
+        UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
+        StoredMediaRepository mediaRepository = mock(StoredMediaRepository.class);
+        UserCoreMemory goal = new UserCoreMemory("u1", "用户正在根据课程表安排本周学习");
+        goal.setSourceMediaIds("42");
+        goal.setLastConfirmedAt(LocalDateTime.now());
+        StoredMedia schedule = new StoredMedia();
+        schedule.setId(42L);
+        schedule.setUserId("u1");
+        schedule.setFileName("第5周课程表.png");
+        schedule.setSummary("第5周课程与教室安排");
+        when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of(goal));
+        when(workRepository.findByUserIdAndArchivedFalse("u1")).thenReturn(List.of());
+        when(mediaRepository.findByUserIdAndIdInAndStatus("u1", List.of(42L), StoredMedia.ACTIVE))
+                .thenReturn(List.of(schedule));
+        MemoryLoader loader = new MemoryLoader(coreRepository, workRepository, mediaRepository,
+                5, 500, 5, 500, 15);
+
+        MemoryLoader.LoadedMemory loaded = loader.load("u1", "我今天上什么课？");
+
+        assertTrue(loaded.coreSection().contains("第5周课程表.png"));
+        assertNotNull(goal.getLastUsedAt());
+        verify(mediaRepository).findByUserIdAndIdInAndStatus("u1", List.of(42L), StoredMedia.ACTIVE);
     }
 
     private UserWorkMemory memory(String content, int priority) {

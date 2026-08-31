@@ -53,6 +53,8 @@ public class MemoryArchiveService {
         List<UserWorkMemory> oldest = workRepository
                 .findByUserIdAndArchivedFalseOrderByPriorityAscCreatedAtAsc(userId, PageRequest.of(0, batch * 3)).stream()
                 .filter(memory -> WorkMemoryService.isActive(memory, java.time.LocalDateTime.now()))
+                .filter(memory -> !"archive_summary".equalsIgnoreCase(memory.getSource()))
+                .filter(memory -> memory.getValidUntil() == null)
                 .limit(batch)
                 .toList();
         if (oldest.isEmpty()) {
