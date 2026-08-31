@@ -8,7 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** 第三层核心记忆服务：稳定身份、长期目标和原则由提取器自动维护，所有变更均留痕。 */
+/** 第三层核心记忆服务：稳定身份、长期目标和原则由提取器自动维护，用户遗忘会脱敏历史正文。 */
 @Service
 public class CoreMemoryService {
 
@@ -89,16 +89,20 @@ public class CoreMemoryService {
     }
 
     @Transactional
-    public void delete(String userId, Long coreId) {
+    public ForgottenMemory delete(String userId, Long coreId) {
         UserCoreMemory mem = coreRepository.findById(coreId)
                 .orElseThrow(() -> new BizException("核心记忆不存在"));
         if (!mem.getUserId().equals(userId)) {
             throw new BizException("无权操作其他用户的记忆");
         }
-        String content = mem.getContent();
+        ForgottenMemory forgotten = new ForgottenMemory("CORE", mem.getId(), mem.getContent(), "",
+                MemoryProvenance.fromStored(mem.getSourceType(), mem.getConfidence(),
+                        mem.getSourceMessageIds(), mem.getSourceMediaIds()).sourceMessageIds());
         coreRepository.delete(mem);
-        changeLogRepository.save(new MemoryChangeLog(userId, "DELETE", "CORE", coreId, content, null,
-                "用户主动删除", "USER"));
+        changeLogRepository.redactContentForMemory(userId, "CORE", coreId);
+        changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", "CORE", coreId, null, null,
+                "用户主动遗忘；审计正文已清除", "USER"));
+        return forgotten;
     }
 
     private String normalizeContent(String content) {

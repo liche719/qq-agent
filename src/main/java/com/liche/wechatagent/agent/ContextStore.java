@@ -9,9 +9,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -41,6 +43,9 @@ public class ContextStore {
         }
     }
 
+    private record RedactedContext(List<ContextTurn> remaining, boolean changed) {
+    }
+
     public ContextStore(StringRedisTemplate redis,
                         ObjectMapper objectMapper,
                         @Value("${memory.context-rounds:10}") int rounds,
@@ -64,11 +69,7 @@ public class ContextStore {
         ContextTurn fallbackTurn = new ContextTurn(role, text, sourceMessageIds == null ? List.of() : List.copyOf(sourceMessageIds));
         pushFallback(userId, fallbackTurn);
         try {
-            Map<String, Object> turn = new LinkedHashMap<>();
-            turn.put("role", role);
-            turn.put("text", text);
-            turn.put("sourceMessageIds", sourceMessageIds == null ? List.of() : sourceMessageIds);
-            String json = objectMapper.writeValueAsString(turn);
+            String json = serialize(fallbackTurn);
             String k = key(userId);
             redis.opsForList().leftPush(k, json);
             redis.opsForList().trim(k, 0, rounds * 2L - 1);
@@ -97,17 +98,9 @@ public class ContextStore {
             List<ContextTurn> turns = new ArrayList<>();
             for (String line : chronological) {
                 try {
-                    var node = objectMapper.readTree(line);
-                    List<String> sourceMessageIds = new ArrayList<>();
-                    for (var sourceId : node.path("sourceMessageIds")) {
-                        String value = sourceId.asText("");
-                        if (!value.isBlank()) {
-                            sourceMessageIds.add(value);
-                        }
-                    }
-                    String role = node.path("role").asText("user");
-                    String text = node.path("text").asText("");
-                    turns.add(new ContextTurn(role, historicalMediaSafeText(role, text), sourceMessageIds));
+                    ContextTurn turn = deserialize(line);
+                    turns.add(new ContextTurn(turn.role(), historicalMediaSafeText(turn.role(), turn.text()),
+                            turn.sourceMessageIds()));
                 } catch (Exception ignored) {
                     // 跳过损坏条目
                 }
@@ -120,6 +113,60 @@ public class ContextStore {
         }
     }
 
+    /**
+     * Removes only the context turns that supplied a forgotten memory, plus the directly associated reply.
+     * Message IDs are authoritative; text matching is a conservative fallback for memories created by older versions.
+     */
+    public boolean removeMemoryEvidence(String userId, List<String> sourceMessageIds, String rememberedContent) {
+        Set<String> sourceIds = normalizedSourceIds(sourceMessageIds);
+        boolean fallbackChanged = redactFallback(userId, sourceIds, rememberedContent);
+        try {
+            String contextKey = key(userId);
+            List<String> raw = redis.opsForList().range(contextKey, 0, -1);
+            if (raw == null || raw.isEmpty()) {
+                return fallbackChanged;
+            }
+            List<ContextTurn> chronological = new ArrayList<>();
+            for (String entry : raw) {
+                try {
+                    chronological.add(deserialize(entry));
+                } catch (Exception ignored) {
+                    // Corrupted legacy context is not retained during a privacy cleanup.
+                }
+            }
+            Collections.reverse(chronological);
+            RedactedContext redacted = redact(chronological, sourceIds, rememberedContent);
+            if (!redacted.changed()) {
+                return fallbackChanged;
+            }
+            redis.delete(contextKey);
+            for (ContextTurn turn : redacted.remaining()) {
+                redis.opsForList().leftPush(contextKey, serialize(turn));
+            }
+            if (!redacted.remaining().isEmpty()) {
+                redis.expire(contextKey, contextTtl);
+            }
+            return true;
+        } catch (Exception exception) {
+            log.warn("清理关联对话上下文失败（Redis 不可用？）userId={} reason={}", userId,
+                    exception.getClass().getSimpleName());
+            return fallbackChanged;
+        }
+    }
+
+    /** Privacy fallback for legacy memories that have no source-message provenance to redact selectively. */
+    public boolean clearForMemoryForget(String userId) {
+        boolean fallbackChanged = fallbackByUser.remove(userId) != null;
+        try {
+            Boolean deleted = redis.delete(key(userId));
+            return fallbackChanged || Boolean.TRUE.equals(deleted);
+        } catch (Exception exception) {
+            log.warn("清理短期对话上下文失败（Redis 不可用？）userId={} reason={}", userId,
+                    exception.getClass().getSimpleName());
+            return fallbackChanged;
+        }
+    }
+
     private void pushFallback(String userId, ContextTurn turn) {
         long expiresAt = System.currentTimeMillis() + contextTtl.toMillis();
         FallbackContext fallback = fallbackByUser.compute(userId, (ignored, existing) -> {
@@ -127,9 +174,11 @@ public class ContextStore {
             target.expiresAtMillis = expiresAt;
             return target;
         });
-        fallback.turns.addLast(turn);
-        while (fallback.turns.size() > rounds * 2) {
-            fallback.turns.pollFirst();
+        synchronized (fallback) {
+            fallback.turns.addLast(turn);
+            while (fallback.turns.size() > rounds * 2) {
+                fallback.turns.pollFirst();
+            }
         }
     }
 
@@ -142,13 +191,127 @@ public class ContextStore {
             fallbackByUser.remove(userId, fallback);
             return List.of();
         }
-        List<ContextTurn> turns = new ArrayList<>(fallback.turns);
+        List<ContextTurn> turns;
+        synchronized (fallback) {
+            turns = new ArrayList<>(fallback.turns);
+        }
         if (n < turns.size()) {
             turns = new ArrayList<>(turns.subList(turns.size() - n, turns.size()));
         }
         return turns.stream()
                 .map(turn -> new ContextTurn(turn.role(), historicalMediaSafeText(turn.role(), turn.text()), turn.sourceMessageIds()))
                 .toList();
+    }
+
+    private boolean redactFallback(String userId, Set<String> sourceIds, String rememberedContent) {
+        FallbackContext fallback = fallbackByUser.get(userId);
+        if (fallback == null) {
+            return false;
+        }
+        synchronized (fallback) {
+            RedactedContext redacted = redact(new ArrayList<>(fallback.turns), sourceIds, rememberedContent);
+            if (!redacted.changed()) {
+                return false;
+            }
+            fallback.turns.clear();
+            fallback.turns.addAll(redacted.remaining());
+            if (fallback.turns.isEmpty()) {
+                fallbackByUser.remove(userId, fallback);
+            }
+            return true;
+        }
+    }
+
+    private RedactedContext redact(List<ContextTurn> turns, Set<String> sourceIds, String rememberedContent) {
+        List<ContextTurn> remaining = new ArrayList<>();
+        boolean changed = false;
+        boolean removeAssociatedAssistantReply = false;
+        for (ContextTurn turn : turns) {
+            boolean remove = hasEvidence(turn, sourceIds, rememberedContent);
+            if (!remove && removeAssociatedAssistantReply && "assistant".equals(turn.role())) {
+                remove = true;
+            }
+            if (remove) {
+                changed = true;
+                if ("user".equals(turn.role())) {
+                    removeAssociatedAssistantReply = true;
+                } else if ("assistant".equals(turn.role())) {
+                    removeAssociatedAssistantReply = false;
+                }
+                continue;
+            }
+            if (!"assistant".equals(turn.role())) {
+                removeAssociatedAssistantReply = false;
+            }
+            remaining.add(turn);
+        }
+        return new RedactedContext(List.copyOf(remaining), changed);
+    }
+
+    private boolean hasEvidence(ContextTurn turn, Set<String> sourceIds, String rememberedContent) {
+        if (!sourceIds.isEmpty() && turn.sourceMessageIds().stream().anyMatch(sourceIds::contains)) {
+            return true;
+        }
+        return hasDistinctiveTextOverlap(turn.text(), rememberedContent);
+    }
+
+    private boolean hasDistinctiveTextOverlap(String text, String rememberedContent) {
+        String left = normalize(text);
+        String right = normalize(rememberedContent);
+        if (left.length() < 6 || right.length() < 6) {
+            return false;
+        }
+        if (left.contains(right) || right.contains(left)) {
+            return true;
+        }
+        int maximumLength = Math.min(20, left.length());
+        for (int length = maximumLength; length >= 6; length--) {
+            for (int start = 0; start + length <= left.length(); start++) {
+                if (right.contains(left.substring(start, start + length))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private Set<String> normalizedSourceIds(List<String> sourceMessageIds) {
+        Set<String> result = new HashSet<>();
+        if (sourceMessageIds == null) {
+            return result;
+        }
+        for (String sourceMessageId : sourceMessageIds) {
+            if (sourceMessageId != null && !sourceMessageId.isBlank()) {
+                result.add(sourceMessageId);
+            }
+        }
+        return result;
+    }
+
+    private String serialize(ContextTurn turn) throws Exception {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("role", turn.role());
+        value.put("text", turn.text());
+        value.put("sourceMessageIds", turn.sourceMessageIds());
+        return objectMapper.writeValueAsString(value);
+    }
+
+    private ContextTurn deserialize(String line) throws Exception {
+        var node = objectMapper.readTree(line);
+        List<String> sourceMessageIds = new ArrayList<>();
+        for (var sourceId : node.path("sourceMessageIds")) {
+            String value = sourceId.asText("");
+            if (!value.isBlank()) {
+                sourceMessageIds.add(value);
+            }
+        }
+        return new ContextTurn(node.path("role").asText("user"), node.path("text").asText(""), sourceMessageIds);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.toLowerCase()
+                .replaceAll("[\\p{P}\\p{Z}\\s]+", "")
+                .trim();
     }
 
     /**

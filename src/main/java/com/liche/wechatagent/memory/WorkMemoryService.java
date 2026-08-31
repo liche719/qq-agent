@@ -8,7 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** 第二层中期工作记忆：自动提取和显式新事实更新均留痕，归档只标记不删除。 */
+/** 第二层中期工作记忆：系统归档只标记，用户主动遗忘会永久删除并脱敏历史正文。 */
 @Service
 public class WorkMemoryService {
 
@@ -124,19 +124,20 @@ public class WorkMemoryService {
     }
 
     @Transactional
-    public void forget(String userId, Long workId) {
+    public ForgottenMemory forget(String userId, Long workId) {
         UserWorkMemory mem = workRepository.findById(workId)
                 .orElseThrow(() -> new BizException("工作记忆不存在"));
         if (!mem.getUserId().equals(userId)) {
             throw new BizException("无权操作其他用户的记忆");
         }
-        if (!Boolean.TRUE.equals(mem.getArchived())) {
-            mem.setArchived(true);
-            mem.setUpdatedAt(LocalDateTime.now());
-            workRepository.save(mem);
-            changeLogRepository.save(new MemoryChangeLog(userId, "DELETE", "WORK", workId, mem.getContent(), null,
-                    "用户主动删除", "USER"));
-        }
+        ForgottenMemory forgotten = new ForgottenMemory("WORK", mem.getId(), mem.getContent(), mem.getSource(),
+                MemoryProvenance.fromStored(mem.getSourceType(), mem.getConfidence(),
+                        mem.getSourceMessageIds(), mem.getSourceMediaIds()).sourceMessageIds());
+        workRepository.delete(mem);
+        changeLogRepository.redactContentForMemory(userId, "WORK", workId);
+        changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", "WORK", workId, null, null,
+                "用户主动遗忘；审计正文已清除", "USER"));
+        return forgotten;
     }
 
     /** 归档：仅标记 is_archived=1，不删除原始记录 */

@@ -38,6 +38,7 @@ public class MemoryExtractor {
     private final ObjectMapper objectMapper;
     private final int recentTurns;
     private final StoredMediaRepository storedMediaRepository;
+    private final MemoryMutationLock mutationLock;
 
     @Autowired
     public MemoryExtractor(ChatModel chatModel,
@@ -47,7 +48,8 @@ public class MemoryExtractor {
                            MemoryArchiveService archiveService,
                            ObjectMapper objectMapper,
                            @Value("${memory.extraction-recent-turns:6}") int recentTurns,
-                           StoredMediaRepository storedMediaRepository) {
+                           StoredMediaRepository storedMediaRepository,
+                           MemoryMutationLock mutationLock) {
         this.chatModel = chatModel;
         this.contextStore = contextStore;
         this.workMemoryService = workMemoryService;
@@ -56,6 +58,7 @@ public class MemoryExtractor {
         this.objectMapper = objectMapper;
         this.recentTurns = recentTurns;
         this.storedMediaRepository = storedMediaRepository;
+        this.mutationLock = mutationLock;
     }
 
     public MemoryExtractor(ChatModel chatModel,
@@ -66,7 +69,7 @@ public class MemoryExtractor {
                            ObjectMapper objectMapper,
                            int recentTurns) {
         this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
-                recentTurns, null);
+                recentTurns, null, new MemoryMutationLock());
     }
 
     public boolean extract(String userId) {
@@ -97,7 +100,13 @@ public class MemoryExtractor {
                 log.info("记忆提取结果已过期，放弃写回 user={}", userId);
                 return true;
             }
-            apply(userId, result, recent);
+            mutationLock.runExclusive(userId, () -> {
+                if (!stillCurrent.getAsBoolean()) {
+                    log.info("记忆提取结果已过期，放弃写回 user={}", userId);
+                    return;
+                }
+                apply(userId, result, recent);
+            });
             return true;
         } catch (Exception e) {
             log.warn("记忆提取失败 user={}", userId, e);

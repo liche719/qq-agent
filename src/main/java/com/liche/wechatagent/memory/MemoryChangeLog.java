@@ -13,7 +13,7 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/** 记忆操作日志：所有新增/修改/归档留痕，可追溯可恢复 */
+/** 记忆操作日志：新增、更新与归档留痕；用户遗忘后会保留无正文操作事件。 */
 @Entity
 @Table(name = "memory_change_log", indexes = @Index(name = "idx_changelog_user", columnList = "userId"))
 @Getter

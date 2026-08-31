@@ -2,7 +2,11 @@ package com.liche.wechatagent.memory;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -50,5 +54,28 @@ class WorkMemoryServiceTest {
         assertEquals(5, existing.getPriority());
         assertEquals("message-old|message-new", existing.getSourceMessageIds());
         assertEquals("5|8", existing.getSourceMediaIds());
+    }
+
+    @Test
+    void permanentlyDeletesWorkMemoryInsteadOfOnlyArchivingIt() {
+        UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
+        MemoryChangeLogRepository changeLogRepository = mock(MemoryChangeLogRepository.class);
+        UserWorkMemory memory = new UserWorkMemory("u1", "下周完成私密项目", 3, "extraction");
+        memory.setId(12L);
+        memory.setArchived(true);
+        memory.setSourceMessageIds("message-12");
+        when(workRepository.findById(12L)).thenReturn(Optional.of(memory));
+        WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);
+
+        ForgottenMemory forgotten = service.forget("u1", 12L);
+
+        assertEquals(List.of("message-12"), forgotten.sourceMessageIds());
+        verify(workRepository).delete(memory);
+        verify(changeLogRepository).redactContentForMemory("u1", "WORK", 12L);
+        org.mockito.ArgumentCaptor<MemoryChangeLog> log = org.mockito.ArgumentCaptor.forClass(MemoryChangeLog.class);
+        verify(changeLogRepository).save(log.capture());
+        assertEquals("FORGET", log.getValue().getAction());
+        assertNull(log.getValue().getBeforeContent());
+        assertNull(log.getValue().getAfterContent());
     }
 }

@@ -8,7 +8,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -25,6 +27,8 @@ public class MemoryArchiveService {
     private final MemoryArchiveRepository archiveRepository;
     private final WorkMemoryService workMemoryService;
     private final ObjectMapper objectMapper;
+    private final MemoryChangeLogRepository changeLogRepository;
+    private final MemoryMutationLock mutationLock;
     private final int threshold;
     private final int batch;
 
@@ -33,6 +37,8 @@ public class MemoryArchiveService {
                                 MemoryArchiveRepository archiveRepository,
                                 WorkMemoryService workMemoryService,
                                 ObjectMapper objectMapper,
+                                MemoryChangeLogRepository changeLogRepository,
+                                MemoryMutationLock mutationLock,
                                 @Value("${memory.work-archive-threshold:20}") int threshold,
                                 @Value("${memory.work-archive-batch:10}") int batch) {
         this.chatModel = chatModel;
@@ -40,12 +46,18 @@ public class MemoryArchiveService {
         this.archiveRepository = archiveRepository;
         this.workMemoryService = workMemoryService;
         this.objectMapper = objectMapper;
+        this.changeLogRepository = changeLogRepository;
+        this.mutationLock = mutationLock;
         this.threshold = threshold;
         this.batch = batch;
     }
 
     /** 写入后立即检查（由提取器调用） */
     public void compressIfNeeded(String userId) {
+        mutationLock.runExclusive(userId, () -> compressIfNeededLocked(userId));
+    }
+
+    private void compressIfNeededLocked(String userId) {
         long active = workMemoryService.countActive(userId);
         if (active <= threshold) {
             return;
@@ -73,6 +85,45 @@ public class MemoryArchiveService {
         }
     }
 
+    /** 删除归档摘要时，连同该摘要隐藏的原始工作记忆一起遗忘。 */
+    @Transactional
+    public List<ForgottenMemory> forgetSummary(String userId, String summary) {
+        return mutationLock.callExclusive(userId, () -> {
+            List<ForgottenMemory> removed = new ArrayList<>();
+            for (MemoryArchive archive : archiveRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
+                if (!sameSummary(archive.getSummary(), summary)) {
+                    continue;
+                }
+                for (Long originalId : originalIds(archive.getOriginalIds())) {
+                    workRepository.findById(originalId)
+                            .filter(memory -> userId.equals(memory.getUserId()))
+                            .ifPresent(memory -> removed.add(workMemoryService.forget(userId, memory.getId())));
+                }
+                removeArchive(userId, archive, removed);
+            }
+            return removed;
+        });
+    }
+
+    /** Removes an archived work item from any active archive summary that could otherwise reintroduce it. */
+    @Transactional
+    public List<ForgottenMemory> forgetSourceMemory(String userId, Long sourceMemoryId) {
+        return mutationLock.callExclusive(userId, () -> {
+            List<ForgottenMemory> removed = new ArrayList<>();
+            for (MemoryArchive archive : archiveRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
+                if (!originalIds(archive.getOriginalIds()).contains(sourceMemoryId)) {
+                    continue;
+                }
+                workRepository.findByUserIdAndArchivedFalse(userId).stream()
+                        .filter(memory -> "archive_summary".equalsIgnoreCase(memory.getSource()))
+                        .filter(memory -> sameSummary(memory.getContent(), archive.getSummary()))
+                        .forEach(memory -> removed.add(workMemoryService.forget(userId, memory.getId())));
+                removeArchive(userId, archive, removed);
+            }
+            return removed;
+        });
+    }
+
     /** 周期兜底扫描（每 10 分钟），防止提取链路异常时长期不归档 */
     @Scheduled(fixedDelay = 600_000, initialDelay = 300_000)
     public void periodicSweep() {
@@ -93,5 +144,31 @@ public class MemoryArchiveService {
             summary = summary.substring(0, 1000);
         }
         return summary;
+    }
+
+    private boolean sameSummary(String first, String second) {
+        return first != null && second != null && first.trim().equals(second.trim());
+    }
+
+    private void removeArchive(String userId, MemoryArchive archive, List<ForgottenMemory> removed) {
+        archiveRepository.delete(archive);
+        changeLogRepository.redactContentForMemory(userId, "ARCHIVE", archive.getId());
+        changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", "ARCHIVE", archive.getId(), null, null,
+                "用户删除归档摘要；审计正文已清除", "USER"));
+        removed.add(new ForgottenMemory("ARCHIVE", archive.getId(), archive.getSummary(), "", List.of()));
+    }
+
+    private List<Long> originalIds(String serializedIds) {
+        List<Long> result = new ArrayList<>();
+        try {
+            for (var node : objectMapper.readTree(serializedIds == null ? "[]" : serializedIds)) {
+                if (node.canConvertToLong()) {
+                    result.add(node.asLong());
+                }
+            }
+        } catch (Exception exception) {
+            log.warn("归档原始记忆编号解析失败，跳过级联遗忘 reason={}", exception.getClass().getSimpleName());
+        }
+        return result;
     }
 }

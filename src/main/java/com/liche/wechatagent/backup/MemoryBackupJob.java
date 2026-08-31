@@ -1,6 +1,7 @@
 package com.liche.wechatagent.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.liche.wechatagent.media.StoredMedia;
@@ -41,6 +42,9 @@ public class MemoryBackupJob {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryBackupJob.class);
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+    public record PurgeResult(int filesUpdated, boolean complete) {
+    }
 
     private final UserProfileRepository userProfileRepository;
     private final UserCoreMemoryRepository coreRepository;
@@ -93,6 +97,45 @@ public class MemoryBackupJob {
         } catch (Exception exception) {
             log.error("每日记忆备份失败", exception);
         }
+    }
+
+    /** Redacts a forgotten memory from every existing local backup for the same user. */
+    public PurgeResult purgeForgottenMemory(String userId, String layer, Long targetId) {
+        if (userId == null || userId.isBlank() || layer == null || layer.isBlank() || targetId == null) {
+            throw new IllegalArgumentException("遗忘备份清理参数不完整");
+        }
+        if (!Files.isDirectory(backupDir)) {
+            return new PurgeResult(0, true);
+        }
+        List<Path> dayDirectories;
+        try (Stream<Path> paths = Files.list(backupDir)) {
+            dayDirectories = paths.filter(Files::isDirectory)
+                    .filter(path -> path.getFileName().toString().matches("\\d{8}"))
+                    .toList();
+        } catch (IOException exception) {
+            log.warn("列出历史备份失败 userHash={} layer={} targetId={} reason={}", shortHash(userId), layer, targetId,
+                    exception.getClass().getSimpleName());
+            return new PurgeResult(0, false);
+        }
+        int updated = 0;
+        boolean complete = true;
+        for (Path dayDirectory : dayDirectories) {
+            Path userDirectory = checkedChild(dayDirectory, "user-" + shortHash(userId));
+            Path stateFile = checkedChild(userDirectory, "state.json");
+            if (!Files.isRegularFile(stateFile)) {
+                continue;
+            }
+            try {
+                if (redactBackupState(stateFile, layer, targetId)) {
+                    updated++;
+                }
+            } catch (Exception exception) {
+                complete = false;
+                log.warn("清理历史备份失败 userHash={} layer={} targetId={} day={} reason={}", shortHash(userId), layer,
+                        targetId, dayDirectory.getFileName(), exception.getClass().getSimpleName());
+            }
+        }
+        return new PurgeResult(updated, complete);
     }
 
     private void backupUser(Path dayDir, String userId) throws IOException {
@@ -148,6 +191,106 @@ public class MemoryBackupJob {
             }
         }
         return artifacts;
+    }
+
+    private boolean redactBackupState(Path stateFile, String layer, Long targetId) throws IOException {
+        JsonNode parsed = objectMapper.readTree(Files.readString(stateFile, StandardCharsets.UTF_8));
+        if (!(parsed instanceof ObjectNode state)) {
+            throw new IOException("备份状态文件不是对象");
+        }
+        boolean changed = removeMemoryRecord(state, layer, targetId);
+        changed |= redactChangeLogs(state, layer, targetId);
+        if ("WORK".equals(layer)) {
+            for (Long archiveId : removeArchivesReferencingWork(state, targetId)) {
+                changed = true;
+                changed |= redactChangeLogs(state, "ARCHIVE", archiveId);
+            }
+        }
+        if (changed) {
+            writeAtomically(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
+        }
+        return changed;
+    }
+
+    private boolean removeMemoryRecord(ObjectNode state, String layer, Long targetId) {
+        String collection = switch (layer) {
+            case "CORE" -> "coreMemories";
+            case "WORK" -> "workMemories";
+            case "ARCHIVE" -> "archives";
+            default -> "";
+        };
+        ArrayNode records = array(state, collection);
+        if (records == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (int index = records.size() - 1; index >= 0; index--) {
+            if (targetId.equals(records.get(index).path("id").asLong())) {
+                records.remove(index);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private boolean redactChangeLogs(ObjectNode state, String layer, Long targetId) {
+        ArrayNode logs = array(state, "changeLogs");
+        if (logs == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (JsonNode node : logs) {
+            if (!(node instanceof ObjectNode logEntry)
+                    || !layer.equals(logEntry.path("layer").asText())
+                    || !targetId.equals(logEntry.path("targetId").asLong())) {
+                continue;
+            }
+            if (!logEntry.path("beforeContent").isNull() || !logEntry.path("afterContent").isNull()) {
+                logEntry.putNull("beforeContent");
+                logEntry.putNull("afterContent");
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private List<Long> removeArchivesReferencingWork(ObjectNode state, Long workId) {
+        ArrayNode archives = array(state, "archives");
+        if (archives == null) {
+            return List.of();
+        }
+        List<Long> removedArchiveIds = new java.util.ArrayList<>();
+        for (int index = archives.size() - 1; index >= 0; index--) {
+            JsonNode archive = archives.get(index);
+            if (!archiveReferencesWork(archive, workId)) {
+                continue;
+            }
+            long archiveId = archive.path("id").asLong();
+            if (archiveId > 0) {
+                removedArchiveIds.add(archiveId);
+            }
+            archives.remove(index);
+        }
+        return removedArchiveIds;
+    }
+
+    private boolean archiveReferencesWork(JsonNode archive, Long workId) {
+        try {
+            JsonNode originalIds = objectMapper.readTree(archive.path("originalIds").asText("[]"));
+            for (JsonNode id : originalIds) {
+                if (workId.equals(id.asLong())) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            // A malformed archive is left untouched rather than risking unrelated data removal.
+        }
+        return false;
+    }
+
+    private ArrayNode array(ObjectNode state, String field) {
+        JsonNode node = state.get(field);
+        return node instanceof ArrayNode array ? array : null;
     }
 
     private Path resolveOwnedMedia(String userId, String relativePath) {

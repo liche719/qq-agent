@@ -38,32 +38,21 @@ public class MemoryManagementService {
     private final WorkMemoryService workMemoryService;
     private final StoredMediaRepository storedMediaRepository;
     private final MemoryContentSimilarity contentSimilarity;
+    private final MemoryForgetService memoryForgetService;
 
     @Autowired
     public MemoryManagementService(UserService userService,
                                    CoreMemoryService coreMemoryService,
                                    WorkMemoryService workMemoryService,
                                    StoredMediaRepository storedMediaRepository,
-                                   MemoryContentSimilarity contentSimilarity) {
+                                   MemoryContentSimilarity contentSimilarity,
+                                   MemoryForgetService memoryForgetService) {
         this.userService = userService;
         this.coreMemoryService = coreMemoryService;
         this.workMemoryService = workMemoryService;
         this.storedMediaRepository = storedMediaRepository;
         this.contentSimilarity = contentSimilarity;
-    }
-
-    MemoryManagementService(UserService userService,
-                            CoreMemoryService coreMemoryService,
-                            WorkMemoryService workMemoryService) {
-        this(userService, coreMemoryService, workMemoryService, null, new MemoryContentSimilarity(0.8d));
-    }
-
-    MemoryManagementService(UserService userService,
-                            CoreMemoryService coreMemoryService,
-                            WorkMemoryService workMemoryService,
-                            StoredMediaRepository storedMediaRepository) {
-        this(userService, coreMemoryService, workMemoryService, storedMediaRepository,
-                new MemoryContentSimilarity(0.8d));
+        this.memoryForgetService = memoryForgetService;
     }
 
     public String overview(String userId) {
@@ -139,13 +128,12 @@ public class MemoryManagementService {
             throw new BizException("编号格式不正确，例如：/memory forget C3");
         }
         if ("C".equals(type)) {
-            coreMemoryService.delete(userId, id);
+            return forgetMemory(userId, "CORE", id);
         } else if ("W".equals(type)) {
-            workMemoryService.forget(userId, id);
+            return forgetMemory(userId, "WORK", id);
         } else {
             throw new BizException("编号应以 C（核心）或 W（工作）开头");
         }
-        return "已删除该记忆，操作记录已保留用于审计。";
     }
 
     private String forgetByContent(String userId, String keyword) {
@@ -164,12 +152,22 @@ public class MemoryManagementService {
             return text.toString();
         }
         MemoryMatch match = matches.get(0);
-        if ("C".equals(match.type())) {
-            coreMemoryService.delete(userId, match.id());
-        } else {
-            workMemoryService.forget(userId, match.id());
+        return forgetMemory(userId, "C".equals(match.type()) ? "CORE" : "WORK", match.id());
+    }
+
+    private String forgetMemory(String userId, String layer, Long id) {
+        MemoryForgetService.ForgetOutcome outcome = memoryForgetService.forget(userId, layer, id);
+        String text = "已彻底遗忘该记忆：它不会再作为长期记忆或关联短期上下文提供给 Agent；审计记录不保留正文。";
+        if (outcome.removedRecordCount() > 1) {
+            text += "同时清理了 " + (outcome.removedRecordCount() - 1) + " 条关联归档记录。";
         }
-        return "已删除这条记忆：「" + match.content() + "」。操作记录仍保留用于审计。";
+        if (outcome.legacyContextReset()) {
+            text += "这条旧记忆没有来源标记，为避免它被重新提取，当前短期会话上下文也已清理。";
+        }
+        if (!outcome.backupsComplete()) {
+            text += "但未能确认全部历史本机备份已清理。";
+        }
+        return text;
     }
 
     private String forgetReference(String args) {

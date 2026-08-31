@@ -56,7 +56,7 @@
 |---|---|
 | 每用户独立人设，新用户默认基础人设 | `UserService` + `user_profile` 表 |
 | /set-prompt /reminders /memory /care /help（不走 LLM） | `CommandRegistry` + 独立 Handler |
-| 不提供清空会话或长期记忆的快捷指令 | 对话连续保留；用户仅可通过 `/memory forget` 精确删除一条记忆 |
+| 不提供清空会话或长期记忆的快捷指令 | 对话连续保留；用户仅可通过 `/memory forget` 遗忘自己的一条记忆 |
 | 搜索工具（状态推送/去重/Top5/15s 超时/重试1次） | `SearchTool` + `SearxngClient` |
 | 公开网页文件下载与发送 | `WebFileTool`：列出网页下载链接、限大小安全下载至用户目录、通过 QQ 富媒体接口发送 |
 | 网页正文阅读 | `WebPageTool`，支持公开 HTTP/HTTPS 页面与受限跳转 |
@@ -73,10 +73,10 @@
 | 记忆去重与确认 | 模型语义判重外增加保守的本地去重；重复事实合并来源消息/资料并更新最后确认时间 |
 | 文件与记忆关联 | 自动记忆保留来源消息和已保存资料 ID；上下文与 `/memory` 均展示当前用户自己的关联资料名称 |
 | 用户自行核对和管理记忆 | `/memory` 确定性查询，不向 Agent 暴露存储查询工具 |
-| 自然语言删除记忆 | `/memory forget 南京理工`，多条命中时要求指定编号，避免误删 |
+| 自然语言遗忘记忆 | `/memory forget 南京理工`，多条命中时要求指定编号；唯一命中后会删除 Agent 可用记忆、关联短期上下文与本机备份副本 |
 | 超 20 条归档压缩（不删除、可回溯） | `MemoryArchiveService` + `memory_archive` |
-| 所有记忆变更留痕 | `memory_change_log` |
-| 每日全量备份 | `MemoryBackupJob`（backup/ 目录，保留 30 天） |
+| 所有记忆变更留痕 | `memory_change_log`；用户主动遗忘时会保留无正文操作事件，并清除该记忆的历史审计正文 |
+| 每日全量备份 | `MemoryBackupJob`（backup/ 目录，保留 30 天）；用户遗忘时同步清理已有本机备份快照 |
 | 按用户范围日志隔离 | logback SiftingAppender → `logs/user/user-{hash}/`；不记录默认聊天正文 |
 | 全局异常友好化 | `GlobalExceptionHandler` + 编排器兜底 |
 | msg_id+user_id 幂等 | Redis SETNX 24h |

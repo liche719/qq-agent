@@ -249,7 +249,7 @@ public class AgentOrchestrator {
 
         // 写回即时上下文（仅保留最近 N 轮）
         contextStore.push(userId, "user", batch.historyContent(), batch.messageIds());
-        contextStore.push(userId, "assistant", reply);
+        contextStore.push(userId, "assistant", reply, batch.messageIds());
 
         // 3 秒静默窗口：若用户无新消息则触发异步记忆提取
         extractionScheduler.schedule(userId);
