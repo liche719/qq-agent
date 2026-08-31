@@ -52,6 +52,59 @@ class MemoryManagementServiceTest {
     }
 
     @Test
+    void deletesUniqueMemoryWhenReferenceUsesTheUserOriginalWording() {
+        CoreMemoryService coreService = mock(CoreMemoryService.class);
+        WorkMemoryService workService = mock(WorkMemoryService.class);
+        UserCoreMemory goal = new UserCoreMemory("u1", "用户的长期目标是考取南京理工大学研究生");
+        goal.setId(7L);
+        when(coreService.list("u1")).thenReturn(List.of(goal));
+        when(workService.listActive("u1")).thenReturn(List.of());
+        MemoryManagementService service = new MemoryManagementService(mock(UserService.class), coreService, workService);
+
+        String result = service.handle("u1", "forget 我想报考南京理工大学读研");
+
+        assertTrue(result.contains("已删除"));
+        verify(coreService).delete("u1", 7L);
+    }
+
+    @Test
+    void requiresAnIdWhenFuzzyReferenceHasMultipleCandidates() {
+        CoreMemoryService coreService = mock(CoreMemoryService.class);
+        WorkMemoryService workService = mock(WorkMemoryService.class);
+        UserCoreMemory goal = new UserCoreMemory("u1", "用户的长期目标是考取南京理工大学研究生");
+        goal.setId(1L);
+        UserCoreMemory plan = new UserCoreMemory("u1", "用户正在制定南京理工大学考研复习计划");
+        plan.setId(2L);
+        when(coreService.list("u1")).thenReturn(List.of(goal, plan));
+        when(workService.listActive("u1")).thenReturn(List.of());
+        MemoryManagementService service = new MemoryManagementService(mock(UserService.class), coreService, workService);
+
+        String result = service.handle("u1", "forget 我想删除南京理工大学相关的记忆");
+
+        assertTrue(result.contains("为避免删错"));
+        verify(coreService, never()).delete("u1", 1L);
+        verify(coreService, never()).delete("u1", 2L);
+    }
+
+    @Test
+    void neverSearchesOrDeletesAnotherUsersMemory() {
+        CoreMemoryService coreService = mock(CoreMemoryService.class);
+        WorkMemoryService workService = mock(WorkMemoryService.class);
+        UserCoreMemory otherUsersGoal = new UserCoreMemory("u2", "用户的长期目标是考取南京理工大学研究生");
+        otherUsersGoal.setId(9L);
+        when(coreService.list("u1")).thenReturn(List.of());
+        when(coreService.list("u2")).thenReturn(List.of(otherUsersGoal));
+        when(workService.listActive("u1")).thenReturn(List.of());
+        MemoryManagementService service = new MemoryManagementService(mock(UserService.class), coreService, workService);
+
+        String result = service.handle("u1", "删除南京理工大学");
+
+        assertTrue(result.contains("没有找到"));
+        verify(coreService, never()).list("u2");
+        verify(coreService, never()).delete("u2", 9L);
+    }
+
+    @Test
     void overviewUsesReadableNamesForCurrentUsersLinkedFiles() {
         UserService userService = mock(UserService.class);
         CoreMemoryService coreService = mock(CoreMemoryService.class);

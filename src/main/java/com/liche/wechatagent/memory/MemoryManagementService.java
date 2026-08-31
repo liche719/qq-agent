@@ -7,6 +7,7 @@ import com.liche.wechatagent.user.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -15,31 +16,54 @@ import java.util.Map;
 import java.util.Set;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** User-facing memory controls. Every operation is scoped to the current user. */
 @Service
 public class MemoryManagementService {
 
+    private static final Pattern FORGET_ARGUMENT = Pattern.compile(
+            "(?i)^(?:forget|delete)\\s+(.+)$");
+    private static final List<String> CHINESE_FORGET_PREFIXES = List.of("删除", "忘记", "移除", "清除");
+    private static final List<String> FUZZY_REFERENCE_NOISE = List.of(
+            "请帮我", "帮我", "之前的", "相关的", "我的", "用户的", "我之前", "我想", "我要",
+            "删除", "忘记", "移除", "清除", "这条", "那条", "记忆", "内容", "信息", "关于", "相关");
+    private static final int MIN_DISTINCTIVE_ANCHOR_LENGTH = 4;
+    private static final int MIN_SHARED_BIGRAMS = 3;
+    private static final double MIN_FUZZY_SIMILARITY = 0.55d;
+
     private final UserService userService;
     private final CoreMemoryService coreMemoryService;
     private final WorkMemoryService workMemoryService;
     private final StoredMediaRepository storedMediaRepository;
+    private final MemoryContentSimilarity contentSimilarity;
 
     @Autowired
     public MemoryManagementService(UserService userService,
                                    CoreMemoryService coreMemoryService,
                                    WorkMemoryService workMemoryService,
-                                   StoredMediaRepository storedMediaRepository) {
+                                   StoredMediaRepository storedMediaRepository,
+                                   MemoryContentSimilarity contentSimilarity) {
         this.userService = userService;
         this.coreMemoryService = coreMemoryService;
         this.workMemoryService = workMemoryService;
         this.storedMediaRepository = storedMediaRepository;
+        this.contentSimilarity = contentSimilarity;
     }
 
     MemoryManagementService(UserService userService,
                             CoreMemoryService coreMemoryService,
                             WorkMemoryService workMemoryService) {
-        this(userService, coreMemoryService, workMemoryService, null);
+        this(userService, coreMemoryService, workMemoryService, null, new MemoryContentSimilarity(0.8d));
+    }
+
+    MemoryManagementService(UserService userService,
+                            CoreMemoryService coreMemoryService,
+                            WorkMemoryService workMemoryService,
+                            StoredMediaRepository storedMediaRepository) {
+        this(userService, coreMemoryService, workMemoryService, storedMediaRepository,
+                new MemoryContentSimilarity(0.8d));
     }
 
     public String overview(String userId) {
@@ -80,7 +104,7 @@ public class MemoryManagementService {
     }
 
     public String handle(String userId, String args) {
-        String trimmed = args == null ? "" : args.trim();
+        String trimmed = args == null ? "" : args.strip();
         if (trimmed.isBlank() || "list".equalsIgnoreCase(trimmed)) {
             return overview(userId);
         }
@@ -92,17 +116,18 @@ public class MemoryManagementService {
             userService.setMemoryEnabled(userId, false);
             return "自动记忆已关闭。已有记忆会继续供本次和未来对话参考；你可随时用 /memory 查看或删除。";
         }
-        if (trimmed.startsWith("forget ") || trimmed.startsWith("删除 ")) {
-            return forget(userId, trimmed.substring(trimmed.indexOf(' ') + 1).trim());
+        String reference = forgetReference(trimmed);
+        if (reference != null) {
+            return forget(userId, reference);
         }
         return "用法：/memory 查看；/memory on|off；/memory forget 南京理工。也可以使用 C3、W12 这样的编号。记忆由系统自动提取，无需手动添加。";
     }
 
     private String forget(String userId, String reference) {
-        if (reference == null || reference.trim().length() < 2) {
+        if (reference == null || reference.strip().length() < 2) {
             throw new BizException("请说清要删除哪条，例如：/memory forget 南京理工");
         }
-        String normalized = reference.trim();
+        String normalized = reference.strip();
         if (!normalized.matches("(?i)[CW]\\s*\\d+")) {
             return forgetByContent(userId, normalized);
         }
@@ -124,14 +149,10 @@ public class MemoryManagementService {
     }
 
     private String forgetByContent(String userId, String keyword) {
-        String needle = keyword.toLowerCase();
-        List<MemoryMatch> matches = new java.util.ArrayList<>();
-        coreMemoryService.list(userId).stream()
-                .filter(memory -> memory.getContent().toLowerCase().contains(needle))
-                .forEach(memory -> matches.add(new MemoryMatch("C", memory.getId(), memory.getContent())));
-        allWork(userId).stream()
-                .filter(memory -> memory.getContent().toLowerCase().contains(needle))
-                .forEach(memory -> matches.add(new MemoryMatch("W", memory.getId(), memory.getContent())));
+        List<MemoryMatch> matches = findMatches(userId, keyword, this::hasExactReferenceMatch);
+        if (matches.isEmpty()) {
+            matches = findMatches(userId, keyword, this::hasReliableFuzzyReferenceMatch);
+        }
         if (matches.isEmpty()) {
             return "没有找到包含「" + keyword + "」的记忆。你可以先发送 /memory 查看。";
         }
@@ -151,7 +172,97 @@ public class MemoryManagementService {
         return "已删除这条记忆：「" + match.content() + "」。操作记录仍保留用于审计。";
     }
 
+    private String forgetReference(String args) {
+        Matcher matcher = FORGET_ARGUMENT.matcher(args);
+        if (matcher.matches()) {
+            return matcher.group(1).strip();
+        }
+        for (String prefix : CHINESE_FORGET_PREFIXES) {
+            if (args.startsWith(prefix)) {
+                return args.substring(prefix.length()).strip();
+            }
+        }
+        return null;
+    }
+
+    private List<MemoryMatch> findMatches(String userId, String keyword, MemoryReferenceMatcher matcher) {
+        List<MemoryMatch> matches = new ArrayList<>();
+        coreMemoryService.list(userId).stream()
+                .filter(memory -> matcher.matches(keyword, memory.getContent()))
+                .forEach(memory -> matches.add(new MemoryMatch("C", memory.getId(), memory.getContent())));
+        allWork(userId).stream()
+                .filter(memory -> matcher.matches(keyword, memory.getContent()))
+                .forEach(memory -> matches.add(new MemoryMatch("W", memory.getId(), memory.getContent())));
+        return matches;
+    }
+
+    private boolean hasExactReferenceMatch(String reference, String content) {
+        String normalizedReference = normalizeForComparison(reference);
+        String normalizedContent = normalizeForComparison(content);
+        return !normalizedReference.isBlank() && !normalizedContent.isBlank()
+                && (normalizedContent.contains(normalizedReference) || normalizedReference.contains(normalizedContent));
+    }
+
+    private boolean hasReliableFuzzyReferenceMatch(String reference, String content) {
+        String normalizedReference = normalizeForFuzzyComparison(reference);
+        String normalizedContent = normalizeForFuzzyComparison(content);
+        if (normalizedReference.length() < 3 || normalizedContent.length() < 3) {
+            return false;
+        }
+        if (longestDistinctiveAnchor(normalizedReference, normalizedContent) >= MIN_DISTINCTIVE_ANCHOR_LENGTH) {
+            return true;
+        }
+        return sharedBigramCount(normalizedReference, normalizedContent) >= MIN_SHARED_BIGRAMS
+                && contentSimilarity.similarity(normalizedReference, normalizedContent) >= MIN_FUZZY_SIMILARITY;
+    }
+
+    private int longestDistinctiveAnchor(String reference, String content) {
+        int maximumLength = Math.min(16, reference.length());
+        for (int length = maximumLength; length >= MIN_DISTINCTIVE_ANCHOR_LENGTH; length--) {
+            for (int start = 0; start + length <= reference.length(); start++) {
+                if (content.contains(reference.substring(start, start + length))) {
+                    return length;
+                }
+            }
+        }
+        return 0;
+    }
+
+    private int sharedBigramCount(String first, String second) {
+        Set<String> firstBigrams = bigrams(first);
+        Set<String> secondBigrams = bigrams(second);
+        firstBigrams.retainAll(secondBigrams);
+        return firstBigrams.size();
+    }
+
+    private Set<String> bigrams(String value) {
+        Set<String> result = new LinkedHashSet<>();
+        for (int index = 0; index + 1 < value.length(); index++) {
+            result.add(value.substring(index, index + 2));
+        }
+        return result;
+    }
+
+    private String normalizeForFuzzyComparison(String value) {
+        String normalized = normalizeForComparison(value);
+        for (String noise : FUZZY_REFERENCE_NOISE) {
+            normalized = normalized.replace(noise, "");
+        }
+        return normalized;
+    }
+
+    private String normalizeForComparison(String value) {
+        return value == null ? "" : value.toLowerCase()
+                .replaceAll("[\\p{P}\\p{Z}\\s]+", "")
+                .trim();
+    }
+
     private record MemoryMatch(String type, Long id, String content) {
+    }
+
+    @FunctionalInterface
+    private interface MemoryReferenceMatcher {
+        boolean matches(String reference, String content);
     }
 
     private List<UserWorkMemory> allWork(String userId) {
