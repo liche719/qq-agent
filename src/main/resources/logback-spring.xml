@@ -5,7 +5,7 @@
     <!-- 控制台 -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{userId:-system}] %logger{36} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{userScope:-system} %X{taskId:-}] %logger{36} - %msg%n</pattern>
             <charset>UTF-8</charset>
         </encoder>
     </appender>
@@ -23,17 +23,17 @@
         </encoder>
     </appender>
 
-    <!-- 按 user_id 隔离的用户运行日志：logs/user/{userId}/agent.log -->
+    <!-- 按不可逆用户范围标识隔离的用户运行日志 -->
     <appender name="SIFT" class="ch.qos.logback.classic.sift.SiftingAppender">
         <discriminator>
-            <key>userId</key>
+            <key>userScope</key>
             <defaultValue>system</defaultValue>
         </discriminator>
         <sift>
             <appender name="USER-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-                <file>${LOG_DIR}/user/${userId}/agent.log</file>
+                <file>${LOG_DIR}/user/${userScope}/agent.log</file>
                 <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                    <fileNamePattern>${LOG_DIR}/user/${userId}/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                    <fileNamePattern>${LOG_DIR}/user/${userScope}/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
                     <maxHistory>30</maxHistory>
                 </rollingPolicy>
                 <encoder>

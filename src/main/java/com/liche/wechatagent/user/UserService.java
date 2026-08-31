@@ -5,6 +5,7 @@ import com.liche.wechatagent.log.UserLogService;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /** 用户档案服务：新用户首次对话自动写入默认基础人设 */
 @Service
@@ -45,7 +46,7 @@ public class UserService {
         profile.setPersona(newPersona.trim());
         profile.setUpdatedAt(java.time.LocalDateTime.now());
         userProfileRepository.save(profile);
-        userLogService.record(userId, "SET_PROMPT", "人设已更新: " + newPersona.trim());
+        userLogService.record(userId, "SET_PROMPT", Map.of("personaLength", newPersona.trim().length()));
     }
 
     public boolean isMemoryEnabled(String userId) {
@@ -57,7 +58,7 @@ public class UserService {
         profile.setMemoryEnabled(enabled);
         profile.setUpdatedAt(java.time.LocalDateTime.now());
         userProfileRepository.save(profile);
-        userLogService.record(userId, enabled ? "MEMORY_ENABLED" : "MEMORY_DISABLED", "自动记忆已" + (enabled ? "开启" : "关闭"));
+        userLogService.record(userId, enabled ? "MEMORY_ENABLED" : "MEMORY_DISABLED");
     }
 
     public void touchDelivery(String userId, String botId, String channel) {
@@ -78,7 +79,7 @@ public class UserService {
         profile.setUpdatedAt(LocalDateTime.now());
         userProfileRepository.save(profile);
         userLogService.record(userId, enabled ? "PROACTIVE_CARE_ENABLED" : "PROACTIVE_CARE_DISABLED",
-                enabled ? "cadence=" + profile.getProactiveCareCadence() : "disabled");
+                Map.of("enabled", enabled));
         return profile;
     }
 }

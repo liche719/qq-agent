@@ -2,6 +2,7 @@ package com.liche.wechatagent.agent;
 
 import com.liche.wechatagent.channel.InboundMessage;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,15 +21,18 @@ import java.util.function.Consumer;
 public class InboundMessageBatcher {
 
     private static final Logger log = LoggerFactory.getLogger(InboundMessageBatcher.class);
+    private static final long DEFAULT_MAX_WINDOW_MILLIS = 4_000;
 
     private static final class PendingBatch {
         private final ArrayList<InboundMessage> messages = new ArrayList<>();
         private final Consumer<InboundMessageBatch> consumer;
+        private final long openedAtMillis;
         private ScheduledFuture<?> future;
 
         private PendingBatch(InboundMessage first, Consumer<InboundMessageBatch> consumer) {
             this.messages.add(first);
             this.consumer = consumer;
+            this.openedAtMillis = System.currentTimeMillis();
         }
 
         private InboundMessageBatch toBatch() {
@@ -38,13 +42,21 @@ public class InboundMessageBatcher {
 
     private final ScheduledExecutorService scheduler;
     private final long windowMillis;
+    private final long maxWindowMillis;
     private final Object monitor = new Object();
     private final Map<String, PendingBatch> pendingByConversation = new HashMap<>();
 
+    @Autowired
     public InboundMessageBatcher(@Qualifier("messageBatchScheduler") ScheduledExecutorService scheduler,
-                                 @Value("${agent.message-batch-window-millis:1500}") long windowMillis) {
+                                 @Value("${agent.message-batch-window-millis:1500}") long windowMillis,
+                                 @Value("${agent.message-batch-max-window-millis:4000}") long maxWindowMillis) {
         this.scheduler = scheduler;
         this.windowMillis = Math.max(0, windowMillis);
+        this.maxWindowMillis = Math.max(this.windowMillis, maxWindowMillis);
+    }
+
+    InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis) {
+        this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS);
     }
 
     public void submit(InboundMessage message, Consumer<InboundMessageBatch> consumer) {
@@ -77,7 +89,9 @@ public class InboundMessageBatcher {
 
     private void reschedule(String key, PendingBatch pending) {
         cancel(pending);
-        pending.future = scheduler.schedule(() -> complete(key, pending), windowMillis, TimeUnit.MILLISECONDS);
+        long remaining = Math.max(0, pending.openedAtMillis + maxWindowMillis - System.currentTimeMillis());
+        long delay = Math.min(windowMillis, remaining);
+        pending.future = scheduler.schedule(() -> complete(key, pending), delay, TimeUnit.MILLISECONDS);
     }
 
     private void complete(String key, PendingBatch expected) {
@@ -102,8 +116,7 @@ public class InboundMessageBatcher {
         if (isCommand(incoming)) {
             return false;
         }
-        boolean pendingHasMedia = pending.messages.stream().anyMatch(this::hasMediaOrQuote);
-        return pendingHasMedia || hasMediaOrQuote(incoming) || isContinuation(incoming.content());
+        return hasMediaOrQuote(incoming) || isContinuation(incoming.content());
     }
 
     private boolean hasMediaOrQuote(InboundMessage message) {
@@ -123,7 +136,7 @@ public class InboundMessageBatcher {
             return true;
         }
         String compact = content.replaceAll("\\s+", "");
-        return compact.matches("^(还有|另外|补充|再来|一起|这些|这个|那个|上面|刚才|帮我看看|看一下|都在这里).*");
+        return compact.matches("^(还有|另外|补充|再来|一起|这些|这个|那个|上面|刚才|帮我看看|帮我一起看看|看一下|都在这里).*");
     }
 
     private String conversationKey(InboundMessage message) {

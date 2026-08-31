@@ -3,6 +3,7 @@ package com.liche.wechatagent.memory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.liche.wechatagent.agent.ContextStore;
+import com.liche.wechatagent.log.UserScope;
 import com.liche.wechatagent.agent.ContextTurn;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 @Component
 public class MemoryExtractor {
@@ -68,8 +70,19 @@ public class MemoryExtractor {
     }
 
     public boolean extract(String userId) {
-        MDC.put("userId", userId);
+        return extract(userId, () -> true);
+    }
+
+    /**
+     * 只允许仍属于当前静默窗口的提取结果写回。模型调用无法强制取消，
+     * 但在持久化前再次核验即可避免旧会话覆盖新事实。
+     */
+    public boolean extract(String userId, BooleanSupplier stillCurrent) {
+        MDC.put("userScope", UserScope.forUser(userId));
         try {
+            if (!stillCurrent.getAsBoolean()) {
+                return true;
+            }
             List<ContextTurn> recent = contextStore.getRecent(userId, recentTurns);
             if (recent.isEmpty()) {
                 return true;
@@ -80,13 +93,17 @@ public class MemoryExtractor {
             log.info("记忆提取完成 user={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
                     result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
                     result.conflicts().size(), result.completedWork().size(), result.duplicates().size());
+            if (!stillCurrent.getAsBoolean()) {
+                log.info("记忆提取结果已过期，放弃写回 user={}", userId);
+                return true;
+            }
             apply(userId, result, recent);
             return true;
         } catch (Exception e) {
             log.warn("记忆提取失败 user={}", userId, e);
             return false;
         } finally {
-            MDC.remove("userId");
+            MDC.remove("userScope");
         }
     }
 

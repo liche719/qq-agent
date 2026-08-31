@@ -46,6 +46,30 @@ class PerUserExecutorsTest {
         }
     }
 
+    @Test
+    void boundsTheTotalBacklogAcrossUsers() throws Exception {
+        PerUserExecutors executors = new PerUserExecutors(1, 10, 2, 1);
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(2);
+        try {
+            assertTrue(executors.execute("user-a", () -> {
+                firstStarted.countDown();
+                await(releaseFirst);
+                completed.countDown();
+            }));
+            assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
+            assertTrue(executors.execute("user-b", completed::countDown));
+            assertFalse(executors.execute("user-c", () -> { }));
+            assertEquals(0, executors.remainingGlobalCapacity());
+
+            releaseFirst.countDown();
+            assertTrue(completed.await(2, TimeUnit.SECONDS));
+        } finally {
+            executors.shutdown();
+        }
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await();

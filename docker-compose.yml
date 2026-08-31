@@ -14,7 +14,7 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --default-time-zone=+08:00
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -28,7 +28,7 @@ services:
     container_name: wechat-agent-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -41,7 +41,7 @@ services:
       SEARXNG_BASE_URL: http://localhost:8888
       TZ: Asia/Shanghai
     ports:
-      - "8888:8080"
+      - "127.0.0.1:8888:8080"
     volumes:
       - searxng-data:/etc/searxng
       # 使用项目内针对国内网络调优的配置（启用 json 格式、关闭限流、只保留可达引擎）

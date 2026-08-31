@@ -10,8 +10,14 @@ import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -21,23 +27,33 @@ public class WebFileTool {
 
     private static final int MAX_REDIRECTS = 3;
     private static final int MAX_LINKS = 20;
+    private static final long DEFAULT_MAX_RESPONSE_BYTES = 2_097_152L;
 
     private final MediaStorageService storageService;
     private final ToolStatusService statusService;
     private final PublicUrlValidator urlValidator;
     private final OkHttpClient client;
+    private final long maxResponseBytes;
 
+    @Autowired
     public WebFileTool(MediaStorageService storageService, ToolStatusService statusService,
-                       PublicUrlValidator urlValidator) {
+                       PublicUrlValidator urlValidator,
+                       @Value("${web.max-response-bytes:2097152}") long maxResponseBytes) {
         this.storageService = storageService;
         this.statusService = statusService;
         this.urlValidator = urlValidator;
+        this.maxResponseBytes = Math.max(1024, maxResponseBytes);
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(8))
                 .readTimeout(Duration.ofSeconds(20))
                 .followRedirects(false)
                 .dns(urlValidator::lookupPublic)
                 .build();
+    }
+
+    WebFileTool(MediaStorageService storageService, ToolStatusService statusService,
+                PublicUrlValidator urlValidator) {
+        this(storageService, statusService, urlValidator, DEFAULT_MAX_RESPONSE_BYTES);
     }
 
     @Tool(value = "列出公开网页中可直接下载的文件链接。仅当用户明确要求寻找或下载该网页的文件时调用。返回链接后，必须根据用户指定的文件调用 downloadWebFile；不得下载登录、付费、版权受限或用户未要求的内容。")
@@ -60,7 +76,7 @@ public class WebFileTool {
                     }
                     String contentType = response.header("Content-Type", "").toLowerCase();
                     if (!contentType.contains("html")) throw new IllegalStateException("这个链接不是网页，不能从中提取下载链接");
-                    String html = response.body().string();
+                    String html = readHtml(response.body().byteStream(), response.body().contentLength());
                     return collectLinks(current, html);
                 }
             }
@@ -112,6 +128,27 @@ public class WebFileTool {
         int index = 1;
         for (String link : links) result.append(index++).append(". ").append(link).append('\n');
         return result.toString().trim();
+    }
+
+    private String readHtml(InputStream input, long declaredLength) {
+        if (declaredLength > maxResponseBytes) {
+            throw new IllegalStateException("网页内容过大，无法安全读取下载链接");
+        }
+        try (input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > maxResponseBytes) {
+                    throw new IllegalStateException("网页内容过大，无法安全读取下载链接");
+                }
+                output.write(buffer, 0, read);
+            }
+            return output.toString(StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            throw new IllegalStateException("读取网页内容失败", exception);
+        }
     }
 
     private boolean looksDownloadable(String href, Element anchor) {

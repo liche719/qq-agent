@@ -1,23 +1,28 @@
 server:
   port: 8080
+  # 对个人本机机器人，默认不向校园网或局域网暴露管理页面和内部 API。
+  # 如确有反向代理部署需求，必须显式设置 SERVER_ADDRESS 并启用 production profile。
+  address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
   application:
     name: wechat-agent
+  profiles:
+    default: local
   # 引入项目根目录的 .env 文件（optional: 表示文件不存在也不报错）
   config:
     import: optional:file:.env[.properties]
   datasource:
     url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false
-    username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:root}
+    username: ${MYSQL_USER:}
+    password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 8
       minimum-idle: 2
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     open-in-view: false
     properties:
       hibernate:
@@ -33,7 +38,7 @@ spring:
   quartz:
     job-store-type: jdbc
     jdbc:
-      initialize-schema: always
+      initialize-schema: never
     overwrite-existing-jobs: true
     properties:
       org.quartz.scheduler.instanceName: WechatAgentScheduler
@@ -56,8 +61,10 @@ llm:
 agent:
   workers: ${AGENT_WORKERS:8}
   queue-capacity: ${AGENT_QUEUE_CAPACITY:200}
+  global-queue-capacity: ${AGENT_GLOBAL_QUEUE_CAPACITY:400}
   user-queue-idle-minutes: ${AGENT_USER_QUEUE_IDLE_MINUTES:30}
   message-batch-window-millis: ${AGENT_MESSAGE_BATCH_WINDOW_MILLIS:1500}
+  message-batch-max-window-millis: ${AGENT_MESSAGE_BATCH_MAX_WINDOW_MILLIS:4000}
 
 searxng:
   base-url: ${SEARXNG_BASE_URL:http://localhost:8888}
@@ -85,10 +92,11 @@ qq:
   app-id: ${QQ_APP_ID:}
   client-secret: ${QQ_CLIENT_SECRET:}
   sandbox: ${QQ_SANDBOX:true}
+  group-enabled: ${QQ_GROUP_ENABLED:false}
 
 wechat:
   channel:
-    mode: ${WECHAT_CHANNEL_MODE:clawbot}   # 默认真实微信 iLink 通道；需要本地模拟器测试时设 WECHAT_CHANNEL_MODE=simulator
+    mode: ${WECHAT_CHANNEL_MODE:disabled}   # QQ 项目默认不启动微信通道；需要时显式设 clawbot 或 simulator
   clawbot:
     # iLink 登录凭证（botToken 等）存储文件，务必放在不会被提交的目录（已 gitignore）
     token-file: ${ILINK_TOKEN_FILE:data/ilink-login.json}
@@ -97,6 +105,9 @@ wechat:
 
 memory:
   context-rounds: 10
+  context-ttl-hours: ${MEMORY_CONTEXT_TTL_HOURS:720}
+  core-max-load: ${MEMORY_CORE_MAX_LOAD:16}
+  core-max-chars: ${MEMORY_CORE_MAX_CHARS:2200}
   work-max-load: 15
   work-max-chars: 1500
   work-archive-threshold: 20
@@ -133,3 +144,10 @@ conversation:
   trace:
     enabled: ${CONVERSATION_TRACE_ENABLED:false}
     max-chars: ${CONVERSATION_TRACE_MAX_CHARS:8000}
+
+management:
+  access:
+    # 本机模式可只允许回环地址；production 强制要求设置 ADMIN_API_KEY。
+    admin-api-key: ${ADMIN_API_KEY:}
+    require-key: ${ADMIN_REQUIRE_KEY:false}
+    allow-loopback-without-key: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:true}

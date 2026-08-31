@@ -21,6 +21,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 提醒业务层：校验 → 持久化（MySQL）→ Quartz JDBC 调度（重启自动恢复）。
@@ -79,7 +80,7 @@ public class ReminderService {
             return "提醒创建时出了点问题，请稍后再试。";
         }
         userLogService.record(userId, "REMINDER_CREATE",
-                "id=" + task.getId() + " content=" + task.getContent() + " at=" + task.getTriggerAt());
+                Map.of("reminderId", task.getId(), "triggerAt", task.getTriggerAt()));
         return textService.created(task);
     }
 
@@ -154,7 +155,7 @@ public class ReminderService {
         task.setStatus(ReminderTask.STATUS_CANCELLED);
         task.setUpdatedAt(LocalDateTime.now());
         repository.save(task);
-        userLogService.record(userId, "REMINDER_CANCEL", "id=" + reminderId);
+        userLogService.record(userId, "REMINDER_CANCEL", Map.of("reminderId", reminderId));
         return "好的，已取消这个提醒：「" + task.getContent() + "」";
     }
 

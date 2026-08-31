@@ -58,13 +58,52 @@ class MediaToolContextServiceTest {
 
         context.bind("u1", "follow-up", "把刚才文件保存下来", List.of(), List.of(), List.of());
         assertTrue(context.promptSection().isBlank());
-        String description = context.inspectRecentUnstoredMedia();
+        String description = context.inspectRecentUnstoredMedia("刚才文件");
         assertEquals("教务通知.pdf", context.requireCandidate(1).originalName());
         assertTrue(description.contains("不是本条消息附件"));
         context.unbind();
 
         context.bind("u2", "follow-up", "把刚才文件保存下来", List.of(), List.of(), List.of());
-        assertThrows(IllegalStateException.class, context::inspectRecentUnstoredMedia);
+        assertThrows(IllegalStateException.class, () -> context.inspectRecentUnstoredMedia("刚才文件"));
+    }
+
+    @Test
+    void keepsPendingMediaSeparatedByConversationScope() {
+        MediaToolContextService context = new MediaToolContextService();
+        context.bind("same-user", "bot-a", "qq", "task-a", "upload", "", List.of(),
+                List.of(new InboundAttachment("课表.pdf", "application/pdf", "https://example.com/schedule.pdf")),
+                List.of(new ExtractedDocument("课表.pdf", "周一 Python", List.of(), false)),
+                List.of(), List.of(), List.of());
+        context.unbind();
+
+        context.bind("same-user", "bot-b", "simulator", "task-b", "follow-up", "保存刚才文件", List.of(),
+                List.of(), List.of(), List.of(), List.of(), List.of());
+
+        assertThrows(IllegalStateException.class, () -> context.inspectRecentUnstoredMedia("刚才文件"));
+    }
+
+    @Test
+    void requiresTheAgentToProvideTheUsersActualReferenceBeforeLookingUpOldMedia() {
+        MediaToolContextService context = new MediaToolContextService();
+        context.bind("u1", "upload", "", List.of("data:image/png;base64,AA=="), List.of(), List.of());
+        context.unbind();
+        context.bind("u1", "follow-up", "天气怎么样", List.of(), List.of(), List.of());
+
+        assertThrows(IllegalArgumentException.class, () -> context.inspectRecentUnstoredMedia(""));
+    }
+
+    @Test
+    void makesMediaFromTheCurrentQuotedMessageAvailableToTheAgent() {
+        MediaToolContextService context = new MediaToolContextService();
+
+        context.bind("u1", "qq", "qq", "task-a", "reply", "这个文件是什么", List.of(), List.of(), List.of(),
+                List.of("data:image/png;base64,AA=="),
+                List.of(new InboundAttachment("课程通知.pdf", "application/pdf", "https://example.com/notice.pdf")),
+                List.of(new ExtractedDocument("课程通知.pdf", "下周调整课程", List.of(), false)));
+
+        assertTrue(context.requireCandidate(1).image());
+        assertEquals("课程通知.pdf", context.requireCandidate(2).originalName());
+        assertEquals("下周调整课程", context.requireCandidate(2).extractedText());
     }
 
 }

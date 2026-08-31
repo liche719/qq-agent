@@ -5,6 +5,7 @@ import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.tool.ToolExecutionOutcome;
 import com.liche.wechatagent.document.ExtractedDocument;
 import com.liche.wechatagent.media.MediaToolContextService;
+import com.liche.wechatagent.network.PublicUrlValidator;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import org.slf4j.Logger;
@@ -22,7 +23,13 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Value;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,6 +53,7 @@ public class AgentLoop {
     private static final Logger log = LoggerFactory.getLogger(AgentLoop.class);
     private static final int MAX_TOOL_ROUNDS = 8;
     private static final long STREAM_TIMEOUT_SECONDS = 120;
+    private static final int MAX_IMAGE_REDIRECTS = 3;
     private static final Map<String, String> TOOL_DISPLAY_NAMES = Map.ofEntries(
             Map.entry("searchWeb", "搜索"),
             Map.entry("searchLatestWeb", "搜索最新资料"),
@@ -69,15 +77,28 @@ public class AgentLoop {
     private final ToolRegistry toolRegistry;
     private final ToolStatusService toolStatusService;
     private final MediaToolContextService mediaToolContextService;
+    private final PublicUrlValidator urlValidator;
+    private final long maxImageBytes;
+    private final okhttp3.OkHttpClient imageHttpClient;
 
     public AgentLoop(StreamingChatModel streamingChatModel,
                      ToolRegistry toolRegistry,
                      ToolStatusService toolStatusService,
-                     MediaToolContextService mediaToolContextService) {
+                     MediaToolContextService mediaToolContextService,
+                     PublicUrlValidator urlValidator,
+                     @Value("${media.storage.max-file-bytes:20971520}") long maxImageBytes) {
         this.streamingChatModel = streamingChatModel;
         this.toolRegistry = toolRegistry;
         this.toolStatusService = toolStatusService;
         this.mediaToolContextService = mediaToolContextService;
+        this.urlValidator = urlValidator;
+        this.maxImageBytes = Math.max(1, maxImageBytes);
+        this.imageHttpClient = new okhttp3.OkHttpClient.Builder()
+                .connectTimeout(Duration.ofSeconds(8))
+                .readTimeout(Duration.ofSeconds(20))
+                .followRedirects(false)
+                .dns(urlValidator::lookupPublic)
+                .build();
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -277,29 +298,103 @@ public class AgentLoop {
     }
 
     /** 下载图片并转为 data URL（DeepSeek 视觉模型可直接识别；用 OkHttp 避免 java.net.http 挂起） */
-    private String downloadImageAsDataUrl(String url) {
-        if (url != null && url.startsWith("data:image/")) {
-            return url;
+    String downloadImageAsDataUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
         }
-        okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
-                .connectTimeout(java.time.Duration.ofSeconds(8))
-                .readTimeout(java.time.Duration.ofSeconds(20))
-                .followRedirects(true)
-                .build();
-        okhttp3.Request req = new okhttp3.Request.Builder().url(url).get().build();
-        try (okhttp3.Response resp = client.newCall(req).execute()) {
-            if (resp.isSuccessful() && resp.body() != null) {
-                byte[] bytes = resp.body().bytes();
-                if (bytes.length > 0) {
-                    String mime = resp.header("Content-Type");
-                    if (mime == null || mime.isBlank()) mime = "image/jpeg";
-                    return "data:" + mime + ";base64," + java.util.Base64.getEncoder().encodeToString(bytes);
+        if (url.startsWith("data:")) {
+            return normalizeImageDataUrl(url);
+        }
+        try {
+            URI current = urlValidator.validate(url);
+            for (int redirects = 0; redirects <= MAX_IMAGE_REDIRECTS; redirects++) {
+                okhttp3.Request request = new okhttp3.Request.Builder().url(current.toString())
+                        .header("User-Agent", "Mozilla/5.0 (compatible; WechatAgent/1.0)")
+                        .get().build();
+                try (okhttp3.Response response = imageHttpClient.newCall(request).execute()) {
+                    if (response.isRedirect()) {
+                        String location = response.header("Location");
+                        if (location == null || location.isBlank()) {
+                            return null;
+                        }
+                        current = urlValidator.validate(current.resolve(location).toString());
+                        continue;
+                    }
+                    if (!response.isSuccessful() || response.body() == null) {
+                        return null;
+                    }
+                    String contentType = normalizeImageContentType(response.header("Content-Type"));
+                    if (contentType == null) {
+                        log.warn("图片下载结果不是受支持的图片类型");
+                        return null;
+                    }
+                    byte[] bytes = readImage(response.body().byteStream(), response.body().contentLength());
+                    return "data:" + contentType + ";base64,"
+                            + java.util.Base64.getEncoder().encodeToString(bytes);
                 }
             }
-        } catch (Exception e) {
-            log.warn("图片下载失败: {}", e.getMessage());
+        } catch (Exception exception) {
+            log.warn("图片下载失败: {}", exception.getClass().getSimpleName());
         }
         return null;
+    }
+
+    private String normalizeImageDataUrl(String value) {
+        int comma = value.indexOf(',');
+        if (comma < 0) {
+            return null;
+        }
+        String metadata = value.substring(5, comma);
+        String contentType = normalizeImageContentType(metadata.split(";", 2)[0]);
+        if (contentType == null || !metadata.toLowerCase(java.util.Locale.ROOT).contains(";base64")) {
+            return null;
+        }
+        String encoded = value.substring(comma + 1);
+        if (encoded.length() > (maxImageBytes * 4 / 3) + 8) {
+            return null;
+        }
+        try {
+            byte[] bytes = java.util.Base64.getDecoder().decode(encoded);
+            if (bytes.length == 0 || bytes.length > maxImageBytes) {
+                return null;
+            }
+            return "data:" + contentType + ";base64," + java.util.Base64.getEncoder().encodeToString(bytes);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
+    }
+
+    private byte[] readImage(InputStream input, long declaredLength) throws IOException {
+        if (declaredLength > maxImageBytes) {
+            throw new IllegalArgumentException("图片超过大小限制");
+        }
+        try (input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > maxImageBytes) {
+                    throw new IllegalArgumentException("图片超过大小限制");
+                }
+                output.write(buffer, 0, read);
+            }
+            if (total == 0) {
+                throw new IllegalArgumentException("图片为空");
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private String normalizeImageContentType(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (normalized) {
+            case "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp" -> normalized;
+            default -> null;
+        };
     }
 
     private String documentPrompt(String userText, List<ExtractedDocument> documents) {

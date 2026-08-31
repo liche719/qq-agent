@@ -96,7 +96,8 @@ public class MemoryExtractionScheduler {
         if (!pendingByUser.remove(userId, pending) || !isCurrentGeneration(userId, pending.generation)) {
             return;
         }
-        boolean completed = extractor.extract(userId);
+        boolean completed = extractor.extract(userId,
+                () -> isCurrentGeneration(userId, pending.generation) && userService.isMemoryEnabled(userId));
         if (completed) {
             generations.remove(userId, pending.generation);
             return;

@@ -18,6 +18,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class ProactiveCareService {
@@ -109,7 +110,7 @@ public class ProactiveCareService {
                 "来做个很短的近况复盘吧。你之前提到「" + shortened
                         + "」，最近推进得怎么样？有卡住的地方就直接告诉我，我陪你一起拆。若不想收到这类消息，发送 /care off 即可。");
         advance(profile, now, true);
-        userLogService.record(userId, "PROACTIVE_CARE_PUSH", "focus=" + shortened);
+        userLogService.record(userId, "PROACTIVE_CARE_PUSH", Map.of("focusLength", shortened.length()));
     }
 
     private String findFocus(String userId) {

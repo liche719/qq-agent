@@ -1,6 +1,6 @@
-# wechat-agent-java
+# wechat-qq-agent
 
-多用户微信智能 Agent 后端（一期工程）。SpringBoot 3 + LangChain4j + MySQL 8 + Redis + Quartz(JDBC)。
+多用户 QQ 私聊长期陪伴 Agent 后端。Spring Boot 3 + LangChain4j + MySQL 8 + Redis + Quartz(JDBC)。
 定位：长期陪伴型个人助手。核心优先级：**用户长期记忆不丢失 > 系统稳定运行 > 交互体验友好**。
 
 ## 技术栈
@@ -13,7 +13,8 @@
 | 缓存 | Redis | 即时对话上下文(10轮)、消息幂等去重 |
 | 调度 | Quartz JDBC 持久化 | 提醒任务重启自动恢复 |
 | 搜索 | SearX-NG（自托管） | JSON 格式，15s 超时，重试一次；配置见 docker/searxng/settings.yml |
-| 微信 | 腾讯官方 iLink（wechat-ilink-sdk） | 默认通道；本地模拟器仅作调试备用 |
+| QQ | QQ 官方机器人 WebSocket | 默认私聊通道；每个 QQ 用户独立上下文、记忆与文件目录 |
+| 微信 | 腾讯官方 iLink（wechat-ilink-sdk） | 可选兼容通道；本地模拟器仅作调试备用 |
 
 ## 快速开始
 
@@ -28,7 +29,7 @@
    实例，可在 `.env` 里设置 `SEARXNG_BASE_URL` 指向它。
 
 2. **配置 LLM**（OpenAI 兼容接口，占位符可改）——三选一：
-   - **推荐：项目根目录的 `.env` 文件**（已创建模板，已 gitignore；Spring 通过 `spring.config.import` 自动加载）：
+   - **推荐：复制项目根目录的 `.env.example` 为 `.env`**（`.env` 已 gitignore；Spring 通过 `spring.config.import` 自动加载）：
      ```
      LLM_API_KEY=你的key
      LLM_BASE_URL=https://api.deepseek.com/v1
@@ -43,12 +44,11 @@
    mvn spring-boot:run
    ```
 
-4. **开始对话**（默认微信通道）：
-   - 浏览器打开 `http://localhost:8080/`，在管理页「添加机器人」扫码登录（现有机器人会自动恢复）
-   - 直接用手机微信跟机器人聊天（流式回复）
-   - 微信通道下，管理页同时提供 `GET /api/clawbot/bots` 等接口查看状态
+4. **启用 QQ 私聊机器人**：在 `.env` 设置 `QQ_ENABLED=true`、`QQ_APP_ID`、`QQ_CLIENT_SECRET`；首次联调建议保留 `QQ_SANDBOX=true`。`QQ_GROUP_ENABLED` 默认 `false`，当前不会处理群消息。
 
-   > 调试备用：本地模拟器（不碰真实微信）需设置 `WECHAT_CHANNEL_MODE=simulator` 后重启，用 `POST /api/sim/send` 发消息测试记忆/提醒等功能。
+5. **开始对话**：直接在 QQ 私聊窗口向机器人发送消息。每个 QQ openid 都有独立的即时上下文、自动记忆、提醒和长期文件目录。
+
+   > 默认不会启动微信兼容通道。调试备用：本地模拟器（不碰真实通道）需设置 `WECHAT_CHANNEL_MODE=simulator` 后重启，用 `POST /api/sim/send` 发消息测试记忆/提醒等功能。管理接口默认仅接受本机回环访问。
 
 ## 功能对照
 
@@ -76,12 +76,12 @@
 | 超 20 条归档压缩（不删除、可回溯） | `MemoryArchiveService` + `memory_archive` |
 | 所有记忆变更留痕 | `memory_change_log` |
 | 每日全量备份 | `MemoryBackupJob`（backup/ 目录，保留 30 天） |
-| 按 user_id 日志隔离 | logback SiftingAppender → logs/user/{userId}/ |
+| 按用户范围日志隔离 | logback SiftingAppender → `logs/user/user-{hash}/`；不记录默认聊天正文 |
 | 全局异常友好化 | `GlobalExceptionHandler` + 编排器兜底 |
 | msg_id+user_id 幂等 | Redis SETNX 24h |
 | 每用户串行处理 | `PerUserExecutors` |
-| 连续附件/补充消息聚合 | `InboundMessageBatcher`：短窗口合并同一用户的连续媒体与补充说明，回复锚定到最后一条意图消息 |
-| QQ 群聊（仅 @ 机器人时触发） | `QqChannel`，每群独立会话上下文 |
+| 连续附件/补充消息聚合 | `InboundMessageBatcher`：有最大时长的短窗口，仅合并连续媒体或明确补充，普通后续消息不会继承旧图片 |
+| QQ 群聊 | 默认关闭（`QQ_GROUP_ENABLED=false`）；当前版本只保证 QQ 私聊链路 |
 | PDF / DOCX 文件问答 | `DocumentExtractionService`，文本提取优先，扫描 PDF 交由多模态模型阅读 |
 | 重要图片/文件长期保管 | Agent 自主判断价值并命名，按用户隔离存入 `stored-media/`，元数据写入 `stored_media` |
 | 文件安全删除 | 必须先审阅内容并取得短期令牌，再移入当前用户 `.trash/`，不直接永久删除 |
@@ -124,11 +124,15 @@ src/main/java/com/liche/wechatagent
 | MEDIA_STORAGE_MAX_FILE_BYTES | 20971520 | 单个长期保存文件最大字节数（20 MB） |
 | MEDIA_INSPECTION_TOKEN_MINUTES | 5 | 删除前审阅令牌有效分钟数 |
 | AGENT_MESSAGE_BATCH_WINDOW_MILLIS | 1500 | 连续媒体/补充消息的聚合窗口；设为 0 可关闭 |
+| AGENT_MESSAGE_BATCH_MAX_WINDOW_MILLIS | 4000 | 单个连续消息任务的最大聚合时长，避免旧附件一直滞留 |
+| QQ_ENABLED / QQ_APP_ID / QQ_CLIENT_SECRET | false / 空 / 空 | QQ 私聊机器人开关与官方凭证 |
+| QQ_SANDBOX | true | QQ 官方沙箱环境开关；生产机器人应设置为 false |
+| QQ_GROUP_ENABLED | false | 群聊开关；默认关闭，当前版本不启用 |
 | MEMORY_LIFECYCLE_SCAN_INTERVAL_MS | 3600000 | 工作记忆到期扫描间隔（毫秒） |
 | CARE_SCAN_INTERVAL_MS | 60000 | 主动关怀到期扫描间隔（毫秒） |
 | WEB_MAX_RESPONSE_BYTES | 2097152 | 单个网页最大响应字节数（2 MB） |
 | WEB_MAX_TEXT_CHARS | 12000 | 交给模型的网页正文最大长度 |
-| WECHAT_CHANNEL_MODE | clawbot | 默认真实微信；设 simulator 切本地模拟器调试 |
+| WECHAT_CHANNEL_MODE | disabled | 默认不启动微信通道；设 `clawbot` 或 `simulator` 才启用对应兼容通道 |
 | BACKUP_DIR / 保留天数 | backup / 30 | 备份 |
 
 ## 微信接入（已接入：腾讯官方 iLink Bot API）
@@ -176,14 +180,11 @@ src/main/java/com/liche/wechatagent
 
 ## QQ 群聊
 
-- 机器人收到 `GROUP_AT_MESSAGE_CREATE`（即被群成员 @）事件后回复，发送目标为对应的 QQ 群。
-- 每个群使用独立的内部会话标识 `qq-group:{group_openid}`；群与群、群与私聊不会共享上下文、人设、记忆、提醒、消息幂等或回复状态。
-- 群内历史会保留发言成员的 QQ `member_openid` 标签，机器人可区分不同成员的连续发言。
-- QQ 官方流式消息只支持私聊，群聊使用一次性文本回复。
+当前默认关闭群聊（`QQ_GROUP_ENABLED=false`）。个人开发者账号的群聊能力受 QQ 开放平台资格限制，本仓库当前的发布与回归测试范围仅包含 QQ 私聊；不要把群聊当作已上线功能。
 
 ## QQ 文件识别
 
-- 私聊或群聊中发送 PDF、DOCX 后直接提出问题即可；机器人会下载、校验真实格式并读取文件。
+- 在 QQ 私聊中发送 PDF、DOCX 后直接提出问题即可；机器人会下载、校验真实格式并读取文件。
 - 文本型 PDF 与 DOCX 直接提取文字；没有可用文字的扫描型 PDF 会将前若干页转为图片，交给配置的多模态模型识别。
 - 普通临时文件只用于当前次模型请求；若 Agent 判断为课表、证书、长期项目资料等未来仍有价值的内容，会自动按内容命名并保存。表情包、随手截图、重复和一次性资料不得保存。
 - 长期文件存入 `stored-media/{用户隔离目录}/active/`，数据库只保存检索元数据和相对路径。Agent 无法指定磁盘路径或用户 ID，也不能保存当前消息之外的任意文件。
@@ -196,7 +197,7 @@ src/main/java/com/liche/wechatagent
 ## QQ 引用消息
 
 - QQ 私聊中回复/引用一条消息时，机器人会读取被引用消息的文本和图片，并将其作为本轮回答的只读背景。
-- 网关事件未直接带引用正文时，机器人会按当前 QQ 用户和被引用消息 ID 通过 QQ 官方接口回取；接口短暂不可用时才退回本机短期缓存。
+- 网关事件未直接带引用正文时，机器人会按当前 QQ 用户和被引用消息 ID 通过 QQ 官方接口回取；接口短暂不可用时才退回本机有时限、容量受控的短期缓存。
 - 引用内容不会被当作当前用户新说的话写进长期记忆，也不会被自动保存为当前上传文件。
 
 ## 主动关怀
@@ -204,11 +205,10 @@ src/main/java/com/liche/wechatagent
 - 默认关闭，不会未经允许主动打扰。
 - `/care on` 或 `/care weekly`：每周日晚约 20:30 围绕长期目标做一次简短复盘。
 - `/care daily`：每天约 20:30 复盘；`/care off` 随时关闭。
-- 仅发送给私聊用户；群聊不会收到主动关怀。没有可用长期目标时会静默跳过，不发送空泛消息。
+- 仅发送给 QQ 私聊用户。没有可用长期目标时会静默跳过，不发送空泛消息。
 - 当前只支持未加密的 PDF、DOCX；扫描 PDF 页数受 `DOCUMENT_MAX_PDF_PAGES` 限制。
 
 ## 已知限制（一期）
 
-- 核心记忆确认状态机存内存，重启后挂起确认会丢失（可接受：确认是即时交互）；
 - 重复 Cron 提醒的预热目前只覆盖创建后首次触发；
-- 模拟器模式（调试用）的推送通过 `/api/sim/replies` 查询获取，无真实微信触达；默认微信模式无此限制。
+- 模拟器模式（调试用）的推送通过 `/api/sim/replies` 查询获取，无真实 QQ 触达。

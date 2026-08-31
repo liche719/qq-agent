@@ -55,6 +55,10 @@ class MediaStorageServiceTest {
                 database.stream().filter(media -> media.getUserId().equals(invocation.getArgument(0))
                                 && media.getStatus().equals(invocation.getArgument(1)))
                         .toList());
+        when(repository.findByUserIdAndStatusOrderByUpdatedAtDesc(any(), any(), any())).thenAnswer(invocation ->
+                database.stream().filter(media -> media.getUserId().equals(invocation.getArgument(0))
+                                && media.getStatus().equals(invocation.getArgument(1)))
+                        .toList());
         service = new MediaStorageService(repository, mock(PublicUrlValidator.class),
                 storageRoot.toString(), 1024 * 1024, 5);
     }
@@ -123,6 +127,19 @@ class MediaStorageServiceTest {
         assertTrue(result.description().contains("第13周课表"));
         assertTrue(result.imageDataUrl().startsWith("data:image/png;base64,"));
         assertThrows(IllegalArgumentException.class, () -> service.readForAssistant("u2", media.getId()));
+    }
+
+    @Test
+    void listsOnlyTheCurrentUsersFiles() {
+        service.save("u1", "m1", image(1, "data:image/png;base64,c2NoZWR1bGU="),
+                "第13周课表", "第13周课程安排", "之后查询第13周课程需要原图");
+        service.save("u2", "m2", image(1, "data:image/png;base64,c2NoZWR1bGUy"),
+                "第14周课表", "第14周课程安排", "之后查询第14周课程需要原图");
+
+        String listed = service.list("u1", "课表");
+
+        assertTrue(listed.contains("第13周课表"));
+        assertFalse(listed.contains("第14周课表"));
     }
 
     private MediaCandidate image(int index, String source) {

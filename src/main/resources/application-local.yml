@@ -1,0 +1,19 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    # 仅用于本机 Docker 默认开发数据库。生产环境必须由环境变量提供独立账号。
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
+  jpa:
+    hibernate:
+      ddl-auto: update
+  quartz:
+    jdbc:
+      initialize-schema: always
+
+management:
+  access:
+    require-key: ${ADMIN_REQUIRE_KEY:false}
+    allow-loopback-without-key: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:true}

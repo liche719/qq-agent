@@ -32,13 +32,13 @@ public class MediaMemoryTool {
         return outcome.message();
     }
 
-    @Tool(value = "仅当用户当前明确指代刚才、上一条、此前刚发但尚未保存的图片或文件时调用。它会取回当前用户自己的近期未保存媒体，供后续查看或保存；返回内容一定属于此前上传，不是本条消息的新附件。普通聊天、无明确指代时不得调用。")
-    public String inspectRecentUnstoredMedia() {
+    @Tool(value = "仅当用户当前明确指代刚才、上一条、此前刚发但尚未保存的图片或文件时调用。userReference 必须原样填写用户本条消息中实际出现的指代语。它会取回当前会话自己的近期未保存媒体，供后续查看或保存；返回内容一定属于此前上传，不是本条消息的新附件。普通聊天、无明确指代时不得调用。")
+    public String inspectRecentUnstoredMedia(String userReference) {
         String userId = requireCurrentUser();
         if (!userId.equals(mediaContext.currentUserId())) {
             throw new IllegalStateException("媒体与当前用户上下文不一致");
         }
-        return mediaContext.inspectRecentUnstoredMedia();
+        return mediaContext.inspectRecentUnstoredMedia(userReference);
     }
 
     @Tool(value = "按文件名、摘要、重要原因或已提取文档内容，检索当前用户自己长期保存的图片和文件。query 可为空，空值列出最近文件。")

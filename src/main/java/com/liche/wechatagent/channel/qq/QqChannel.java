@@ -17,6 +17,7 @@ import okhttp3.WebSocketListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Lazy;
@@ -29,7 +30,9 @@ import org.springframework.web.client.RestClient;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
@@ -52,13 +55,19 @@ public class QqChannel implements WeChatChannel {
     private static final long PASSIVE_WINDOW_MS = 5 * 60 * 1000L;
     /** 输入状态续期间隔（QQ 输入窗口约 60s） */
     private static final long TYPING_KEEPALIVE_MS = 50_000L;
+    private static final long EPHEMERAL_CACHE_TTL_MS = 30 * 60 * 1000L;
+    private static final long STREAM_STATE_TTL_MS = 10 * 60 * 1000L;
+    private static final int MAX_CONVERSATION_CACHE_ENTRIES = 2_048;
+    private static final int MAX_MESSAGE_CACHE_ENTRIES = 4_096;
 
     private final String appId;
     private final String clientSecret;
     private final String apiBase;
+    private final boolean groupEnabled;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AgentOrchestrator orchestrator;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final QqMessageSequence messageSequence = new QqMessageSequence();
 
     private volatile String accessToken;
     private volatile long tokenExpireAtMs;
@@ -78,16 +87,26 @@ public class QqChannel implements WeChatChannel {
     /** userId -> 输入状态续期任务 */
     private final ConcurrentMap<String, ScheduledFuture<?>> typingTasks = new ConcurrentHashMap<>();
     /** Only short-lived, per-user copies of received messages, used when QQ quote lookup is temporarily unavailable. */
-    private final ConcurrentMap<String, QqQuoteMessage> receivedMessages = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ReceivedQuote> receivedMessages = new ConcurrentHashMap<>();
 
+    private record ReceivedQuote(QqQuoteMessage message, long expiresAt) {
+    }
+
+    @Autowired
     public QqChannel(@Value("${qq.app-id}") String appId,
                      @Value("${qq.client-secret}") String clientSecret,
                      @Value("${qq.sandbox:false}") boolean sandbox,
+                     @Value("${qq.group-enabled:false}") boolean groupEnabled,
                      @Lazy AgentOrchestrator orchestrator) {
         this.appId = appId;
         this.clientSecret = clientSecret;
         this.apiBase = sandbox ? SANDBOX_API_BASE : API_BASE;
+        this.groupEnabled = groupEnabled;
         this.orchestrator = orchestrator;
+    }
+
+    QqChannel(String appId, String clientSecret, boolean sandbox, AgentOrchestrator orchestrator) {
+        this(appId, clientSecret, sandbox, false, orchestrator);
     }
 
     @Override
@@ -303,9 +322,7 @@ public class QqChannel implements WeChatChannel {
                         if (images.isEmpty() && attachments.isEmpty() && content.isBlank()) {
                             log.info("[qq] recv (empty, no attachments) -> {}", openid);
                         } else {
-                            lastMsgIds.put(openid, msgId);
-                            lastRecvAt.put(openid, System.currentTimeMillis());
-                            receivedAtByMessage.put(replyCacheKey(openid, msgId), System.currentTimeMillis());
+                            rememberReplyWindow(openid, msgId);
                             startTyping(openid); // 通知用户「正在输入」
                             rememberReceivedMessage(openid, msgId, content, images, attachments);
                             log.info("[qq] inbound metadata user={} msg={} fields={}", openid, msgId, fieldNames(d));
@@ -325,7 +342,7 @@ public class QqChannel implements WeChatChannel {
                             orchestrator.onInbound(inbound);
                         }
                     }
-                } else if ("GROUP_AT_MESSAGE_CREATE".equals(t)) {
+                } else if ("GROUP_AT_MESSAGE_CREATE".equals(t) && groupEnabled) {
                     JsonNode d = node.path("d");
                     String groupOpenid = d.path("group_openid").asText("");
                     String memberOpenid = d.path("author").path("member_openid").asText("");
@@ -356,9 +373,7 @@ public class QqChannel implements WeChatChannel {
                         } else {
                             String conversationId = groupConversationId(groupOpenid);
                             String memberContent = "【群成员 " + memberOpenid + "】" + (content.isBlank() ? "[图片]" : content);
-                            lastMsgIds.put(conversationId, msgId);
-                            lastRecvAt.put(conversationId, System.currentTimeMillis());
-                            receivedAtByMessage.put(replyCacheKey(conversationId, msgId), System.currentTimeMillis());
+                            rememberReplyWindow(conversationId, msgId);
                             InboundMessage inbound = images.isEmpty() && attachments.isEmpty()
                                     ? InboundMessage.text(msgId, conversationId, memberContent, "qq", "qq")
                                     : InboundMessage.textWithAttachments(msgId, conversationId, memberContent, "qq", "qq", images, attachments);
@@ -379,17 +394,21 @@ public class QqChannel implements WeChatChannel {
     private void rememberReceivedMessage(String userId, String messageId, String content, List<String> images,
                                          List<InboundAttachment> attachments) {
         if (messageId == null || messageId.isBlank()) return;
-        receivedMessages.put(quoteCacheKey(userId, messageId), new QqQuoteMessage(messageId,
+        long now = System.currentTimeMillis();
+        receivedMessages.put(quoteCacheKey(userId, messageId), new ReceivedQuote(new QqQuoteMessage(messageId,
                 content == null ? "" : content, images == null ? List.of() : List.copyOf(images),
-                attachments == null ? List.of() : List.copyOf(attachments)));
+                attachments == null ? List.of() : List.copyOf(attachments)), now + EPHEMERAL_CACHE_TTL_MS));
+        pruneEphemeralCaches(now);
     }
 
     private QqQuoteMessage resolveQuote(String userId, JsonNode event) {
         QqQuoteMessage embedded = QqQuoteMessage.fromEvent(event);
         if (!embedded.content().isBlank() || !embedded.imageUrls().isEmpty() || !embedded.attachments().isEmpty()) return embedded;
         if (embedded.messageId().isBlank()) return embedded;
-        QqQuoteMessage cached = receivedMessages.get(quoteCacheKey(userId, embedded.messageId()));
-        if (cached != null) return cached;
+        String cacheKey = quoteCacheKey(userId, embedded.messageId());
+        ReceivedQuote cached = receivedMessages.get(cacheKey);
+        if (cached != null && cached.expiresAt() > System.currentTimeMillis()) return cached.message();
+        if (cached != null) receivedMessages.remove(cacheKey, cached);
         try {
             RestClient client = buildRestClient(apiBase, 10);
             String response = client.get().uri("/v2/users/{openid}/messages/{messageId}", userId, embedded.messageId())
@@ -406,7 +425,68 @@ public class QqChannel implements WeChatChannel {
     }
 
     private String quoteCacheKey(String userId, String messageId) {
-        return userId + ':' + messageId;
+        return userId + '\u0000' + messageId;
+    }
+
+    private void rememberReplyWindow(String conversationId, String messageId) {
+        if (conversationId == null || conversationId.isBlank() || messageId == null || messageId.isBlank()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        lastMsgIds.put(conversationId, messageId);
+        lastRecvAt.put(conversationId, now);
+        receivedAtByMessage.put(replyCacheKey(conversationId, messageId), now);
+        pruneEphemeralCaches(now);
+    }
+
+    private void pruneEphemeralCaches(long now) {
+        lastRecvAt.entrySet().removeIf(entry -> now - entry.getValue() >= EPHEMERAL_CACHE_TTL_MS);
+        lastMsgIds.keySet().removeIf(conversationId -> !lastRecvAt.containsKey(conversationId));
+        receivedAtByMessage.entrySet().removeIf(entry -> now - entry.getValue() >= EPHEMERAL_CACHE_TTL_MS);
+        receivedMessages.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
+        typingTasks.entrySet().removeIf(entry -> entry.getValue().isCancelled() || entry.getValue().isDone());
+        streamStates.entrySet().removeIf(entry -> now - entry.getValue().createdAtMillis >= STREAM_STATE_TTL_MS);
+        trimConversationCache();
+        trimMessageCache();
+        trimQuoteCache();
+    }
+
+    private void trimConversationCache() {
+        int overflow = lastRecvAt.size() - MAX_CONVERSATION_CACHE_ENTRIES;
+        if (overflow <= 0) {
+            return;
+        }
+        lastRecvAt.entrySet().stream()
+                .sorted(Comparator.comparingLong(Map.Entry::getValue))
+                .limit(overflow)
+                .forEach(entry -> {
+                    if (lastRecvAt.remove(entry.getKey(), entry.getValue())) {
+                        lastMsgIds.remove(entry.getKey());
+                        stopTyping(entry.getKey());
+                    }
+                });
+    }
+
+    private void trimMessageCache() {
+        int overflow = receivedAtByMessage.size() - MAX_MESSAGE_CACHE_ENTRIES;
+        if (overflow <= 0) {
+            return;
+        }
+        receivedAtByMessage.entrySet().stream()
+                .sorted(Comparator.comparingLong(Map.Entry::getValue))
+                .limit(overflow)
+                .forEach(entry -> receivedAtByMessage.remove(entry.getKey(), entry.getValue()));
+    }
+
+    private void trimQuoteCache() {
+        int overflow = receivedMessages.size() - MAX_MESSAGE_CACHE_ENTRIES;
+        if (overflow <= 0) {
+            return;
+        }
+        receivedMessages.entrySet().stream()
+                .sorted(Comparator.comparingLong(entry -> entry.getValue().expiresAt()))
+                .limit(overflow)
+                .forEach(entry -> receivedMessages.remove(entry.getKey(), entry.getValue()));
     }
 
     private List<String> fieldNames(JsonNode node) {
@@ -464,7 +544,7 @@ public class QqChannel implements WeChatChannel {
             ObjectNode notify = body.putObject("input_notify");
             notify.put("input_type", 1);
             notify.put("input_second", 60);
-            body.put("msg_seq", 1);
+            body.put("msg_seq", messageSequence.next());
             client.post().uri("/v2/users/{openid}/messages", userId)
                     .header("Authorization", "QQBot " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -498,6 +578,7 @@ public class QqChannel implements WeChatChannel {
 
     @Override
     public String botIdForUser(String userId) {
+        pruneEphemeralCaches(System.currentTimeMillis());
         return lastMsgIds.containsKey(userId) ? "qq" : null;
     }
 
@@ -586,6 +667,7 @@ public class QqChannel implements WeChatChannel {
 
     private void sendPassive(String userId, String replyToMsgId, String text, boolean markdown) {
         try {
+            pruneEphemeralCaches(System.currentTimeMillis());
             ensureToken();
             String targetMsgId = replyToMsgId == null || replyToMsgId.isBlank() ? lastMsgIds.get(userId) : replyToMsgId;
             Long recvAt = replyToMsgId == null || replyToMsgId.isBlank()
@@ -605,7 +687,7 @@ public class QqChannel implements WeChatChannel {
             }
             if (withinWindow) {
                 body.put("msg_id", targetMsgId);
-                body.put("msg_seq", (int) (System.currentTimeMillis() % 65536));
+                body.put("msg_seq", messageSequence.next());
             }
             client.post().uri(messagePath(userId), targetOpenid(userId))
                     .header("Authorization", "QQBot " + accessToken)
@@ -667,6 +749,7 @@ public class QqChannel implements WeChatChannel {
     private static class StreamSessionState {
         volatile String streamMsgId;
         final int msgSeq;
+        final long createdAtMillis = System.currentTimeMillis();
         volatile int index;
         volatile boolean hasPartialContent;
         volatile boolean done;
@@ -680,6 +763,7 @@ public class QqChannel implements WeChatChannel {
         if (isGroupConversation(userId)) {
             return null;
         }
+        pruneEphemeralCaches(System.currentTimeMillis());
         String replyToMsgId = msgId;
         Long recvAt = receivedAtByMessage.get(replyCacheKey(userId, msgId));
         boolean withinWindow = replyToMsgId != null
@@ -688,7 +772,7 @@ public class QqChannel implements WeChatChannel {
         if (!withinWindow || replyToMsgId == null) {
             return null; // 被动窗口外无法流式，退化为普通回复
         }
-        int msgSeq = (int) (System.currentTimeMillis() % 65536);
+        int msgSeq = messageSequence.next();
         StreamSessionState state = new StreamSessionState(msgSeq);
         streamStates.put(userId, state);
         String passiveMsgId = replyToMsgId;
@@ -772,6 +856,11 @@ public class QqChannel implements WeChatChannel {
         stopHeartbeat();
         if (typingExecutor != null) { typingExecutor.shutdownNow(); typingExecutor = null; }
         typingTasks.clear();
+        lastRecvAt.clear();
+        lastMsgIds.clear();
+        receivedAtByMessage.clear();
+        receivedMessages.clear();
+        streamStates.clear();
         WebSocket s = ws;
         if (s != null) {
             try { s.close(1000, "shutdown"); } catch (Exception ignored) { }

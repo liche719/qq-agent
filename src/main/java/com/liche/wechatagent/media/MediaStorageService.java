@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +32,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 @Service
 public class MediaStorageService {
@@ -61,6 +63,7 @@ public class MediaStorageService {
     private final Duration inspectionTtl;
     private final OkHttpClient client;
     private final Map<String, InspectionGrant> inspectionGrants = new ConcurrentHashMap<>();
+    private final Map<String, Object> userLocks = new ConcurrentHashMap<>();
 
     public MediaStorageService(StoredMediaRepository repository,
                                PublicUrlValidator urlValidator,
@@ -80,19 +83,24 @@ public class MediaStorageService {
                 .build();
     }
 
-    @Transactional
-    public synchronized String save(String userId, String sourceMessageId, MediaCandidate candidate,
+    public String save(String userId, String sourceMessageId, MediaCandidate candidate,
                                     String requestedName, String summary, String importanceReason) {
         return saveDetailed(userId, sourceMessageId, candidate, requestedName, summary, importanceReason).message();
     }
 
-    @Transactional
-    public synchronized SaveOutcome saveDetailed(String userId, String sourceMessageId, MediaCandidate candidate,
+    public SaveOutcome saveDetailed(String userId, String sourceMessageId, MediaCandidate candidate,
                                                  String requestedName, String summary, String importanceReason) {
         requireUserId(userId);
         requireText(summary, "内容摘要", 4);
         requireText(importanceReason, "重要性原因", 4);
         DownloadedMedia downloaded = download(candidate);
+        return withUserLock(userId, () -> saveDownloaded(userId, sourceMessageId, candidate, requestedName,
+                summary, importanceReason, downloaded));
+    }
+
+    private SaveOutcome saveDownloaded(String userId, String sourceMessageId, MediaCandidate candidate,
+                                       String requestedName, String summary, String importanceReason,
+                                       DownloadedMedia downloaded) {
         String sha256 = sha256(downloaded.bytes());
         var duplicate = repository.findFirstByUserIdAndSha256AndStatus(userId, sha256, StoredMedia.ACTIVE);
         if (duplicate.isPresent()) {
@@ -142,7 +150,8 @@ public class MediaStorageService {
     public String list(String userId, String query) {
         requireUserId(userId);
         String keyword = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        List<StoredMedia> matches = repository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE)
+        List<StoredMedia> matches = repository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE,
+                        PageRequest.of(0, MAX_LIST_RESULTS * 5))
                 .stream()
                 .filter(media -> keyword.isBlank() || searchableText(media).contains(keyword))
                 .sorted(Comparator.comparing(StoredMedia::getUpdatedAt,
@@ -225,7 +234,6 @@ public class MediaStorageService {
         }
     }
 
-    @Transactional
     public SaveOutcome downloadFromWeb(String userId, String sourceMessageId, String url, String fileName, String summary) {
         requireUserId(userId);
         if (url == null || url.isBlank()) {
@@ -247,8 +255,12 @@ public class MediaStorageService {
         return new SendableMedia(file, media.getFileName(), media.getContentType());
     }
 
-    @Transactional
-    public synchronized String trash(String userId, Long mediaId, String inspectionToken, String reason) {
+    public String trash(String userId, Long mediaId, String inspectionToken, String reason) {
+        requireUserId(userId);
+        return withUserLock(userId, () -> trashLocked(userId, mediaId, inspectionToken, reason));
+    }
+
+    private String trashLocked(String userId, Long mediaId, String inspectionToken, String reason) {
         requireText(reason, "删除原因", 4);
         StoredMedia media = requireOwnedActive(userId, mediaId);
         String key = grantKey(userId, mediaId);
@@ -321,6 +333,9 @@ public class MediaStorageService {
                     throw new IllegalStateException("媒体下载失败，HTTP " + response.code());
                 }
                 String contentType = normalizeContentType(response.header("Content-Type"), candidate.contentType());
+                if (contentType.contains("text/html")) {
+                    throw new IllegalStateException("下载结果是网页或登录提示，不是可保存的文件");
+                }
                 return new DownloadedMedia(readLimited(response.body().byteStream(), response.body().contentLength()), contentType);
             } catch (IOException exception) {
                 throw new IllegalStateException("媒体下载失败，请重新发送", exception);
@@ -492,6 +507,13 @@ public class MediaStorageService {
 
     private String grantKey(String userId, Long mediaId) {
         return userId + ":" + mediaId;
+    }
+
+    private <T> T withUserLock(String userId, Supplier<T> operation) {
+        Object lock = userLocks.computeIfAbsent(userId, ignored -> new Object());
+        synchronized (lock) {
+            return operation.get();
+        }
     }
 
     private void requireUserId(String userId) {

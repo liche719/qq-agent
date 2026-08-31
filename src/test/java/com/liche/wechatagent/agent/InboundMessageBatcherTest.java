@@ -5,6 +5,7 @@ import com.liche.wechatagent.channel.InboundMessage;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -86,5 +87,34 @@ class InboundMessageBatcherTest {
         assertTrue(history.contains("历史消息曾附带图片"));
         assertTrue(history.contains("图片原件未随当前消息提供"));
         assertTrue(history.contains("这是补充说明"));
+    }
+
+    @Test
+    void keepsAnUnrelatedFollowUpOutOfTheEarlierMediaBatch() throws Exception {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        try {
+            InboundMessageBatcher batcher = new InboundMessageBatcher(scheduler, 80);
+            List<InboundMessageBatch> received = new CopyOnWriteArrayList<>();
+            CountDownLatch completed = new CountDownLatch(2);
+            java.util.function.Consumer<InboundMessageBatch> consumer = batch -> {
+                received.add(batch);
+                completed.countDown();
+            };
+
+            batcher.submit(InboundMessage.textWithImages("image-1", "user-a", "", "qq", "qq",
+                    List.of("https://example.test/schedule.jpg")), consumer);
+            Thread.sleep(10);
+            batcher.submit(InboundMessage.text("text-2", "user-a", "今天天气怎么样", "qq", "qq"), consumer);
+
+            assertTrue(completed.await(2, TimeUnit.SECONDS));
+            assertEquals(2, received.size());
+            assertEquals(1, received.get(0).messages().size());
+            assertEquals(1, received.get(0).images().size());
+            assertEquals(1, received.get(1).messages().size());
+            assertTrue(received.get(1).images().isEmpty());
+            batcher.clear();
+        } finally {
+            scheduler.shutdownNow();
+        }
     }
 }

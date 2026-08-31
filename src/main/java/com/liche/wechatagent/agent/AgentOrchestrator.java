@@ -9,6 +9,7 @@ import com.liche.wechatagent.document.DocumentExtractionService;
 import com.liche.wechatagent.document.ExtractedDocument;
 import com.liche.wechatagent.memory.MemoryExtractionScheduler;
 import com.liche.wechatagent.log.ConversationTraceLogger;
+import com.liche.wechatagent.log.UserScope;
 import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.user.UserProfile;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 消息编排器（消息管道）：
@@ -109,15 +111,19 @@ public class AgentOrchestrator {
         boolean accepted = perUserExecutors.execute(batch.userId(), () -> {
             String reply = null;
             StreamReplySink sink = null;
-            MDC.put("userId", batch.userId());
+            MDC.put("userScope", UserScope.forUser(batch.userId()));
+            String taskId = UUID.randomUUID().toString();
+            MDC.put("taskId", taskId);
             toolStatusService.bind(batch.userId(), batch.replyToMsgId(), batch.botId(), batch.channel());
-            log.info("agent_task_start user={} channel={} batchCount={} replyTo={} media={} quotedMedia={}",
+            log.info("agent_task_start task={} user={} channel={} batchCount={} replyTo={} media={} quotedMedia={} queueWaitMs={}",
+                    taskId,
                     batch.userId(), batch.channel(), batch.messages().size(), batch.replyToMsgId(),
                     batch.images().size() + batch.attachments().size(),
-                    batch.quotedImages().size() + batch.quotedAttachments().size());
+                    batch.quotedImages().size() + batch.quotedAttachments().size(),
+                    Math.max(0, System.currentTimeMillis() - batch.firstReceivedAt()));
             try {
                 conversationTraceLogger.inbound(batch.replyAnchor());
-                HandledReply handled = handleSafely(batch);
+                HandledReply handled = handleSafely(batch, taskId);
                 reply = handled.text();
                 sink = handled.sink();
                 conversationTraceLogger.assistant(batch.userId(), reply);
@@ -125,10 +131,11 @@ public class AgentOrchestrator {
                 log.error("消息处理异常 user={} replyTo={}", batch.userId(), batch.replyToMsgId(), e);
                 reply = "抱歉，我这边出了点小问题，请稍后再试一次。";
             } finally {
-                log.info("agent_task_finish user={} replyTo={} replyChars={} streamed={}", batch.userId(), batch.replyToMsgId(),
+                log.info("agent_task_finish task={} user={} replyTo={} replyChars={} streamed={}", taskId, batch.userId(), batch.replyToMsgId(),
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
                 toolStatusService.unbind();
-                MDC.remove("userId");
+                MDC.remove("userScope");
+                MDC.remove("taskId");
             }
             if (reply != null && !reply.isBlank()) {
                 WeChatChannel c = channelFor(batch.channel());
@@ -154,11 +161,13 @@ public class AgentOrchestrator {
         userService.getOrCreate(msg.userId());
         userService.touchDelivery(msg.userId(), msg.botId(), msg.channel());
         InboundMessageBatch batch = InboundMessageBatch.single(msg);
-        MDC.put("userId", msg.userId());
+        MDC.put("userScope", UserScope.forUser(msg.userId()));
+        String taskId = UUID.randomUUID().toString();
+        MDC.put("taskId", taskId);
         toolStatusService.bind(msg.userId(), batch.replyToMsgId(), msg.botId(), msg.channel());
         try {
             conversationTraceLogger.inbound(batch.replyAnchor());
-            String reply = handleSafely(batch).text();
+            String reply = handleSafely(batch, taskId).text();
             conversationTraceLogger.assistant(msg.userId(), reply);
             return reply;
         } catch (Exception e) {
@@ -166,7 +175,8 @@ public class AgentOrchestrator {
             return "抱歉，我这边出了点小问题，请稍后再试一次。";
         } finally {
             toolStatusService.unbind();
-            MDC.remove("userId");
+            MDC.remove("userScope");
+            MDC.remove("taskId");
         }
     }
 
@@ -179,7 +189,7 @@ public class AgentOrchestrator {
         return null;
     }
 
-    private HandledReply handleSafely(InboundMessageBatch batch) {
+    private HandledReply handleSafely(InboundMessageBatch batch, String taskId) {
         String userId = batch.userId();
         String content = batch.content();
         boolean hasImages = !batch.images().isEmpty();
@@ -207,19 +217,24 @@ public class AgentOrchestrator {
         MemoryLoader.LoadedMemory mem = memoryLoader.load(userId, content);
         List<ContextTurn> history = contextStore.getRecent(userId);
         List<ExtractedDocument> documents;
+        List<ExtractedDocument> directDocuments;
+        List<ExtractedDocument> quotedDocuments;
         try {
-            List<com.liche.wechatagent.channel.InboundAttachment> documentsToRead = new java.util.ArrayList<>(batch.attachments());
-            documentsToRead.addAll(batch.quotedAttachments());
-            if (!documentsToRead.isEmpty()) {
+            if (!batch.attachments().isEmpty() || !batch.quotedAttachments().isEmpty()) {
                 toolStatusService.push("我正在读取你发来的文件…");
-                documents = documentExtractionService.extractAll(documentsToRead);
-            } else {
-                documents = List.of();
             }
+            directDocuments = batch.attachments().isEmpty()
+                    ? List.of() : documentExtractionService.extractAll(batch.attachments());
+            quotedDocuments = batch.quotedAttachments().isEmpty()
+                    ? List.of() : documentExtractionService.extractAll(batch.quotedAttachments());
+            documents = new java.util.ArrayList<>(directDocuments);
+            documents.addAll(quotedDocuments);
         } catch (DocumentExtractionException exception) {
             return new HandledReply(exception.getMessage(), null);
         }
-        mediaToolContextService.bind(userId, batch.replyToMsgId(), content, batch.images(), batch.attachments(), documents);
+        mediaToolContextService.bind(userId, batch.botId(), batch.channel(), taskId, batch.replyToMsgId(), content,
+                batch.images(), batch.attachments(), directDocuments,
+                batch.quotedImages(), batch.quotedAttachments(), quotedDocuments);
         String reply;
         StreamReplySink sink = createSinkFor(batch);
         try {

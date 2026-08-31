@@ -124,6 +124,10 @@ public record InboundMessageBatch(List<InboundMessage> messages, String replyToM
                 || !quotedImages().isEmpty() || !quotedAttachments().isEmpty();
     }
 
+    public long firstReceivedAt() {
+        return messages.stream().mapToLong(InboundMessage::timestamp).min().orElse(System.currentTimeMillis());
+    }
+
     private List<String> flattenImages(boolean quoted) {
         List<String> result = new ArrayList<>();
         for (InboundMessage message : messages) {

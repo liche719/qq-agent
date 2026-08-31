@@ -2,6 +2,7 @@ package com.liche.wechatagent.reminder;
 
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
+import com.liche.wechatagent.log.UserScope;
 import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 import org.slf4j.MDC;
@@ -10,6 +11,7 @@ import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * Quartz 定时推送 Job：从 DB 读取提醒任务，通过微信通道推送（自然口语化文案）。
@@ -40,7 +42,7 @@ public class ReminderPushJob extends QuartzJobBean {
         if (task == null || !ReminderTask.STATUS_PENDING.equals(task.getStatus())) {
             return;
         }
-        MDC.put("userId", task.getUserId());
+        MDC.put("userScope", UserScope.forUser(task.getUserId()));
         try {
             String text = "PREWARM".equals(mode) ? textService.prewarm(task) : textService.onTime(task);
             // 按用户归属通道发送（微信或 QQ）
@@ -64,9 +66,9 @@ public class ReminderPushJob extends QuartzJobBean {
                 repository.save(task);
             }
             userLogService.record(task.getUserId(), "REMINDER_PUSH",
-                    "id=" + reminderId + " mode=" + mode + " content=" + task.getContent());
+                    Map.of("reminderId", reminderId));
         } finally {
-            MDC.remove("userId");
+            MDC.remove("userScope");
         }
     }
 }

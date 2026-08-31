@@ -1,0 +1,15 @@
+spring:
+  config:
+    activate:
+      on-profile: production
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  quartz:
+    jdbc:
+      initialize-schema: never
+
+management:
+  access:
+    require-key: true
+    allow-loopback-without-key: false

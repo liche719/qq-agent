@@ -1,6 +1,7 @@
 package com.liche.wechatagent.agent;
 
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Semaphore;
 
 /**
  * Bounded shared worker pool with a serial queue per user. A user never has two messages
@@ -28,15 +30,19 @@ public class PerUserExecutors {
     private final ScheduledExecutorService cleanupExecutor;
     private final long idleMillis;
     private final int perUserQueueCapacity;
+    private final Semaphore globalQueueSlots;
 
+    @Autowired
     public PerUserExecutors(@Value("${agent.workers:8}") int workerCount,
                             @Value("${agent.queue-capacity:200}") int queueCapacity,
+                            @Value("${agent.global-queue-capacity:400}") int globalQueueCapacity,
                             @Value("${agent.user-queue-idle-minutes:30}") long userQueueIdleMinutes) {
-        if (workerCount < 1 || queueCapacity < 1 || userQueueIdleMinutes < 1) {
+        if (workerCount < 1 || queueCapacity < 1 || globalQueueCapacity < 1 || userQueueIdleMinutes < 1) {
             throw new IllegalArgumentException("Agent executor configuration must be positive");
         }
         this.idleMillis = Duration.ofMinutes(userQueueIdleMinutes).toMillis();
         this.perUserQueueCapacity = queueCapacity;
+        this.globalQueueSlots = new Semaphore(globalQueueCapacity);
         this.workers = new ThreadPoolExecutor(workerCount, workerCount, 30, TimeUnit.SECONDS,
                 new java.util.concurrent.LinkedBlockingQueue<>(), namedFactory("agent-worker-"),
                 new ThreadPoolExecutor.AbortPolicy());
@@ -45,13 +51,35 @@ public class PerUserExecutors {
                 userQueueIdleMinutes, TimeUnit.MINUTES);
     }
 
+    PerUserExecutors(int workerCount, int queueCapacity, long userQueueIdleMinutes) {
+        this(workerCount, queueCapacity, Math.max(queueCapacity * workerCount * 2, workerCount + 1), userQueueIdleMinutes);
+    }
+
     /** Returns false when this user's bounded queue is full or the service is shutting down. */
     public boolean execute(String userId, Runnable task) {
-        return queues.computeIfAbsent(userId, ignored -> new SerialQueue(workers, perUserQueueCapacity)).execute(task);
+        if (!globalQueueSlots.tryAcquire()) {
+            return false;
+        }
+        boolean accepted = queues.computeIfAbsent(userId, ignored -> new SerialQueue(workers, perUserQueueCapacity))
+                .execute(() -> {
+                    try {
+                        task.run();
+                    } finally {
+                        globalQueueSlots.release();
+                    }
+                });
+        if (!accepted) {
+            globalQueueSlots.release();
+        }
+        return accepted;
     }
 
     public int userCount() {
         return queues.size();
+    }
+
+    public int remainingGlobalCapacity() {
+        return globalQueueSlots.availablePermits();
     }
 
     private void removeIdleQueues() {
