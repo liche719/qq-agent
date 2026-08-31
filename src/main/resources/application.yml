@@ -1,0 +1,135 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: wechat-agent
+  # 引入项目根目录的 .env 文件（optional: 表示文件不存在也不报错）
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 8
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: Asia/Shanghai
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      password: ${REDIS_PASSWORD:}
+      timeout: 3s
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      initialize-schema: always
+    overwrite-existing-jobs: true
+    properties:
+      org.quartz.scheduler.instanceName: WechatAgentScheduler
+      org.quartz.scheduler.instanceId: AUTO
+      org.quartz.jobStore.class: org.springframework.scheduling.quartz.LocalDataSourceJobStore
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
+      org.quartz.jobStore.tablePrefix: QRTZ_
+      org.quartz.jobStore.isClustered: false
+      org.quartz.threadPool.threadCount: 4
+  jackson:
+    time-zone: Asia/Shanghai
+
+llm:
+  base-url: ${LLM_BASE_URL:https://api.deepseek.com/v1}
+  model: ${LLM_MODEL:deepseek-chat}
+  api-key: ${LLM_API_KEY:}
+  temperature: 0.7
+  timeout-seconds: 60
+
+agent:
+  workers: ${AGENT_WORKERS:8}
+  queue-capacity: ${AGENT_QUEUE_CAPACITY:200}
+  user-queue-idle-minutes: ${AGENT_USER_QUEUE_IDLE_MINUTES:30}
+  message-batch-window-millis: ${AGENT_MESSAGE_BATCH_WINDOW_MILLIS:1500}
+
+searxng:
+  base-url: ${SEARXNG_BASE_URL:http://localhost:8888}
+  timeout-seconds: 15
+  max-results: 5
+
+document:
+  max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}
+  max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:60000}
+  max-pdf-pages: ${DOCUMENT_MAX_PDF_PAGES:10}
+
+media:
+  storage:
+    root: ${MEDIA_STORAGE_ROOT:stored-media}
+    max-file-bytes: ${MEDIA_STORAGE_MAX_FILE_BYTES:20971520}
+    inspection-token-minutes: ${MEDIA_INSPECTION_TOKEN_MINUTES:5}
+
+web:
+  max-response-bytes: ${WEB_MAX_RESPONSE_BYTES:2097152}
+  max-text-chars: ${WEB_MAX_TEXT_CHARS:12000}
+
+qq:
+  # QQ 官方机器人（需先在 QQ 开放平台创建机器人并获取 AppID/AppSecret）
+  enabled: ${QQ_ENABLED:false}
+  app-id: ${QQ_APP_ID:}
+  client-secret: ${QQ_CLIENT_SECRET:}
+  sandbox: ${QQ_SANDBOX:true}
+
+wechat:
+  channel:
+    mode: ${WECHAT_CHANNEL_MODE:clawbot}   # 默认真实微信 iLink 通道；需要本地模拟器测试时设 WECHAT_CHANNEL_MODE=simulator
+  clawbot:
+    # iLink 登录凭证（botToken 等）存储文件，务必放在不会被提交的目录（已 gitignore）
+    token-file: ${ILINK_TOKEN_FILE:data/ilink-login.json}
+    # 消息拉取（心跳长轮询）间隔，默认 3 秒；SDK 默认 30 秒太慢，调小以降低回复延迟
+    heartbeat-interval-ms: ${ILINK_HEARTBEAT_MS:3000}
+
+memory:
+  context-rounds: 10
+  work-max-load: 15
+  work-max-chars: 1500
+  work-archive-threshold: 20
+  work-archive-batch: 10
+  extraction-window-seconds: 3
+  extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
+  extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
+  dedup-threshold: 0.8
+  extraction-recent-turns: 20
+  lifecycle-scan-interval-ms: ${MEMORY_LIFECYCLE_SCAN_INTERVAL_MS:3600000}
+  lifecycle-initial-delay-ms: ${MEMORY_LIFECYCLE_INITIAL_DELAY_MS:60000}
+
+reminder:
+  default-prewarm-minutes: 10
+
+care:
+  scan-interval-ms: ${CARE_SCAN_INTERVAL_MS:60000}
+  initial-delay-ms: ${CARE_INITIAL_DELAY_MS:30000}
+
+backup:
+  dir: ${BACKUP_DIR:backup}
+  cron: "0 0 3 * * ?"
+  retention-days: 30
+
+logging:
+  file:
+    path: logs
+  level:
+    root: INFO
+    com.liche.wechatagent: INFO
+    org.quartz: WARN
+
+conversation:
+  trace:
+    enabled: ${CONVERSATION_TRACE_ENABLED:false}
+    max-chars: ${CONVERSATION_TRACE_MAX_CHARS:8000}

@@ -1,0 +1,41 @@
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+#
+# 本配置针对国内网络环境调优：
+# - 关闭反爬限流（后端直接调用 JSON API）
+# - 显式启用 json 输出格式（默认只允许 html）
+# - 只保留国内可达的搜索引擎（Bing/百度/搜狗/360），禁用被墙的 google/ddg/wikipedia 等
+
+use_default_settings: true
+
+server:
+  secret_key: "au3YAZnq1wPU6lmytCOJ7R1boCpGOuE"
+  image_proxy: true
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: wikipedia
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: qwant
+    disabled: true
+  - name: bing
+    disabled: false
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false
+  - name: 360search
+    disabled: false

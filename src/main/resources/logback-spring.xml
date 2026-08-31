@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <springProperty scope="context" name="LOG_DIR" source="logging.file.path" defaultValue="logs"/>
+
+    <!-- 控制台 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%X{userId:-system}] %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 系统级日志（不含用户会话明细） -->
+    <appender name="SYSTEM" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/system/agent.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/system/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{40} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 按 user_id 隔离的用户运行日志：logs/user/{userId}/agent.log -->
+    <appender name="SIFT" class="ch.qos.logback.classic.sift.SiftingAppender">
+        <discriminator>
+            <key>userId</key>
+            <defaultValue>system</defaultValue>
+        </discriminator>
+        <sift>
+            <appender name="USER-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+                <file>${LOG_DIR}/user/${userId}/agent.log</file>
+                <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                    <fileNamePattern>${LOG_DIR}/user/${userId}/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                    <maxHistory>30</maxHistory>
+                </rollingPolicy>
+                <encoder>
+                    <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{40} - %msg%n</pattern>
+                    <charset>UTF-8</charset>
+                </encoder>
+            </appender>
+        </sift>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="SIFT"/>
+        <appender-ref ref="SYSTEM"/>
+    </root>
+</configuration>

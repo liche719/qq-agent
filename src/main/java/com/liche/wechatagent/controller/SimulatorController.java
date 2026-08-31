@@ -1,0 +1,101 @@
+package com.liche.wechatagent.controller;
+
+import com.liche.wechatagent.agent.AgentOrchestrator;
+import com.liche.wechatagent.channel.InboundMessage;
+import com.liche.wechatagent.channel.OutboundMessage;
+import com.liche.wechatagent.channel.SimulatorChannel;
+import com.liche.wechatagent.exception.BizException;
+import com.liche.wechatagent.memory.MemoryArchiveRepository;
+import com.liche.wechatagent.memory.MemoryArchiveService;
+import com.liche.wechatagent.memory.UserCoreMemory;
+import com.liche.wechatagent.memory.UserCoreMemoryRepository;
+import com.liche.wechatagent.memory.UserWorkMemory;
+import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 本地模拟器（开发期代替真实微信，模拟器模式下启用）：
+ * POST /api/sim/send    发送一条模拟微信消息（同步返回回复）
+ * GET  /api/sim/replies 查询该用户被推送的出站消息
+ * GET  /api/sim/memories 查看该用户三层记忆
+ * POST /api/sim/archive  手动触发归档压缩
+ */
+@RestController
+@RequestMapping("/api/sim")
+@ConditionalOnProperty(name = "wechat.channel.mode", havingValue = "simulator", matchIfMissing = true)
+public class SimulatorController {
+
+    private final AgentOrchestrator orchestrator;
+    private final SimulatorChannel simulatorChannel;
+    private final UserCoreMemoryRepository coreRepository;
+    private final UserWorkMemoryRepository workRepository;
+    private final MemoryArchiveRepository archiveRepository;
+    private final MemoryArchiveService archiveService;
+
+    public SimulatorController(AgentOrchestrator orchestrator,
+                               SimulatorChannel simulatorChannel,
+                               UserCoreMemoryRepository coreRepository,
+                               UserWorkMemoryRepository workRepository,
+                               MemoryArchiveRepository archiveRepository,
+                               MemoryArchiveService archiveService) {
+        this.orchestrator = orchestrator;
+        this.simulatorChannel = simulatorChannel;
+        this.coreRepository = coreRepository;
+        this.workRepository = workRepository;
+        this.archiveRepository = archiveRepository;
+        this.archiveService = archiveService;
+    }
+
+    @PostMapping("/send")
+    public Map<String, Object> send(@RequestBody Map<String, Object> body) {
+        String userId = body.get("userId") == null ? "" : String.valueOf(body.get("userId"));
+        String content = body.get("content") == null ? "" : String.valueOf(body.get("content"));
+        String msgId = body.containsKey("msgId") ? String.valueOf(body.get("msgId")) : UUID.randomUUID().toString();
+        if (userId.isBlank()) {
+            throw new BizException("userId 不能为空");
+        }
+        if (content.isBlank()) {
+            throw new BizException("content 不能为空");
+        }
+        String reply = orchestrator.onInboundSync(InboundMessage.text(msgId, userId, content));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("reply", reply == null ? "" : reply);
+        result.put("pushed", simulatorChannel.recent(userId, 20));
+        return result;
+    }
+
+    @GetMapping("/replies")
+    public List<OutboundMessage> replies(@RequestParam String userId,
+                                         @RequestParam(defaultValue = "50") int limit) {
+        return simulatorChannel.recent(userId, limit);
+    }
+
+    @GetMapping("/memories")
+    public Map<String, Object> memories(@RequestParam String userId) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("core", coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
+                .map(UserCoreMemory::getContent).toList());
+        map.put("work", workRepository.findByUserIdAndArchivedFalse(userId).stream()
+                .map(w -> "[" + w.getPriority() + "] " + w.getContent()).toList());
+        map.put("archives", archiveRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                .map(a -> a.getSummary() + " (原始IDs: " + a.getOriginalIds() + ")").toList());
+        return map;
+    }
+
+    @PostMapping("/archive")
+    public Map<String, String> archive(@RequestParam String userId) {
+        archiveService.compressIfNeeded(userId);
+        return Map.of("status", "done");
+    }
+}

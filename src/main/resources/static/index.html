@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>微信机器人管理</title>
+<script src="/js/qrcode.min.js"></script>
+<style>
+  :root {
+    --bg: #eef2f8;
+    --panel: rgba(255,255,255,0.72);
+    --panel-border: rgba(30,41,59,0.08);
+    --ink: #1f2329;
+    --ink-2: #6b7280;
+    --blue: #3b5bfd;
+    --green: #22a06b;
+    --red: #d14343;
+    --radius: 24px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(59,91,253,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,91,253,0.045) 1px, transparent 1px);
+    background-size: 120px 120px;
+    mask-image: radial-gradient(ellipse at 50% 0%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at 50% 0%, black 30%, transparent 75%);
+  }
+  main { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; padding: 56px 24px 80px; }
+  header { margin-bottom: 36px; }
+  h1 { font-size: 32px; font-weight: 600; letter-spacing: 0.5px; }
+  .sub { margin-top: 10px; color: var(--ink-2); font-size: 15px; line-height: 1.7; }
+  .boot-time { margin-top: 12px; color: var(--ink-2); font-size: 12.5px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    transition: box-shadow .25s ease;
+  }
+  .panel:hover { box-shadow: 0 6px 24px rgba(15,23,42,0.07); }
+  h2 { font-size: 17px; font-weight: 600; }
+  .desc { margin-top: 6px; color: var(--ink-2); font-size: 13.5px; line-height: 1.6; }
+  .primary {
+    height: 46px; padding: 0 24px; white-space: nowrap;
+    background: var(--blue); color: #fff; border: none; border-radius: 14px;
+    font-size: 15px; cursor: pointer;
+    transition: background .2s ease, transform .1s ease;
+  }
+  .primary:hover { background: #2f4df0; }
+  .primary:active { transform: scale(0.98); }
+  .primary:disabled { background: #9db1ff; cursor: default; }
+  .panel-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .count { color: var(--ink-2); font-size: 13px; }
+  .bot-list { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .bot-item {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 16px; border-radius: 16px;
+    background: rgba(255,255,255,0.6); border: 1px solid rgba(30,41,59,0.07);
+  }
+  .bot-item:hover { background: rgba(255,255,255,0.9); }
+  .bot-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink:0; }
+  .bot-dot.on { background: var(--green); box-shadow: 0 0 0 4px rgba(34,160,107,0.14); }
+  .bot-dot.off { background: #c3cad6; }
+  .bot-openid { font-weight: 600; font-size: 14.5px; word-break: break-all; }
+  .bot-id { color: var(--ink-2); font-size: 12.5px; margin-top: 2px; word-break: break-all; }
+  .bot-status { margin-left: auto; font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+  .bot-status.on { color: var(--green); }
+  .ghost {
+    height: 34px; padding: 0 14px; white-space: nowrap;
+    background: transparent; border: 1px solid rgba(30,41,59,0.16); border-radius: 10px;
+    color: var(--ink-2); font-size: 13.5px; cursor: pointer;
+    transition: color .2s ease, border-color .2s ease;
+  }
+  .ghost:hover { color: var(--red); border-color: rgba(209,67,67,0.45); }
+  .empty { color: var(--ink-2); font-size: 14px; padding: 26px 0; text-align: center; }
+  .mode-tip { text-align: center; color: var(--ink-2); font-size: 13px; margin-top: 8px; }
+  .mode-tip.error { color: var(--red); }
+  .overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(15,23,42,0.35); backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: fadein .22s ease;
+  }
+  .overlay.hidden { display: none; }
+  .qr-card {
+    background: #fff; border-radius: 26px; padding: 30px 34px 26px;
+    text-align: center; width: min(92vw, 360px);
+    box-shadow: 0 20px 60px rgba(15,23,42,0.22);
+  }
+  .qr-card h3 { font-size: 18px; }
+  #qrBox { margin: 22px auto 0; width: 260px; height: 260px; display: flex; align-items:center; justify-content:center; }
+  #qrBox img, #qrBox canvas { border-radius: 12px; }
+  .qr-hint { margin-top: 18px; color: var(--ink); font-size: 14px; }
+  .qr-wait { margin-top: 6px; color: var(--ink-2); font-size: 13px; }
+  .qr-card .ghost { margin-top: 18px; }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+  @media (max-width: 560px) {
+    main { padding: 36px 16px 60px; }
+    .primary { width: 100%; }
+    .bot-item { flex-wrap: wrap; }
+    .bot-status { margin-left: 24px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<main>
+  <header>
+    <h1>微信机器人管理</h1>
+    <p class="sub">扫码即用：每个微信号扫码后得到专属机器人。机器人之间的记忆、人设与提醒完全隔离。</p>
+    <p class="boot-time" id="bootTime">实例启动时间：获取中…</p>
+  </header>
+
+  <section class="panel">
+    <h2>添加机器人</h2>
+    <p class="desc">点下方按钮获取二维码，用手机微信扫码即可绑定一个专属机器人。同一个微信号重复扫码会复用同一个机器人（按 openid 唯一）。</p>
+    <div style="margin-top:18px;">
+      <button id="scanBtn" class="primary">扫码登录</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>已添加的机器人</h2>
+      <span class="count" id="botCount">0 个</span>
+    </div>
+    <div id="botList" class="bot-list"></div>
+    <div id="emptyState" class="empty">还没有机器人，点击上方「扫码登录」添加</div>
+  </section>
+
+  <p class="mode-tip" id="modeTip"></p>
+</main>
+
+<div id="qrOverlay" class="overlay hidden">
+  <div class="qr-card">
+    <h3>扫码登录</h3>
+    <div id="qrBox"></div>
+    <p class="qr-hint">用手机微信「扫一扫」扫描上方二维码</p>
+    <p class="qr-wait" id="qrWait">等待扫码确认…</p>
+    <button id="qrClose" class="ghost">关闭</button>
+  </div>
+</div>
+
+<script>
+var QR_LIB = (typeof QRCode !== 'undefined');
+var pendingTimer = null;
+var beforeCount = -1;
+
+function el(id) { return document.getElementById(id); }
+
+function api(path, opts) {
+  var options = opts || {};
+  return fetch(path, options).then(function (res) {
+    if (!res.ok) {
+      return res.json().then(function (j) { throw new Error(j.message || ('请求失败 ' + res.status)); });
+    }
+    return res.json();
+  });
+}
+
+function shortOpenid(o) {
+  if (!o) return '未知';
+  return o.length > 24 ? o.substring(0, 12) + '…' + o.substring(o.length - 6) : o;
+}
+
+function renderBots(list) {
+  var box = el('botList');
+  var empty = el('emptyState');
+  el('botCount').textContent = list.length + ' 个';
+  empty.style.display = list.length ? 'none' : 'block';
+  box.innerHTML = '';
+  list.forEach(function (b) {
+    var item = document.createElement('div');
+    item.className = 'bot-item';
+    var dot = document.createElement('div');
+    dot.className = 'bot-dot ' + (b.loggedIn ? 'on' : 'off');
+    var info = document.createElement('div');
+    var name = document.createElement('div');
+    name.className = 'bot-openid';
+    name.textContent = b.openid || '未知';
+    var idLine = document.createElement('div');
+    idLine.className = 'bot-id';
+    idLine.textContent = b.botId ? ('botId：' + b.botId) : '尚未登录';
+    info.appendChild(name);
+    info.appendChild(idLine);
+    var st = document.createElement('span');
+    st.className = 'bot-status ' + (b.loggedIn ? 'on' : '');
+    st.textContent = b.loggedIn ? '已登录' : '未登录';
+    var btn = document.createElement('button');
+    btn.className = 'ghost';
+    btn.textContent = '退出登录';
+    btn.addEventListener('click', function () { doLogout(b.openid); });
+    item.appendChild(dot);
+    item.appendChild(info);
+    item.appendChild(st);
+    item.appendChild(btn);
+    box.appendChild(item);
+  });
+}
+
+function loadBots(showError) {
+  api('/api/clawbot/bots').then(function (list) {
+    el('modeTip').textContent = '';
+    renderBots(list || []);
+  }).catch(function (e) {
+    if (showError) {
+      el('modeTip').textContent = '未检测到微信通道：请确认应用以微信模式启动（默认即是）';
+      el('modeTip').className = 'mode-tip error';
+    }
+  });
+}
+
+function showQr(url) {
+  el('qrWait').textContent = '等待扫码确认…';
+  var box = el('qrBox');
+  box.innerHTML = '';
+  if (QR_LIB) {
+    new QRCode(box, { text: url, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+  } else {
+    var img = document.createElement('img');
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(url);
+    img.alt = '登录二维码';
+    img.width = 240;
+    img.height = 240;
+    box.appendChild(img);
+  }
+  el('qrOverlay').classList.remove('hidden');
+}
+
+function closeQr() {
+  el('qrOverlay').classList.add('hidden');
+  if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = null; }
+}
+
+// 扫码后轮询：出现新机器人（数量增加）即视为登录成功，自动关闭弹窗
+function checkScanResult() {
+  api('/api/clawbot/bots').then(function (list) {
+    var arr = list || [];
+    renderBots(arr);
+    if (beforeCount < 0) {
+      beforeCount = arr.length;
+    } else if (arr.length > beforeCount) {
+      closeQr();
+      beforeCount = -1;
+      el('modeTip').textContent = '登录成功，可以开始对话了！';
+      el('modeTip').className = 'mode-tip';
+    }
+  }).catch(function () {});
+}
+
+function doScan() {
+  var btn = el('scanBtn');
+  btn.disabled = true;
+  btn.textContent = '获取二维码中…';
+  api('/api/clawbot/register', { method: 'POST' }).then(function (r) {
+    btn.disabled = false;
+    btn.textContent = '扫码登录';
+    if (r.qrcodeUrl) {
+      beforeCount = -1;
+      showQr(r.qrcodeUrl);
+      pendingTimer = setInterval(function () { checkScanResult(); }, 3000);
+    } else {
+      el('modeTip').textContent = r.message || '获取二维码失败';
+      el('modeTip').className = 'mode-tip error';
+    }
+  }).catch(function (e) {
+    btn.disabled = false;
+    btn.textContent = '扫码登录';
+    el('modeTip').textContent = e.message;
+    el('modeTip').className = 'mode-tip error';
+  });
+}
+
+function doLogout(openid) {
+  if (!window.confirm('确定退出这个机器人吗？退出后删除登录凭证，重新扫码即可再登录。')) return;
+  api('/api/clawbot/logout?openid=' + encodeURIComponent(openid), { method: 'POST' })
+    .then(function () {
+      el('modeTip').textContent = '已退出';
+      el('modeTip').className = 'mode-tip';
+      loadBots(false);
+    }).catch(function (e) {
+      el('modeTip').textContent = e.message;
+      el('modeTip').className = 'mode-tip error';
+    });
+}
+
+el('scanBtn').addEventListener('click', doScan);
+el('qrClose').addEventListener('click', closeQr);
+
+api('/api/health').then(function (h) {
+  if (h.startedAt) {
+    el('bootTime').textContent = '实例启动时间：' + h.startedAt + '（北京时间）';
+  } else {
+    el('bootTime').textContent = '';
+  }
+}).catch(function () {
+  el('bootTime').textContent = '';
+});
+
+loadBots(true);
+setInterval(function () { loadBots(false); }, 4000);
+</script>
+</body>
+</html>
