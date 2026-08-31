@@ -790,12 +790,17 @@ public class QqChannel implements WeChatChannel {
             public void onDone(String fullText) {
                 if (state.done) return;
                 String finalContent = fullText == null ? "" : fullText;
-                if (!finalContent.isBlank()) {
-                    log.info("[qq] stream final generating frame user={} toolFooter={} len={}", userId,
-                            finalContent.contains("调用工具："), finalContent.length());
-                    sendStreamFrame(userId, passiveMsgId, state, finalContent, 1);
+                boolean toolFooter = finalContent.contains("\n\n> _调用工具：");
+                if (toolFooter && !state.hasPartialContent) {
+                    log.info("[qq] sending tool footer through standard markdown user={}", userId);
+                    sendWithPassiveFirst(userId, passiveMsgId, finalContent);
+                    state.done = true;
+                    streamStates.remove(userId);
+                    return;
                 }
-                sendStreamFrame(userId, passiveMsgId, state, "", 10); // DONE
+                log.info("[qq] stream final frame user={} toolFooter={} len={}", userId,
+                        toolFooter, finalContent.length());
+                sendStreamFrame(userId, passiveMsgId, state, finalContent, 10);
                 state.done = true;
                 streamStates.remove(userId);
                 log.info("[qq] stream session done user={}", userId);

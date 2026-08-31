@@ -38,6 +38,8 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 大模型对话循环（流式内部累积，一次性返回完整回复）：
@@ -54,10 +56,12 @@ public class AgentLoop {
     private static final int MAX_TOOL_ROUNDS = 8;
     private static final long STREAM_TIMEOUT_SECONDS = 120;
     private static final int MAX_IMAGE_REDIRECTS = 3;
+    private static final Pattern TRAILING_MODEL_TOOL_DISCLOSURE = Pattern.compile(
+            "(?ims)^(?:[ \\t]*---[ \\t]*\\R)?[ \\t]*(?:>\\s*)?(?:#{1,6}[ \\t]*)?(?:\\*{1,2}[ \\t]*)?(?:【[ \\t]*)?(?:工具调用(?:说明|详情|情况)?|调用工具)(?:[ \\t]*】)?(?:\\*{1,2})?[ \\t]*(?:[:：].*)?(?:\\R[\\s\\S]*)?$");
     private static final Map<String, String> TOOL_DISPLAY_NAMES = Map.ofEntries(
             Map.entry("searchWeb", "搜索"),
-            Map.entry("searchLatestWeb", "搜索最新资料"),
-            Map.entry("readWebPage", "阅读网页"),
+            Map.entry("searchLatestWeb", "搜索"),
+            Map.entry("readWebPage", "读取网页"),
             Map.entry("getCurrentTime", "获取时间"),
             Map.entry("parseReminder", "创建提醒"),
             Map.entry("cancelReminder", "取消提醒"),
@@ -119,10 +123,14 @@ public class AgentLoop {
 
             List<ToolSpecification> specs = toolRegistry.specifications();
             Set<String> successfulTools = new LinkedHashSet<>();
+            if (requestsCurrentTime(userText)) {
+                addMandatoryCurrentTimeResult(messages, userId, successfulTools);
+            }
 
             for (int i = 0; i < MAX_TOOL_ROUNDS; i++) {
                 String roundText = streamOneRound(messages, specs, userId, successfulTools);
                 if (roundText != null) {
+                    roundText = stripModelToolDisclosure(roundText, successfulTools);
                     String notice = mediaToolContextService.completionNotice();
                     if (!notice.isBlank()) {
                         roundText = roundText.stripTrailing() + "\n\n" + notice;
@@ -224,6 +232,40 @@ public class AgentLoop {
         return reply == null ? -1 : reply.lastIndexOf("\n\n> _调用工具：");
     }
 
+    static String stripModelToolDisclosure(String reply, Set<String> successfulTools) {
+        if (reply == null || reply.isBlank() || successfulTools == null || successfulTools.isEmpty()) {
+            return reply;
+        }
+        Matcher matcher = TRAILING_MODEL_TOOL_DISCLOSURE.matcher(reply);
+        if (!matcher.find()) {
+            return reply;
+        }
+        String stripped = reply.substring(0, matcher.start()).stripTrailing();
+        return stripped.isBlank() ? reply : stripped;
+    }
+
+    static boolean requestsCurrentTime(String userText) {
+        if (userText == null || userText.isBlank()) {
+            return false;
+        }
+        return userText.matches("(?s).*?(?:现在(?:是)?几点|当前(?:是)?几点|(?:现在|当前)(?:的)?时间|今天(?:是)?(?:几号|星期几|周几|日期)).*");
+    }
+
+    private void addMandatoryCurrentTimeResult(List<ChatMessage> messages, String userId,
+                                               Set<String> successfulTools) {
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("policy-current-time")
+                .name("getCurrentTime")
+                .arguments("{}")
+                .build();
+        ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
+        messages.add(AiMessage.from(request));
+        messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
+        if (outcome.successful()) {
+            successfulTools.add(request.name());
+        }
+    }
+
     private void addReadableMedia(List<ChatMessage> messages) {
         for (MediaToolContextService.ReadableMedia media : mediaToolContextService.consumeReadableMedia()) {
             List<Content> contents = new ArrayList<>();
@@ -248,21 +290,18 @@ public class AgentLoop {
                 return;
             }
             int footerStart = toolFooterStart(fullText);
-            String streamText = footerStart < 0 ? fullText : fullText.substring(0, footerStart);
-            String finalSuffix = footerStart < 0 ? "" : fullText.substring(footerStart);
-            if (!finalSuffix.isBlank()) {
-                log.info("[agent] streaming tool footer with final content frame, length={}", finalSuffix.length());
+            if (footerStart >= 0) {
+                log.info("[agent] sending tool footer as one final markdown reply, length={}", fullText.length());
+                sink.onDone(fullText);
+                return;
             }
             int chunk = 24;
-            int finalFrameStart = finalSuffix.isBlank()
-                    ? streamText.length()
-                    : Math.max(0, streamText.length() - chunk);
-            for (int i = 0; i < finalFrameStart; i += chunk) {
-                int end = Math.min(i + chunk, finalFrameStart);
-                sink.onPartial(streamText.substring(i, end));
+            for (int i = 0; i < fullText.length(); i += chunk) {
+                int end = Math.min(i + chunk, fullText.length());
+                sink.onPartial(fullText.substring(i, end));
                 Thread.sleep(120); // 模拟打字节奏，避免瞬间刷屏
             }
-            sink.onDone(streamText.substring(finalFrameStart) + finalSuffix);
+            sink.onDone("");
         } catch (Exception e) {
             log.warn("流式推送中断: {}", e.getMessage());
         }
@@ -430,6 +469,7 @@ public class AgentLoop {
                 + "\n10. 用户询问、读取或发送以前保存的同类资料时，先用 listStoredMedia 比较文件名、摘要、保存时间和最近更新时间。选中后在正文说明选的是哪一份（文件名和关键日期/周次）；有多个候选且无法可靠区分时先问用户，不能默默猜测或发送错版本。"
                 + "\n11. 用户询问上什么课、在哪个教室、什么时候上/下课，或说‘下课后/课前提醒’时，优先读取已保存且与日期匹配的课表或其关联记忆；不能靠学校通用作息或猜测课程时间。资料不足时先说明缺少哪一份课表或询问具体课程。"
                 + "\n12. 【媒体边界】只有本轮用户消息实际携带的多模态内容、平台本轮成功提供的引用媒体，或本轮工具读取结果，才代表你当前真正可查看的图片/文件。历史对话中‘历史消息曾附带图片/文件’只是过去记录，不含原件；绝不能因此说‘我现在看得到图片’、‘这条消息带了图片’或把旧媒体当作新上传。用户明确指代刚才未保存的图片/文件时，先调用 inspectRecentUnstoredMedia；其结果也必须称为此前上传的媒体，不是当前附件。"
-                + "\n13. 说话自然、准确、不过度承诺；不知道时明确说不知道，不编造历史或系统状态。";
+                + "\n13. 说话自然、准确、不过度承诺；不知道时明确说不知道，不编造历史或系统状态。"
+                + "\n14. 工具调用尾注由程序根据实际成功结果统一添加。最终正文不要自行写‘调用工具：’、‘工具调用说明’或工具清单，也不要解释工具执行过程；只自然回答用户的问题。";
     }
 }

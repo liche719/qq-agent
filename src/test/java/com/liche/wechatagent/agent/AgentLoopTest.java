@@ -44,8 +44,31 @@ class AgentLoopTest {
         Set<String> tools = new LinkedHashSet<>();
         tools.add("searchLatestWeb");
 
-        assertEquals("已处理。\n\n> _调用工具：搜索最新资料_",
+        assertEquals("已处理。\n\n> _调用工具：搜索_",
                 AgentLoop.appendToolFooter("已处理。", tools));
+    }
+
+    @Test
+    void removesTrailingModelGeneratedToolDisclosureWhenProgramHasToolResults() {
+        Set<String> tools = new LinkedHashSet<>();
+        tools.add("searchWeb");
+        String reply = "我找到了官方公告。\n\n**工具调用说明**\n- 调用了搜索工具\n- 已读取结果";
+
+        assertEquals("我找到了官方公告。", AgentLoop.stripModelToolDisclosure(reply, tools));
+    }
+
+    @Test
+    void keepsToolExplanationWhenNoToolActuallySucceeded() {
+        String reply = "工具调用说明：这是一段概念介绍。";
+
+        assertEquals(reply, AgentLoop.stripModelToolDisclosure(reply, Set.of()));
+    }
+
+    @Test
+    void recognizesDirectCurrentTimeRequestsForMandatoryFreshness() {
+        assertEquals(true, AgentLoop.requestsCurrentTime("现在几点了？"));
+        assertEquals(true, AgentLoop.requestsCurrentTime("今天是星期几？"));
+        assertEquals(false, AgentLoop.requestsCurrentTime("明天上午九点提醒我开会。"));
     }
 
     @Test
