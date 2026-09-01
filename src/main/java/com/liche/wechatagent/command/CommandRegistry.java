@@ -36,10 +36,28 @@ public class CommandRegistry {
         String[] parts = trimmed.split("\\s+", 2);
         String rawName = parts[0];
         if (slash) rawName = rawName.substring(1);
-        CommandHandler handler = handlers.get(rawName.toLowerCase());
-        if (!slash && handler == null) return Optional.empty();
         String name = rawName.toLowerCase();
         String args = parts.length > 1 ? parts[1] : "";
+        if (!slash) {
+            name = switch (trimmed) {
+                case "帮助" -> "help";
+                case "查看记忆" -> "memory";
+                case "查看提醒" -> "reminders";
+                case "开启自动记忆" -> "memory";
+                case "关闭自动记忆" -> "memory";
+                case "开启每日复盘" -> "care";
+                case "开启每周复盘" -> "care";
+                case "关闭主动关怀" -> "care";
+                default -> name;
+            };
+            if (name.equals("memory") && !trimmed.equals("查看记忆")) {
+                args = trimmed.contains("关闭") ? "off" : "on";
+            } else if (name.equals("care")) {
+                args = trimmed.contains("每日") ? "daily" : trimmed.contains("每周") ? "weekly" : "off";
+            }
+        }
+        CommandHandler handler = handlers.get(name);
+        if (!slash && handler == null) return Optional.empty();
         if (handler == null) {
             return Optional.of("我不认识 /" + name + " 这个指令，发送 /help 可以查看所有可用指令。");
         }

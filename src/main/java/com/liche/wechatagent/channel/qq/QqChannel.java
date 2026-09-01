@@ -82,6 +82,9 @@ public class QqChannel implements WeChatChannel {
     private volatile String sessionId;   // 网关会话 id（断线后 RESUME 恢复用）
     private volatile int lastSeq = 0;    // 最后收到的消息序列号（RESUME 用）
     private volatile WebSocket ws;
+    private final AtomicBoolean commandPanelConfigured = new AtomicBoolean(false);
+    @Value("${qq.command-panel-enabled:true}")
+    private boolean commandPanelEnabled;
     private final QqWebSocketClient gatewayClient;
     private volatile ScheduledExecutorService heartbeatExecutor;
     private volatile ScheduledFuture<?> heartbeatTask;
@@ -363,12 +366,45 @@ public class QqChannel implements WeChatChannel {
             selfOpenid = node.path("d").path("user").path("id").asText("");
             sessionId = node.path("d").path("session_id").asText("");
             log.info("QQ gateway READY: session established, botId={}", selfOpenid);
+            configureC2cCommandPanel();
         } else if ("C2C_MESSAGE_CREATE".equals(event)) {
             handleC2cMessage(node.path("d"));
         } else if ("GROUP_AT_MESSAGE_CREATE".equals(event) && groupEnabled) {
             handleGroupMessage(node.path("d"));
         } else if (!event.isBlank()) {
             log.info("QQ event: t={}", event);
+        }
+    }
+
+    private void configureC2cCommandPanel() {
+        if (!commandPanelEnabled) return;
+        if (!commandPanelConfigured.compareAndSet(false, true)) return;
+        try {
+            ensureToken();
+            String existing = buildRestClient(apiBase).get().uri("/v2/panels")
+                    .header("Authorization", "QQBot " + accessToken).retrieve().body(String.class);
+            if (existing != null && existing.contains("wechat-agent-c2c")) {
+                log.info("QQ C2C command panel already exists");
+                return;
+            }
+            List<Map<String, Object>> items = List.of(
+                    Map.of("type", "command", "name", "帮助", "desc", "查看使用说明"),
+                    Map.of("type", "command", "name", "查看记忆", "desc", "查看自动记忆"),
+                    Map.of("type", "command", "name", "查看提醒", "desc", "查看待执行提醒"),
+                    Map.of("type", "command", "name", "开启自动记忆", "desc", "开启长期记忆"),
+                    Map.of("type", "command", "name", "关闭自动记忆", "desc", "关闭长期记忆"),
+                    Map.of("type", "command", "name", "开启每日复盘", "desc", "开启每日主动关怀"),
+                    Map.of("type", "command", "name", "开启每周复盘", "desc", "开启每周主动关怀"),
+                    Map.of("type", "command", "name", "关闭主动关怀", "desc", "关闭主动关怀"));
+            Map<String, Object> panel = Map.of("items", items, "remark", "wechat-agent-c2c");
+            Map<String, Object> payload = Map.of("scope", "c2c", "target_type", "all", "panel", panel);
+            buildRestClient(apiBase).post().uri("/v2/panels")
+                    .header("Authorization", "QQBot " + accessToken)
+                    .body(payload).retrieve().body(String.class);
+            log.info("QQ C2C command panel configured");
+        } catch (Exception exception) {
+            commandPanelConfigured.set(false);
+            log.warn("QQ C2C command panel configuration failed: {}", exception.getMessage());
         }
     }
 

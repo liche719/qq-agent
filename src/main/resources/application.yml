@@ -181,6 +181,7 @@ qq:
   default-heartbeat-ms: ${QQ_DEFAULT_HEARTBEAT_MS:45000}
   input-notify-seconds: ${QQ_INPUT_NOTIFY_SECONDS:60}
   markdown-max-chars: ${QQ_MARKDOWN_MAX_CHARS:4000}
+  command-panel-enabled: ${QQ_COMMAND_PANEL_ENABLED:true}
 
 wechat:
   channel:
