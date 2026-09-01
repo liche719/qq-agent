@@ -11,6 +11,9 @@ import java.util.Optional;
 @Component
 public class CommandRegistry {
 
+    public record CommandDescriptor(String name, String description) {
+    }
+
     private final Map<String, CommandHandler> handlers = new LinkedHashMap<>();
 
     public CommandRegistry(List<CommandHandler> handlerList) {
@@ -19,16 +22,24 @@ public class CommandRegistry {
         }
     }
 
-    /** 若文本以 / 开头则尝试匹配指令，返回 Optional 回复；否则 empty 表示走大模型 */
+    public List<CommandDescriptor> descriptors() {
+        return handlers.values().stream().map(h -> new CommandDescriptor(h.name(), h.description())).toList();
+    }
+
+    /** 兼容斜杠指令和 QQ 原生面板填入的同名文本。 */
     public Optional<String> tryHandle(String text, String userId) {
-        String trimmed = text.trim();
-        if (!trimmed.startsWith("/")) {
+        if (text == null || text.isBlank()) {
             return Optional.empty();
         }
-        String[] parts = trimmed.split("\s+", 2);
-        String name = parts[0].substring(1).toLowerCase();
+        String trimmed = text.trim().replaceFirst("^／", "/");
+        boolean slash = trimmed.startsWith("/");
+        String[] parts = trimmed.split("\\s+", 2);
+        String rawName = parts[0];
+        if (slash) rawName = rawName.substring(1);
+        CommandHandler handler = handlers.get(rawName.toLowerCase());
+        if (!slash && handler == null) return Optional.empty();
+        String name = rawName.toLowerCase();
         String args = parts.length > 1 ? parts[1] : "";
-        CommandHandler handler = handlers.get(name);
         if (handler == null) {
             return Optional.of("我不认识 /" + name + " 这个指令，发送 /help 可以查看所有可用指令。");
         }
