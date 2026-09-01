@@ -368,6 +368,7 @@ public class QqChannel implements WeChatChannel {
             sessionId = node.path("d").path("session_id").asText("");
             log.info("QQ gateway READY: session established, botId={}", selfOpenid);
             configureC2cCommandPanel();
+            configureC2cCustomMenu();
         } else if ("C2C_MESSAGE_CREATE".equals(event)) {
             handleC2cMessage(node.path("d"));
         } else if ("GROUP_AT_MESSAGE_CREATE".equals(event) && groupEnabled) {
@@ -431,6 +432,35 @@ public class QqChannel implements WeChatChannel {
         } catch (Exception ignored) {
             log.warn("QQ C2C command panel configuration failed: httpStatus={} response={}",
                     exception.getStatusCode().value(), response);
+        }
+    }
+
+    private void configureC2cCustomMenu() {
+        if (!commandPanelEnabled) return;
+        try {
+            ensureToken();
+            List<Map<String, Object>> items = List.of(
+                    Map.of("type", "send_message", "name", "帮助", "send_message", "帮助"),
+                    Map.of("type", "send_message", "name", "记忆", "send_message", "查看记忆"),
+                    Map.of("type", "send_message", "name", "提醒", "send_message", "查看提醒"),
+                    Map.of("type", "send_message", "name", "记忆开", "send_message", "开启自动记忆"),
+                    Map.of("type", "send_message", "name", "记忆关", "send_message", "关闭自动记忆"),
+                    Map.of("type", "send_message", "name", "删记忆", "send_message", "删除记忆"),
+                    Map.of("type", "send_message", "name", "设人设", "send_message", "设置助手人设"),
+                    Map.of("type", "send_message", "name", "日复盘", "send_message", "开启每日复盘"),
+                    Map.of("type", "send_message", "name", "周复盘", "send_message", "开启每周复盘"),
+                    Map.of("type", "send_message", "name", "关怀关", "send_message", "关闭主动关怀"));
+            Map<String, Object> payload = Map.of("menu", Map.of("items", items));
+            buildRestClient(apiBase).put().uri("/v2/menu")
+                    .header("Authorization", "QQBot " + accessToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(objectMapper.writeValueAsString(payload))
+                    .retrieve().body(String.class);
+            log.info("QQ C2C custom menu configured");
+        } catch (RestClientResponseException exception) {
+            logPanelApiFailure(exception);
+        } catch (Exception exception) {
+            log.warn("QQ C2C custom menu configuration failed: {}", exception.getMessage());
         }
     }
 
