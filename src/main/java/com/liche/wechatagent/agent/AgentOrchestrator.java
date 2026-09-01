@@ -154,6 +154,8 @@ public class AgentOrchestrator {
         boolean accepted = perUserExecutors.execute(batch.userId(), () -> {
             String reply = null;
             StreamReplySink sink = null;
+            boolean processingFailed = false;
+            String failureReason = null;
             MDC.put("userScope", UserScope.forUser(batch.userId()));
             String taskId = UUID.randomUUID().toString();
             MDC.put("taskId", taskId);
@@ -175,13 +177,18 @@ public class AgentOrchestrator {
                 sink = handled.sink();
                 conversationTraceLogger.assistant(batch.userId(), reply);
             } catch (Exception e) {
+                processingFailed = true;
+                failureReason = e.getClass().getSimpleName() + ": " + (e.getMessage() == null ? "未知错误" : e.getMessage());
                 log.error("消息处理异常 user={} replyTo={}", batch.userId(), batch.replyToMsgId(), e);
                 reply = "抱歉，我这边出了点小问题，请稍后再试一次。";
             } finally {
                 if (taskStateStore != null) {
-                    taskStateStore.finish(taskId, reply == null ? "FAILED" : "SUCCEEDED",
-                            batch.userId(), batch.replyToMsgId());
-                    taskStateStore.step(taskId, reply == null ? "FAILED" : "REPLY_READY");
+                    if (processingFailed) {
+                        taskStateStore.fail(taskId, batch.userId(), batch.replyToMsgId(), failureReason);
+                    } else {
+                        taskStateStore.finish(taskId, "SUCCEEDED", batch.userId(), batch.replyToMsgId());
+                    }
+                    taskStateStore.step(taskId, processingFailed ? "FAILED" : "REPLY_READY");
                 }
                 log.info("agent_task_finish task={} user={} replyTo={} replyChars={} streamed={}", taskId, batch.userId(), batch.replyToMsgId(),
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
