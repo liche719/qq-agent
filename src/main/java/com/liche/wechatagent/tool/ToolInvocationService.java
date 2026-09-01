@@ -22,6 +22,7 @@ public class ToolInvocationService {
     private final int maxResultChars;
     private final long retryDelayMillis;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ToolInvocationService(@org.springframework.beans.factory.annotation.Value("${agent.tool-retry-attempts:1}") int retryAttempts,
                                  @org.springframework.beans.factory.annotation.Value("${agent.tool-max-result-chars:8000}") int maxResultChars,
                                  @org.springframework.beans.factory.annotation.Value("${agent.tool-retry-delay-ms:0}") long retryDelayMillis) {
