@@ -64,8 +64,33 @@ public class WebPageTool {
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("这个链接不安全或格式不正确，无法访问", exception);
         } catch (Exception exception) {
+            if (hasCauseMessage(exception, "response too large")) {
+                throw new IllegalStateException("网页内容超过安全读取上限（"
+                        + readableSize(maxResponseBytes) + "），无法读取", exception);
+            }
             throw new IllegalStateException("网页暂时无法访问，请稍后重试或换一个链接", exception);
         }
+    }
+
+    private boolean hasCauseMessage(Throwable throwable, String expected) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (expected.equalsIgnoreCase(current.getMessage())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private String readableSize(int bytes) {
+        if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0) {
+            return (bytes / (1024 * 1024)) + " MB";
+        }
+        if (bytes >= 1024 && bytes % 1024 == 0) {
+            return (bytes / 1024) + " KB";
+        }
+        return bytes + " 字节";
     }
 
     private void status(String text) {

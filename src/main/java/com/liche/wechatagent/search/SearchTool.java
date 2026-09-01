@@ -61,14 +61,8 @@ public class SearchTool {
         try {
             hits = searxngClient.search(query, timeoutSeconds, timeRange);
         } catch (Exception e) {
-            // 重试一次：重试前主动推送说明
-            statusService.push("刚才搜索没成功，我重试一下…");
-            try {
-                hits = searxngClient.search(query, timeoutSeconds, timeRange);
-            } catch (Exception e2) {
-                log.warn("搜索失败 query={}", query, e2);
-                throw new IllegalStateException("搜索服务暂时不可用，没能找到相关资料", e2);
-            }
+            log.warn("搜索失败 query={}", query, e);
+            throw new IllegalStateException("搜索服务暂时不可用，没能找到相关资料", e);
         }
 
         // 去重降噪：URL 去重 + 标题归一化去重，截取核心摘要，最多 Top N

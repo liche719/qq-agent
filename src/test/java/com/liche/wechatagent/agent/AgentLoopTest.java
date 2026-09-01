@@ -4,11 +4,14 @@ import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.tool.ToolRegistry;
 import com.liche.wechatagent.tool.ToolStatusService;
+import com.liche.wechatagent.tool.ToolExecutionOutcome;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,6 +49,16 @@ class AgentLoopTest {
 
         assertEquals("已处理。\n\n> _调用工具：搜索_",
                 AgentLoop.appendToolFooter("已处理。", tools));
+    }
+
+    @Test
+    void appendsFailureReasonAfterAutomaticRetry() {
+        Map<String, ToolExecutionOutcome> failures = new LinkedHashMap<>();
+        failures.put("readWebPage", ToolExecutionOutcome.failure("网页内容超过安全读取上限", 2));
+
+        String result = AgentLoop.appendToolFailureNotice("我暂时无法读取该页面。", failures);
+
+        assertEquals("我暂时无法读取该页面。\n\n⚠️ 工具调用未完成：读取网页已自动重试1次仍失败，原因：网页内容超过安全读取上限", result);
     }
 
     @Test

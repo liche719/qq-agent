@@ -123,36 +123,56 @@ public class AgentLoop {
 
             List<ToolSpecification> specs = toolRegistry.specifications();
             Set<String> successfulTools = new LinkedHashSet<>();
+            Map<String, ToolExecutionOutcome> failedTools = new java.util.LinkedHashMap<>();
             if (requestsCurrentTime(userText)) {
-                addMandatoryCurrentTimeResult(messages, userId, successfulTools);
+                addMandatoryCurrentTimeResult(messages, userId, successfulTools, failedTools);
             }
 
-            for (int i = 0; i < MAX_TOOL_ROUNDS; i++) {
-                String roundText = streamOneRound(messages, specs, userId, successfulTools);
-                if (roundText != null) {
-                    roundText = stripModelToolDisclosure(roundText, successfulTools);
-                    String notice = mediaToolContextService.completionNotice();
-                    if (!notice.isBlank()) {
-                        roundText = roundText.stripTrailing() + "\n\n" + notice;
+            try {
+                for (int i = 0; i < MAX_TOOL_ROUNDS; i++) {
+                    String roundText = streamOneRound(messages, specs, userId, successfulTools, failedTools);
+                    if (roundText != null) {
+                        roundText = stripModelToolDisclosure(roundText, successfulTools);
+                        String notice = mediaToolContextService.completionNotice();
+                        if (!notice.isBlank()) {
+                            roundText = roundText.stripTrailing() + "\n\n" + notice;
+                        }
+                        roundText = appendToolFailureNotice(roundText, failedTools);
+                        // 最终文本轮：若注册了流式接收器，按分块推送（不含工具轮文本）
+                        String reply = appendToolFooter(roundText, successfulTools);
+                        if (sink != null) {
+                            pushStreaming(sink, reply);
+                        }
+                        return reply;
                     }
-                    // 最终文本轮：若注册了流式接收器，按分块推送（不含工具轮文本）
-                    String reply = appendToolFooter(roundText, successfulTools);
-                    if (sink != null) {
-                        pushStreaming(sink, reply);
-                    }
-                    return reply;
+                    // 本轮为工具调用轮：工具结果已回填 messages，继续下一轮
                 }
-                // 本轮为工具调用轮：工具结果已回填 messages，继续下一轮
+            } catch (RuntimeException exception) {
+                if (failedTools.isEmpty()) {
+                    throw exception;
+                }
+                log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
+                return fallbackReply(failedTools, successfulTools, sink);
             }
-            String fallback = "这个话题有点复杂，我处理到一半了，麻烦你再问一次。";
-            String notice = mediaToolContextService.completionNotice();
-            if (!notice.isBlank()) fallback += "\n\n" + notice;
-            fallback = appendToolFooter(fallback, successfulTools);
-            if (sink != null) sink.onDone(fallback);
-            return fallback;
+            return fallbackReply(failedTools, successfulTools, sink);
         } finally {
             toolStatusService.unbind();
         }
+    }
+
+    private String fallbackReply(Map<String, ToolExecutionOutcome> failedTools,
+                                 Set<String> successfulTools, StreamReplySink sink) {
+        String fallback = "这次处理没有完成。";
+        String notice = mediaToolContextService.completionNotice();
+        if (!notice.isBlank()) {
+            fallback += "\n\n" + notice;
+        }
+        fallback = appendToolFailureNotice(fallback, failedTools);
+        fallback = appendToolFooter(fallback, successfulTools);
+        if (sink != null) {
+            sink.onDone(fallback);
+        }
+        return fallback;
     }
 
     /**
@@ -160,7 +180,7 @@ public class AgentLoop {
      * 工具调用轮执行工具并回填 messages 后返回 null；最终文本轮返回完整文本。
      */
     private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
-                                  Set<String> successfulTools) {
+                                  Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -183,6 +203,9 @@ public class AgentLoop {
                                 ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
                                 if (outcome.successful()) {
                                     successfulTools.add(request.name());
+                                    failedTools.remove(request.name());
+                                } else {
+                                    failedTools.put(request.name(), outcome);
                                 }
                                 messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
                             }
@@ -228,6 +251,41 @@ public class AgentLoop {
         return reply.stripTrailing() + "\n\n> _调用工具：" + String.join("、", names) + "_";
     }
 
+    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {
+        if (reply == null || reply.isBlank() || failedTools == null || failedTools.isEmpty()) {
+            return reply;
+        }
+        StringBuilder notice = new StringBuilder("⚠️ 工具调用未完成：");
+        boolean hasDetails = false;
+        for (Map.Entry<String, ToolExecutionOutcome> entry : failedTools.entrySet()) {
+            ToolExecutionOutcome outcome = entry.getValue();
+            if (outcome == null || outcome.successful()) {
+                continue;
+            }
+            if (hasDetails) {
+                notice.append("；");
+            }
+            String displayName = TOOL_DISPLAY_NAMES.getOrDefault(entry.getKey(), entry.getKey());
+            notice.append(displayName);
+            if (outcome.attempts() == 0) {
+                notice.append("未执行");
+            } else if (outcome.attempts() > 1) {
+                notice.append("已自动重试").append(outcome.attempts() - 1).append("次仍失败");
+            } else {
+                notice.append("执行失败");
+            }
+            notice.append("，原因：").append(outcome.failureReason());
+            hasDetails = true;
+        }
+        if (!hasDetails) {
+            return reply;
+        }
+        if (reply.contains(notice.toString())) {
+            return reply;
+        }
+        return reply.stripTrailing() + "\n\n" + notice;
+    }
+
     static int toolFooterStart(String reply) {
         return reply == null ? -1 : reply.lastIndexOf("\n\n> _调用工具：");
     }
@@ -252,7 +310,8 @@ public class AgentLoop {
     }
 
     private void addMandatoryCurrentTimeResult(List<ChatMessage> messages, String userId,
-                                               Set<String> successfulTools) {
+                                               Set<String> successfulTools,
+                                               Map<String, ToolExecutionOutcome> failedTools) {
         ToolExecutionRequest request = ToolExecutionRequest.builder()
                 .id("policy-current-time")
                 .name("getCurrentTime")
@@ -263,6 +322,9 @@ public class AgentLoop {
         messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
         if (outcome.successful()) {
             successfulTools.add(request.name());
+            failedTools.remove(request.name());
+        } else {
+            failedTools.put(request.name(), outcome);
         }
     }
 
@@ -470,6 +532,7 @@ public class AgentLoop {
                 + "\n11. 用户询问上什么课、在哪个教室、什么时候上/下课，或说‘下课后/课前提醒’时，优先读取已保存且与日期匹配的课表或其关联记忆；不能靠学校通用作息或猜测课程时间。资料不足时先说明缺少哪一份课表或询问具体课程。"
                 + "\n12. 【媒体边界】只有本轮用户消息实际携带的多模态内容、平台本轮成功提供的引用媒体，或本轮工具读取结果，才代表你当前真正可查看的图片/文件。历史对话中‘历史消息曾附带图片/文件’只是过去记录，不含原件；绝不能因此说‘我现在看得到图片’、‘这条消息带了图片’或把旧媒体当作新上传。用户明确指代刚才未保存的图片/文件时，先调用 inspectRecentUnstoredMedia；其结果也必须称为此前上传的媒体，不是当前附件。"
                 + "\n13. 说话自然、准确、不过度承诺；不知道时明确说不知道，不编造历史或系统状态。"
-                + "\n14. 工具调用尾注由程序根据实际成功结果统一添加。最终正文不要自行写‘调用工具：’、‘工具调用说明’或工具清单，也不要解释工具执行过程；只自然回答用户的问题。";
+                + "\n14. 工具调用尾注由程序根据实际成功结果统一添加。最终正文不要自行写‘调用工具：’、‘工具调用说明’或工具清单，也不要解释工具执行过程；只自然回答用户的问题。"
+                + "\n15. 工具失败后程序会自动重试一次；若重试仍失败，最终回复会说明失败阶段和原因，不要让用户无意义地重复提问。";
     }
 }

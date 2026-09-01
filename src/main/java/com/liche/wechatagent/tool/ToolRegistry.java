@@ -8,6 +8,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.InvocationTargetException;
@@ -28,25 +29,31 @@ public class ToolRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ToolRegistry.class);
     private static final int MAX_TOOL_RESULT_CHARS = 8000;
+    private static final int DEFAULT_RETRY_ATTEMPTS = 1;
 
     private record ToolEntry(String name, ToolSpecification spec, Object tool, Method method) {
     }
 
     private final Map<String, ToolEntry> entries = new LinkedHashMap<>();
     private final ObjectMapper om = new ObjectMapper();
+    private final int retryAttempts;
 
+    @Autowired
     public ToolRegistry(com.liche.wechatagent.search.SearchTool searchTool,
                          com.liche.wechatagent.search.WebPageTool webPageTool,
                          com.liche.wechatagent.tool.ReminderTool reminderTool,
                          com.liche.wechatagent.tool.TimeTool timeTool,
                          com.liche.wechatagent.media.MediaMemoryTool mediaMemoryTool,
                          com.liche.wechatagent.media.WebFileTool webFileTool) {
-        register(searchTool);
-        register(webPageTool);
-        register(reminderTool);
-        register(timeTool);
-        register(mediaMemoryTool);
-        register(webFileTool);
+        this(List.of(searchTool, webPageTool, reminderTool, timeTool, mediaMemoryTool, webFileTool),
+                DEFAULT_RETRY_ATTEMPTS);
+    }
+
+    ToolRegistry(List<?> tools, int retryAttempts) {
+        this.retryAttempts = Math.max(0, Math.min(DEFAULT_RETRY_ATTEMPTS, retryAttempts));
+        if (tools != null) {
+            tools.forEach(this::register);
+        }
     }
 
     private void register(Object tool) {
@@ -75,37 +82,60 @@ public class ToolRegistry {
     }
 
     public ToolExecutionOutcome execute(ToolExecutionRequest request, Object memoryId) {
+        if (request == null || request.name() == null || request.name().isBlank()) {
+            return ToolExecutionOutcome.failure("工具请求为空", 0);
+        }
         ToolEntry entry = entries.get(request.name());
         if (entry == null) {
-            return ToolExecutionOutcome.failure("未知工具 " + request.name());
+            return ToolExecutionOutcome.failure("未知工具 " + request.name(), 0);
         }
-        long startedAt = System.nanoTime();
-        log.info("工具开始 name={} user={}", request.name(), memoryId);
+        JsonNode args;
         try {
-            JsonNode args = om.readTree(request.arguments() == null || request.arguments().isBlank()
+            args = om.readTree(request.arguments() == null || request.arguments().isBlank()
                     ? "{}" : request.arguments());
-            Object[] params = resolveParams(entry.method(), args);
-            Object result = entry.method().invoke(entry.tool(), params);
-            if (result == null) {
-                return ToolExecutionOutcome.success("（工具已执行，无返回内容）");
+            if (args == null || args.isNull()) {
+                args = om.createObjectNode();
             }
-            String text = String.valueOf(result);
-            log.info("工具完成 name={} user={} success=true resultChars={} durationMs={}", request.name(), memoryId,
-                    text.length(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
-            String clipped = text.length() > MAX_TOOL_RESULT_CHARS
-                    ? text.substring(0, MAX_TOOL_RESULT_CHARS) + "…（结果过长已截断）"
-                    : text;
-            return ToolExecutionOutcome.success(clipped);
-        } catch (InvocationTargetException ite) {
-            Throwable cause = ite.getCause() == null ? ite : ite.getCause();
-            log.warn("工具执行异常 name={} user={} durationMs={}", request.name(), memoryId,
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), cause);
-            return ToolExecutionOutcome.failure(safeMessage(cause));
+            Object[] params = resolveParams(entry.method(), args);
+            return invokeWithRetry(entry, params, request.name(), memoryId);
         } catch (Exception e) {
-            log.warn("工具执行异常 name={} user={} durationMs={}", request.name(), memoryId,
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), e);
-            return ToolExecutionOutcome.failure(safeMessage(e));
+            log.warn("工具参数解析失败 name={} user={} reason={}", request.name(), memoryId, safeMessage(e));
+            return ToolExecutionOutcome.failure(safeMessage(e), 0);
         }
+    }
+
+    private ToolExecutionOutcome invokeWithRetry(ToolEntry entry, Object[] params, String name, Object memoryId) {
+        Throwable lastFailure = null;
+        int totalAttempts = retryAttempts + 1;
+        long startedAt = System.nanoTime();
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            log.info("工具开始 name={} user={} attempt={}/{}", name, memoryId, attempt, totalAttempts);
+            try {
+                Object result = entry.method().invoke(entry.tool(), params);
+                String text = result == null ? "（工具已执行，无返回内容）" : String.valueOf(result);
+                log.info("工具完成 name={} user={} success=true attempts={} resultChars={} durationMs={}", name,
+                        memoryId, attempt, text.length(),
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+                String clipped = text.length() > MAX_TOOL_RESULT_CHARS
+                        ? text.substring(0, MAX_TOOL_RESULT_CHARS) + "…（结果过长已截断）"
+                        : text;
+                return ToolExecutionOutcome.success(clipped, attempt);
+            } catch (InvocationTargetException exception) {
+                lastFailure = exception.getCause() == null ? exception : exception.getCause();
+            } catch (Exception exception) {
+                lastFailure = exception;
+            }
+            String reason = safeMessage(lastFailure);
+            if (attempt < totalAttempts) {
+                log.warn("工具执行失败，将自动重试 name={} user={} attempt={}/{} reason={}", name, memoryId,
+                        attempt, totalAttempts, reason);
+            } else {
+                log.warn("工具执行失败 name={} user={} attempts={} durationMs={} reason={}", name, memoryId,
+                        attempt, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt),
+                        reason, lastFailure);
+            }
+        }
+        return ToolExecutionOutcome.failure(safeMessage(lastFailure), totalAttempts);
     }
 
     private Object[] resolveParams(Method m, JsonNode args) throws Exception {

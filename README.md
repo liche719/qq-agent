@@ -58,6 +58,7 @@
 | /set-prompt /reminders /memory /care /help（不走 LLM） | `CommandRegistry` + 独立 Handler |
 | 不提供清空会话或长期记忆的快捷指令 | 对话连续保留；用户仅可通过 `/memory forget` 遗忘自己的一条记忆 |
 | 搜索工具（状态推送/去重/Top5/15s 超时/重试1次） | `SearchTool` + `SearxngClient` |
+| 工具失败自动恢复 | 所有工具调用统一自动重试 1 次；仍失败时向 Agent 和用户返回明确失败阶段与原因 |
 | 公开网页文件下载与发送 | `WebFileTool`：列出网页下载链接、限大小安全下载至用户目录、通过 QQ 富媒体接口发送 |
 | 网页正文阅读 | `WebPageTool`，支持公开 HTTP/HTTPS 页面与受限跳转 |
 | 提醒三件套（解析/列表/取消）+ 业务层落地 | `ReminderTool` + `ReminderService` + `ReminderParseService` |
