@@ -21,3 +21,5 @@ application-local.yml
 .env
 
 /tmp/
+/docker/searxng/
+/docs/

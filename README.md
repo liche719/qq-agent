@@ -12,7 +12,7 @@
 | 存储 | MySQL 8 + Spring Data JPA | 用户/记忆/提醒/日志/归档 |
 | 缓存 | Redis | 即时对话上下文(10轮)、消息幂等去重 |
 | 调度 | Quartz JDBC 持久化 | 提醒任务重启自动恢复 |
-| 搜索 | SearX-NG（自托管） | JSON 格式，15s 超时，重试一次；配置见 docker/searxng/settings.yml |
+| 搜索 | SearX-NG（自托管） | JSON 格式，15s 超时，重试一次；本地部署配置不纳入仓库 |
 | QQ | QQ 官方机器人 WebSocket | 默认私聊通道；每个 QQ 用户独立上下文、记忆与文件目录 |
 | 微信 | 腾讯官方 iLink（wechat-ilink-sdk） | 可选兼容通道；本地模拟器仅作调试备用 |
 
@@ -24,7 +24,7 @@
    docker compose up -d
    ```
    启动 MySQL(3306) / Redis(6379) / SearX-NG(8888)。
-   SearX-NG 使用项目内配置（`docker/searxng/settings.yml`）：已开启 json 输出、关闭限流、并针对国内网络
+   SearX-NG 使用本机部署配置：已开启 json 输出、关闭限流、并针对国内网络
    只启用可达引擎（Bing/百度/搜狗/360，禁用 Google/DDG/Wikipedia 等被墙引擎）。如你有自己的 SearX-NG
    实例，可在 `.env` 里设置 `SEARXNG_BASE_URL` 指向它。
 
@@ -57,7 +57,7 @@
    curl "http://127.0.0.1:8080/api/sim/replies?userId=test-user"
    ```
 
-6. **生产升级数据库**：本机 `local` profile 会自动补齐记忆表结构；如果使用 `production` profile，请先备份数据库并执行 [20260901-memory-evolution.sql](docs/migrations/20260901-memory-evolution.sql)，再部署新 JAR。
+6. **生产升级数据库**：本机 `local` profile 会自动补齐记忆表结构；如果使用 `production` profile，请先备份数据库并执行本地保存的数据库迁移脚本，再部署新 JAR。
 
 ## 功能对照
 
