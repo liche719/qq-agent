@@ -77,6 +77,42 @@ class ToolRegistryTest {
         assertTrue(outcome.content().contains("工具执行失败"));
     }
 
+    @Test
+    void preservesPartialBusinessOutcomeStatus() {
+        PartialTool tool = new PartialTool();
+        ToolRegistry registry = new ToolRegistry(List.of(tool), 1);
+
+        ToolExecutionOutcome outcome = registry.execute(ToolExecutionRequest.builder()
+                .id("call-3").name("partial").arguments("{}").build(), "user-a");
+
+        assertFalse(outcome.successful());
+        assertEquals(ToolExecutionStatus.PARTIALLY_SUCCEEDED, outcome.status());
+    }
+
+    @Test
+    void exposesDeclaredToolPolicyAtRuntime() {
+        ToolRegistry registry = new ToolRegistry(List.of(new RiskyTool()), 1);
+
+        ToolPolicySnapshot policy = registry.policy("risky");
+
+        assertTrue(policy.hasSideEffect());
+        assertEquals(ToolRiskLevel.HIGH, policy.riskLevel());
+        assertFalse(policy.retryable());
+    }
+
+    @Test
+    void rejectsHighRiskToolWithoutConfirmationParameterBeforeInvocation() {
+        RiskyConfirmedTool tool = new RiskyConfirmedTool();
+        ToolRegistry registry = new ToolRegistry(List.of(tool), 1);
+
+        ToolExecutionOutcome outcome = registry.execute(ToolExecutionRequest.builder()
+                .id("call-4").name("confirmed").arguments("{}").build(), "user-a");
+
+        assertFalse(outcome.successful());
+        assertEquals(0, outcome.attempts());
+        assertEquals(0, tool.calls.get());
+    }
+
     private ToolExecutionRequest request() {
         return ToolExecutionRequest.builder()
                 .id("call-1")
@@ -110,6 +146,35 @@ class ToolRegistryTest {
         public ToolBusinessResult create() {
             calls.incrementAndGet();
             return ToolBusinessResult.failure("还缺具体时间");
+        }
+    }
+
+    static class PartialTool {
+        @Tool(name = "partial", value = "部分完成测试工具")
+        public ToolBusinessResult partial() {
+            return ToolBusinessResult.partial("下载成功但发送失败");
+        }
+    }
+
+    static class RiskyTool {
+        @Tool(name = "risky", value = "高风险测试工具")
+        @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
+                destructive = true, retryable = false, riskLevel = ToolRiskLevel.HIGH)
+        public String risky() {
+            return "ok";
+        }
+    }
+
+    static class RiskyConfirmedTool {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Tool(name = "confirmed", value = "需确认测试工具")
+        @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, requiresConfirmation = true,
+                confirmationParameter = "token", destructive = true, retryable = false,
+                riskLevel = ToolRiskLevel.HIGH)
+        public String confirmed(String token) {
+            calls.incrementAndGet();
+            return token;
         }
     }
 }

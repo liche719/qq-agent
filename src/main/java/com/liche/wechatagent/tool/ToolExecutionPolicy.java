@@ -9,4 +9,18 @@ import java.lang.annotation.Target;
 @Target(ElementType.METHOD)
 public @interface ToolExecutionPolicy {
     ToolExecutionClass value() default ToolExecutionClass.FAST;
+
+    boolean retryable() default true;
+
+    boolean hasSideEffect() default false;
+
+    boolean destructive() default false;
+
+    boolean requiresConfirmation() default false;
+
+    String confirmationParameter() default "";
+
+    boolean allowParallel() default true;
+
+    ToolRiskLevel riskLevel() default ToolRiskLevel.LOW;
 }

@@ -29,7 +29,7 @@ public class ToolRegistry {
     private static final int DEFAULT_MAX_TOOL_RESULT_CHARS = 8_000;
 
     private record ToolEntry(String name, ToolSpecification spec, Object tool, Method method,
-                             ToolExecutionClass executionClass) {
+                             ToolExecutionPolicy policy) {
     }
 
     private final Map<String, ToolEntry> entries = new LinkedHashMap<>();
@@ -82,9 +82,12 @@ public class ToolRegistry {
             try {
                 ToolSpecification spec = ToolSpecifications.toolSpecificationFrom(m);
                 ToolExecutionPolicy policy = m.getAnnotation(ToolExecutionPolicy.class);
-                entries.put(name, new ToolEntry(name, spec, tool, m,
-                        policy == null ? ToolExecutionClass.FAST : policy.value()));
-                log.info("注册工具: {} -> {}#{}", name, tool.getClass().getSimpleName(), m.getName());
+                entries.put(name, new ToolEntry(name, spec, tool, m, policy));
+                ToolPolicySnapshot snapshot = ToolPolicySnapshot.from(policy);
+                log.info("注册工具: {} -> {}#{} class={} sideEffect={} destructive={} confirmation={} confirmationParameter={} retryable={} risk={}",
+                        name, tool.getClass().getSimpleName(), m.getName(), snapshot.executionClass(),
+                        snapshot.hasSideEffect(), snapshot.destructive(), snapshot.requiresConfirmation(),
+                        snapshot.confirmationParameter(), snapshot.retryable(), snapshot.riskLevel());
             } catch (Exception e) {
                 log.warn("工具注册失败: {}#{}", tool.getClass().getSimpleName(), m.getName(), e);
             }
@@ -101,7 +104,12 @@ public class ToolRegistry {
 
     public ToolExecutionClass executionClass(String name) {
         ToolEntry entry = entries.get(name);
-        return entry == null ? ToolExecutionClass.FAST : entry.executionClass();
+        return policy(name).executionClass();
+    }
+
+    public ToolPolicySnapshot policy(String name) {
+        ToolEntry entry = entries.get(name);
+        return entry == null ? ToolPolicySnapshot.defaults() : ToolPolicySnapshot.from(entry.policy());
     }
 
     public ToolExecutionOutcome execute(ToolExecutionRequest request, Object memoryId) {
@@ -112,6 +120,6 @@ public class ToolRegistry {
         if (entry == null) {
             return ToolExecutionOutcome.failure("未知工具 " + request.name(), 0);
         }
-        return invocationService.invoke(entry.method(), entry.tool(), request, memoryId);
+        return invocationService.invoke(entry.method(), entry.tool(), request, memoryId, entry.policy());
     }
 }

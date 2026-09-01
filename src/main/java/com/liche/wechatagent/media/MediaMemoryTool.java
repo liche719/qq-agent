@@ -60,6 +60,10 @@ public class MediaMemoryTool {
     }
 
     @Tool(value = "将当前用户的已保存文件移入该用户回收目录。只能在刚刚调用 inspectStoredMedia、确认清楚文件内容且确有删除必要后调用；inspectionToken 必须使用审阅结果返回的令牌，reason 必须具体。不会永久删除。")
+    @com.liche.wechatagent.tool.ToolExecutionPolicy(value = com.liche.wechatagent.tool.ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
+            destructive = true, requiresConfirmation = true, confirmationParameter = "inspectionToken",
+            riskLevel = com.liche.wechatagent.tool.ToolRiskLevel.HIGH,
+            allowParallel = false, retryable = false)
     @com.liche.wechatagent.tool.NonIdempotentTool
     public String deleteStoredMedia(Long mediaId, String inspectionToken, String reason) {
         return storageService.trash(requireCurrentUser(), mediaId, inspectionToken, reason);

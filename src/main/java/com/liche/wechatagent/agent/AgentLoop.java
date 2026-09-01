@@ -343,7 +343,11 @@ public class AgentLoop {
             String displayName = displayNames == null
                     ? entry.getKey() : displayNames.getOrDefault(entry.getKey(), entry.getKey());
             notice.append(displayName);
-            if (outcome.attempts() == 0) {
+            if (outcome.status() == com.liche.wechatagent.tool.ToolExecutionStatus.PARTIALLY_SUCCEEDED) {
+                notice.append("部分完成");
+            } else if (outcome.status() == com.liche.wechatagent.tool.ToolExecutionStatus.UNKNOWN_RESULT) {
+                notice.append("结果无法确认");
+            } else if (outcome.attempts() == 0) {
                 notice.append("未执行");
             } else if (outcome.attempts() > 1) {
                 notice.append("已自动重试").append(outcome.attempts() - 1).append("次仍失败");

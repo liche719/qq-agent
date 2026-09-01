@@ -78,6 +78,7 @@ agent:
   message-batch-continuation-window-millis: ${AGENT_MESSAGE_BATCH_CONTINUATION_WINDOW_MILLIS:900}
   message-batch-continuation-pattern: '${AGENT_MESSAGE_BATCH_CONTINUATION_PATTERN:}'
   tool-retry-attempts: ${AGENT_TOOL_RETRY_ATTEMPTS:1}
+  tool-retry-delay-ms: ${AGENT_TOOL_RETRY_DELAY_MS:0}
   tool-max-result-chars: ${AGENT_TOOL_MAX_RESULT_CHARS:8000}
   max-tool-rounds: ${AGENT_MAX_TOOL_ROUNDS:8}
   stream-timeout-seconds: ${AGENT_STREAM_TIMEOUT_SECONDS:120}
@@ -97,6 +98,7 @@ agent:
     tool-display-names:
       searchWeb: 搜索
       searchLatestWeb: 搜索
+      searchVerifiedWeb: 核验搜索
       readWebPage: 读取网页
       getCurrentTime: 获取时间
       parseReminder: 创建提醒

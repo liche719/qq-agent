@@ -27,7 +27,7 @@ public class ReminderTool {
     }
 
     @Tool(value = "解析用户的提醒需求并创建定时提醒。用户提到'提醒我/帮我记着/XX点叫我/定时/每天/每周'等意图时调用。参数 description 是用户的原话。")
-    @ToolExecutionPolicy(ToolExecutionClass.EXTERNAL_ACTION)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult parseReminder(String description) {
         String userId = requireCurrentUser();
@@ -44,7 +44,7 @@ public class ReminderTool {
     }
 
     @Tool(value = "取消一个定时提醒任务。参数 reminderId 为提醒的 ID（可通过 listReminders 查询）。")
-    @ToolExecutionPolicy(ToolExecutionClass.EXTERNAL_ACTION)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult cancelReminder(Long reminderId) {
         ReminderOperationResult result = reminderService.cancelResult(requireCurrentUser(), reminderId);
@@ -54,7 +54,7 @@ public class ReminderTool {
     }
 
     @Tool(value = "安全调整当前用户已有的定时提醒。先解析并验证新的时间，只有新提醒成功保存和调度后才会取消旧提醒；旧提醒 ID 通过 listReminders 或提醒状态查询获得。用户说‘改成/调整到/换成’已有提醒的新时间时优先调用。")
-    @ToolExecutionPolicy(ToolExecutionClass.EXTERNAL_ACTION)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, destructive = true, requiresConfirmation = true, riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @NonIdempotentTool
     public ToolBusinessResult replaceReminder(Long reminderId, String description) {
         ReminderParseService.ParsedReminder parsed = parseService.parse(description);

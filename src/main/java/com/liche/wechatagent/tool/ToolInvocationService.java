@@ -20,31 +20,55 @@ public class ToolInvocationService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final int retryAttempts;
     private final int maxResultChars;
+    private final long retryDelayMillis;
 
     public ToolInvocationService(@org.springframework.beans.factory.annotation.Value("${agent.tool-retry-attempts:1}") int retryAttempts,
-                                 @org.springframework.beans.factory.annotation.Value("${agent.tool-max-result-chars:8000}") int maxResultChars) {
+                                 @org.springframework.beans.factory.annotation.Value("${agent.tool-max-result-chars:8000}") int maxResultChars,
+                                 @org.springframework.beans.factory.annotation.Value("${agent.tool-retry-delay-ms:0}") long retryDelayMillis) {
         this.retryAttempts = Math.max(0, Math.min(3, retryAttempts));
         this.maxResultChars = Math.max(256, Math.min(100_000, maxResultChars));
+        this.retryDelayMillis = Math.max(0, Math.min(30_000, retryDelayMillis));
+    }
+
+    public ToolInvocationService(int retryAttempts, int maxResultChars) {
+        this(retryAttempts, maxResultChars, 0);
     }
 
     public ToolExecutionOutcome invoke(Method method, Object target, ToolExecutionRequest request,
                                        Object memoryId) {
+        return invoke(method, target, request, memoryId, method.getAnnotation(ToolExecutionPolicy.class));
+    }
+
+    public ToolExecutionOutcome invoke(Method method, Object target, ToolExecutionRequest request,
+                                       Object memoryId, ToolExecutionPolicy policy) {
         try {
             JsonNode args = objectMapper.readTree(request.arguments() == null || request.arguments().isBlank()
                     ? "{}" : request.arguments());
             if (args == null || args.isNull()) args = objectMapper.createObjectNode();
+            validateConfirmation(args, policy);
             Object[] parameters = resolveParameters(method, args);
-            return invokeWithRetry(method, target, parameters, request.name(), memoryId);
+            return invokeWithRetry(method, target, parameters, request.name(), memoryId, policy);
         } catch (Exception exception) {
             log.warn("工具参数解析失败 name={} user={} reason={}", request.name(), memoryId, safeMessage(exception));
             return ToolExecutionOutcome.failure(safeMessage(exception), 0);
         }
     }
 
+    private void validateConfirmation(JsonNode args, ToolExecutionPolicy policy) {
+        if (policy == null || !policy.requiresConfirmation() || policy.confirmationParameter().isBlank()) {
+            return;
+        }
+        JsonNode token = args.get(policy.confirmationParameter());
+        if (token == null || token.isNull() || token.asText().isBlank()) {
+            throw new IllegalArgumentException("高风险工具缺少有效确认参数：" + policy.confirmationParameter());
+        }
+    }
+
     private ToolExecutionOutcome invokeWithRetry(Method method, Object target, Object[] parameters,
-                                                 String name, Object memoryId) {
+                                                 String name, Object memoryId, ToolExecutionPolicy policy) {
         Throwable lastFailure = null;
-        boolean repeatable = !method.isAnnotationPresent(NonIdempotentTool.class);
+        boolean repeatable = !method.isAnnotationPresent(NonIdempotentTool.class)
+                && (policy == null || policy.retryable());
         int totalAttempts = repeatable ? retryAttempts + 1 : 1;
         long startedAt = System.nanoTime();
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
@@ -57,7 +81,11 @@ public class ToolInvocationService {
                     }
                     lastFailure = new IllegalStateException(business.failureReason());
                     if (!business.retryable() || attempt == totalAttempts || !repeatable) {
-                        return ToolExecutionOutcome.failure(business.failureReason(), attempt);
+                        return business.status() == ToolExecutionStatus.PARTIALLY_SUCCEEDED
+                                ? ToolExecutionOutcome.partial(business.failureReason(), attempt)
+                                : business.status() == ToolExecutionStatus.UNKNOWN_RESULT
+                                ? ToolExecutionOutcome.unknown(business.failureReason(), attempt)
+                                : ToolExecutionOutcome.failure(business.failureReason(), attempt);
                     }
                 } else {
                     String text = result == null ? "（工具已执行，无返回内容）" : String.valueOf(result);
@@ -71,9 +99,22 @@ public class ToolInvocationService {
             if (attempt < totalAttempts) {
                 log.warn("工具执行失败，将自动重试 name={} user={} attempt={}/{} reason={}", name, memoryId,
                         attempt, totalAttempts, safeMessage(lastFailure));
+                waitBeforeRetry(attempt);
             }
         }
         return ToolExecutionOutcome.failure(safeMessage(lastFailure), totalAttempts);
+    }
+
+    private void waitBeforeRetry(int attempt) {
+        if (retryDelayMillis <= 0) {
+            return;
+        }
+        long delay = Math.min(30_000, retryDelayMillis * (1L << Math.min(attempt - 1, 10)));
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private ToolExecutionOutcome success(String name, Object memoryId, String content, int attempts, long startedAt) {

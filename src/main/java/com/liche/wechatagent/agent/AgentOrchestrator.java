@@ -53,6 +53,7 @@ public class AgentOrchestrator {
     private final ConversationTraceLogger conversationTraceLogger;
     private final List<WeChatChannel> channels;
     private final ConversationMemoryService conversationMemoryService;
+    private final AgentTaskStateStore taskStateStore;
 
     @Autowired
     public AgentOrchestrator(MessageIdempotency idempotency,
@@ -69,7 +70,8 @@ public class AgentOrchestrator {
                              MediaToolContextService mediaToolContextService,
                              ConversationTraceLogger conversationTraceLogger,
                              List<WeChatChannel> channels,
-                             ConversationMemoryService conversationMemoryService) {
+                             ConversationMemoryService conversationMemoryService,
+                             AgentTaskStateStore taskStateStore) {
         this.idempotency = idempotency;
         this.userService = userService;
         this.perUserExecutors = perUserExecutors;
@@ -85,6 +87,7 @@ public class AgentOrchestrator {
         this.conversationTraceLogger = conversationTraceLogger;
         this.channels = channels;
         this.conversationMemoryService = conversationMemoryService;
+        this.taskStateStore = taskStateStore;
     }
 
     public AgentOrchestrator(MessageIdempotency idempotency,
@@ -103,7 +106,19 @@ public class AgentOrchestrator {
                              List<WeChatChannel> channels) {
         this(idempotency, userService, perUserExecutors, commandRegistry, contextStore, memoryLoader, agentLoop,
                 messageBatcher, extractionScheduler, toolStatusService, documentExtractionService,
-                mediaToolContextService, conversationTraceLogger, channels, null);
+                mediaToolContextService, conversationTraceLogger, channels, null, null);
+    }
+
+    public AgentOrchestrator(MessageIdempotency idempotency, UserService userService,
+                             PerUserExecutors perUserExecutors, CommandRegistry commandRegistry,
+                             ContextStore contextStore, MemoryLoader memoryLoader, AgentLoop agentLoop,
+                             InboundMessageBatcher messageBatcher, MemoryExtractionScheduler extractionScheduler,
+                             ToolStatusService toolStatusService, DocumentExtractionService documentExtractionService,
+                             MediaToolContextService mediaToolContextService, ConversationTraceLogger conversationTraceLogger,
+                             List<WeChatChannel> channels, ConversationMemoryService conversationMemoryService) {
+        this(idempotency, userService, perUserExecutors, commandRegistry, contextStore, memoryLoader, agentLoop,
+                messageBatcher, extractionScheduler, toolStatusService, documentExtractionService,
+                mediaToolContextService, conversationTraceLogger, channels, conversationMemoryService, null);
     }
 
     /** 仅按入站记录的通道回复；无法确定归属时不得猜测其他通道。 */
@@ -142,6 +157,10 @@ public class AgentOrchestrator {
             MDC.put("userScope", UserScope.forUser(batch.userId()));
             String taskId = UUID.randomUUID().toString();
             MDC.put("taskId", taskId);
+            if (taskStateStore != null) {
+                taskStateStore.start(taskId, batch.userId(), batch.replyToMsgId());
+                taskStateStore.step(taskId, "PROCESSING_MESSAGE");
+            }
             toolStatusService.bind(batch.userId(), batch.replyToMsgId(), batch.botId(), batch.channel());
             log.info("agent_task_start task={} user={} channel={} batchCount={} replyTo={} media={} quotedMedia={} queueWaitMs={}",
                     taskId,
@@ -159,6 +178,11 @@ public class AgentOrchestrator {
                 log.error("消息处理异常 user={} replyTo={}", batch.userId(), batch.replyToMsgId(), e);
                 reply = "抱歉，我这边出了点小问题，请稍后再试一次。";
             } finally {
+                if (taskStateStore != null) {
+                    taskStateStore.finish(taskId, reply == null ? "FAILED" : "SUCCEEDED",
+                            batch.userId(), batch.replyToMsgId());
+                    taskStateStore.step(taskId, reply == null ? "FAILED" : "REPLY_READY");
+                }
                 log.info("agent_task_finish task={} user={} replyTo={} replyChars={} streamed={}", taskId, batch.userId(), batch.replyToMsgId(),
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
                 toolStatusService.unbind();
@@ -169,6 +193,7 @@ public class AgentOrchestrator {
                 WeChatChannel c = channelFor(batch.channel());
                 if (c != null && !(sink != null && sink.isDone())) {
                     c.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
+                    if (taskStateStore != null) taskStateStore.step(taskId, "REPLY_SENT");
                 }
             }
         });

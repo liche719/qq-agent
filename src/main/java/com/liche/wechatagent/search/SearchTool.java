@@ -36,7 +36,7 @@ public class SearchTool {
     public SearchTool(SearxngClient searxngClient,
                       ToolStatusService statusService,
                       @Value("${searxng.timeout-seconds:15}") int timeoutSeconds,
-                      @Value("${searxng.max-results:5}") int maxResults,
+                      @Value("${searxng.max-results:10}") int maxResults,
                       @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.searxngClient = searxngClient;
         this.statusService = statusService;
@@ -62,7 +62,21 @@ public class SearchTool {
         return search(datedQuery, "year", true);
     }
 
+    @Tool(value = "高可靠核验搜索：用于政策、法规、考试、医疗、价格、版本等不能仅凭单个摘要判断的事实。返回最多十条候选来源，并明确要求读取原文、比较至少两个独立发布者、检查日期和适用范围；证据不足时必须说明无法确认。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public String searchVerifiedWeb(String query) {
+        statusService.push("我正在交叉核对多个来源…");
+        String requestedQuery = requireQuery(query);
+        LocalDate today = LocalDate.now(timeZone);
+        return search(requestedQuery + " " + today.getYear() + "年" + today.getMonthValue() + "月",
+                "year", true, true);
+    }
+
     private String search(String query, String timeRange, boolean latest) {
+        return search(query, timeRange, latest, false);
+    }
+
+    private String search(String query, String timeRange, boolean latest, boolean verified) {
 
         List<SearxngClient.SearchHit> hits;
         try {
@@ -97,12 +111,26 @@ public class SearchTool {
             return "没有搜到相关资料，换个说法试试？";
         }
 
+        Set<String> independentHosts = new java.util.LinkedHashSet<>();
+        for (SearxngClient.SearchHit hit : deduped) {
+            String host = hostOf(hit.url());
+            if (host != null) {
+                independentHosts.add(registrableHost(host));
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
         if (latest) {
             sb.append("【最新事实检索】检索时间：")
                     .append(LocalDate.now(timeZone))
                     .append("（时区：").append(timeZone).append("）；结果范围：近一年。\n")
                     .append("注意：搜索摘要可能过时、截断或来自聚合站。不得仅凭摘要、旧版本规律或爆料给出‘当前’结论；应优先读取官方或原始发布者页面。若无法验证，应明确说无法确认。\n\n");
+        }
+        if (verified) {
+            sb.append("【核验边界】当前仅得到搜索候选和摘要，不代表事实已核实。请读取排名靠前的原文，至少比较 ")
+                    .append(Math.min(3, independentHosts.size()))
+                    .append(" 个不同发布者，核对发布日期、适用地区/人群、版本和原文措辞；来源互相转载时只能算一个独立来源。若来源冲突或不足，不得给出确定结论。\n")
+                    .append("独立发布者域名数（粗略去重）：").append(independentHosts.size()).append("\n\n");
         }
         sb.append("搜索到以下资料（最多返回 ").append(deduped.size()).append(" 条）：\n");
         int i = 1;
@@ -131,6 +159,20 @@ public class SearchTool {
         return host == null || host.isBlank()
                 ? "\n来源域名：未知（请核验原始发布者）"
                 : "\n来源域名：" + host + "（域名本身不代表权威性，请核验原始发布者并交叉验证）";
+    }
+
+    private String hostOf(String url) {
+        try {
+            return java.net.URI.create(url).getHost();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String registrableHost(String host) {
+        String normalized = host.toLowerCase(java.util.Locale.ROOT);
+        String[] labels = normalized.split("\\.");
+        return labels.length < 2 ? normalized : labels[labels.length - 2] + "." + labels[labels.length - 1];
     }
 
     private String normalize(String title) {

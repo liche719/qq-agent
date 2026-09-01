@@ -5,6 +5,7 @@ import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.tool.ToolExecutionPolicy;
 import com.liche.wechatagent.tool.ToolExecutionClass;
+import com.liche.wechatagent.tool.ToolRiskLevel;
 import dev.langchain4j.agent.tool.Tool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -122,7 +123,7 @@ public class WebFileTool {
     }
 
     @Tool(value = "将当前用户已下载或保存的本地文件发送到当前消息通道。先用 listStoredMedia 找到 mediaId；仅当用户当前明确要求发送该文件时调用。不能发送其他用户文件。")
-    @ToolExecutionPolicy(ToolExecutionClass.EXTERNAL_ACTION)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @com.liche.wechatagent.tool.NonIdempotentTool
     public String sendDownloadedFile(Long mediaId) {
         statusService.push("我正在发送文件…");

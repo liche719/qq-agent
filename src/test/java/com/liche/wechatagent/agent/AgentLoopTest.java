@@ -16,6 +16,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentLoopTest {
 
@@ -70,6 +71,18 @@ class AgentLoopTest {
         String result = AgentLoop.appendToolFailureNotice("我暂时无法读取该页面。", failures);
 
         assertEquals("我暂时无法读取该页面。\n\n⚠️ 工具调用未完成：读取网页已自动重试1次仍失败，原因：网页内容超过安全读取上限", result);
+    }
+
+    @Test
+    void distinguishesPartialAndUnknownToolResults() {
+        Map<String, ToolExecutionOutcome> failures = new LinkedHashMap<>();
+        failures.put("sendDownloadedFile", ToolExecutionOutcome.partial("文件已下载但发送失败", 1));
+        failures.put("downloadWebFile", ToolExecutionOutcome.unknown("请求超时，无法确认是否已保存", 1));
+
+        String result = AgentLoop.appendToolFailureNotice("正在处理。", failures);
+
+        assertTrue(result.contains("发送文件部分完成"));
+        assertTrue(result.contains("下载文件结果无法确认"));
     }
 
     @Test
