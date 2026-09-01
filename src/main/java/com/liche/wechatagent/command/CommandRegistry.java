@@ -45,13 +45,15 @@ public class CommandRegistry {
                 case "查看提醒" -> "reminders";
                 case "开启自动记忆" -> "memory";
                 case "关闭自动记忆" -> "memory";
+                case "删除记忆" -> "memory";
+                case "设置助手人设" -> "set-prompt";
                 case "开启每日复盘" -> "care";
                 case "开启每周复盘" -> "care";
                 case "关闭主动关怀" -> "care";
                 default -> name;
             };
             if (name.equals("memory") && !trimmed.equals("查看记忆")) {
-                args = trimmed.contains("关闭") ? "off" : "on";
+                args = trimmed.contains("关闭") ? "off" : trimmed.equals("删除记忆") ? "forget" : "on";
             } else if (name.equals("care")) {
                 args = trimmed.contains("每日") ? "daily" : trimmed.contains("每周") ? "weekly" : "off";
             }

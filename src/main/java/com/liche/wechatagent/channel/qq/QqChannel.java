@@ -393,6 +393,8 @@ public class QqChannel implements WeChatChannel {
                     Map.of("type", "command", "name", "查看提醒", "desc", "查看待执行提醒"),
                     Map.of("type", "command", "name", "开启自动记忆", "desc", "开启长期记忆"),
                     Map.of("type", "command", "name", "关闭自动记忆", "desc", "关闭长期记忆"),
+                    Map.of("type", "command", "name", "删除记忆", "desc", "按关键词删除记忆"),
+                    Map.of("type", "command", "name", "设置助手人设", "desc", "调整说话方式"),
                     Map.of("type", "command", "name", "开启每日复盘", "desc", "开启每日主动关怀"),
                     Map.of("type", "command", "name", "开启每周复盘", "desc", "开启每周主动关怀"),
                     Map.of("type", "command", "name", "关闭主动关怀", "desc", "关闭主动关怀"));
