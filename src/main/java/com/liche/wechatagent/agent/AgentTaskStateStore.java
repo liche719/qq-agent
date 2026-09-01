@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 /** Durable, user-scoped lifecycle state for asynchronous agent executions. */
@@ -22,7 +23,7 @@ public class AgentTaskStateStore {
 
     public void start(String taskId, String userId, String replyToMessageId) {
         save(taskId, Map.of("status", "RUNNING", "userId", safe(userId),
-                "replyToMessageId", safe(replyToMessageId)));
+                "replyToMessageId", safe(replyToMessageId), "startedAt", Instant.now().toString()));
     }
 
     public void finish(String taskId, String status, String userId, String replyToMessageId) {
@@ -44,11 +45,22 @@ public class AgentTaskStateStore {
         if (taskId == null || taskId.isBlank()) return;
         try {
             String key = "agent:task:" + taskId;
-            redis.opsForHash().putAll(key, values);
+            var updated = new java.util.HashMap<>(values);
+            updated.put("updatedAt", Instant.now().toString());
+            redis.opsForHash().putAll(key, updated);
             redis.opsForSet().add("agent:tasks:index", taskId);
             redis.expire(key, ttl);
         } catch (RuntimeException ignored) {
             // Redis availability must not prevent the live reply path.
+        }
+    }
+
+    public Map<Object, Object> find(String taskId) {
+        if (taskId == null || taskId.isBlank()) return Map.of();
+        try {
+            return redis.opsForHash().entries("agent:task:" + taskId);
+        } catch (RuntimeException ignored) {
+            return Map.of();
         }
     }
 
