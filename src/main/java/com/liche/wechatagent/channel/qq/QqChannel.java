@@ -25,6 +25,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.nio.file.Files;
 import java.time.Duration;
@@ -381,7 +382,11 @@ public class QqChannel implements WeChatChannel {
         if (!commandPanelConfigured.compareAndSet(false, true)) return;
         try {
             ensureToken();
-            String existing = buildRestClient(apiBase).get().uri("/v2/panels")
+            String existing = buildRestClient(apiBase).get().uri(uriBuilder -> uriBuilder
+                            .path("/v2/panels")
+                            .queryParam("scope", "c2c")
+                            .queryParam("limit", "50")
+                            .build())
                     .header("Authorization", "QQBot " + accessToken).retrieve().body(String.class);
             if (existing != null && existing.contains("wechat-agent-c2c")) {
                 log.info("QQ C2C command panel already exists");
@@ -400,13 +405,32 @@ public class QqChannel implements WeChatChannel {
                     Map.of("type", "command", "name", "关闭主动关怀", "desc", "关闭主动关怀"));
             Map<String, Object> panel = Map.of("items", items, "remark", "wechat-agent-c2c");
             Map<String, Object> payload = Map.of("scope", "c2c", "target_type", "all", "panel", panel);
+            String payloadJson = objectMapper.writeValueAsString(payload);
             buildRestClient(apiBase).post().uri("/v2/panels")
                     .header("Authorization", "QQBot " + accessToken)
-                    .body(payload).retrieve().body(String.class);
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(payloadJson).retrieve().body(String.class);
             log.info("QQ C2C command panel configured");
+        } catch (RestClientResponseException exception) {
+            logPanelApiFailure(exception);
         } catch (Exception exception) {
             commandPanelConfigured.set(false);
             log.warn("QQ C2C command panel configuration failed: {}", exception.getMessage());
+        }
+    }
+
+    private void logPanelApiFailure(RestClientResponseException exception) {
+        commandPanelConfigured.set(false);
+        String response = exception.getResponseBodyAsString();
+        try {
+            JsonNode error = objectMapper.readTree(response);
+            log.warn("QQ C2C command panel configuration failed: httpStatus={} qqCode={} errCode={} traceId={} message={}",
+                    exception.getStatusCode().value(), error.path("code").asInt(0),
+                    error.path("err_code").asLong(0), error.path("trace_id").asText(""),
+                    error.path("message").asText(""));
+        } catch (Exception ignored) {
+            log.warn("QQ C2C command panel configuration failed: httpStatus={} response={}",
+                    exception.getStatusCode().value(), response);
         }
     }
 
