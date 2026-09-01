@@ -31,28 +31,46 @@ import java.util.zip.ZipInputStream;
 @Service
 public class DocumentExtractionService {
 
-    private static final int MAX_REDIRECTS = 3;
+    private static final int DEFAULT_MAX_REDIRECTS = 3;
+    private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
+    private static final long DEFAULT_READ_TIMEOUT_SECONDS = 30;
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; WechatAgent/1.0)";
 
     private final OkHttpClient client;
     private final int maxFileBytes;
     private final int maxTextChars;
     private final int maxPdfPages;
+    private final int maxRedirects;
+    private final String userAgent;
     private final PublicUrlValidator urlValidator;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public DocumentExtractionService(@Value("${document.max-file-bytes:20971520}") int maxFileBytes,
                                      @Value("${document.max-text-chars:60000}") int maxTextChars,
                                      @Value("${document.max-pdf-pages:10}") int maxPdfPages,
+                                     @Value("${document.max-redirects:3}") int maxRedirects,
+                                     @Value("${document.connect-timeout-seconds:8}") long connectTimeoutSeconds,
+                                     @Value("${document.read-timeout-seconds:30}") long readTimeoutSeconds,
+                                     @Value("${document.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String userAgent,
                                      PublicUrlValidator urlValidator) {
-        this.maxFileBytes = maxFileBytes;
-        this.maxTextChars = maxTextChars;
-        this.maxPdfPages = maxPdfPages;
+        this.maxFileBytes = bounded(maxFileBytes, 1_024, Integer.MAX_VALUE, 20 * 1024 * 1024);
+        this.maxTextChars = bounded(maxTextChars, 256, 1_000_000, 60_000);
+        this.maxPdfPages = bounded(maxPdfPages, 1, 100, 10);
+        this.maxRedirects = bounded(maxRedirects, 0, 10, DEFAULT_MAX_REDIRECTS);
+        this.userAgent = userAgent == null || userAgent.isBlank() ? DEFAULT_USER_AGENT : userAgent.trim();
         this.urlValidator = urlValidator;
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(8))
-                .readTimeout(Duration.ofSeconds(30))
+                .connectTimeout(Duration.ofSeconds(bounded(connectTimeoutSeconds, 1, 300, DEFAULT_CONNECT_TIMEOUT_SECONDS)))
+                .readTimeout(Duration.ofSeconds(bounded(readTimeoutSeconds, 1, 600, DEFAULT_READ_TIMEOUT_SECONDS)))
                 .followRedirects(false)
                 .dns(urlValidator::lookupPublic)
                 .build();
+    }
+
+    public DocumentExtractionService(int maxFileBytes, int maxTextChars, int maxPdfPages,
+                                     PublicUrlValidator urlValidator) {
+        this(maxFileBytes, maxTextChars, maxPdfPages, DEFAULT_MAX_REDIRECTS,
+                DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, urlValidator);
     }
 
     public List<ExtractedDocument> extractAll(List<InboundAttachment> attachments) {
@@ -87,8 +105,10 @@ public class DocumentExtractionService {
         } catch (IllegalArgumentException exception) {
             throw new DocumentExtractionException("文件下载地址无效或不安全，请重新发送文件。", exception);
         }
-        for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-            Request request = new Request.Builder().url(current.toString()).get().build();
+        for (int redirects = 0; redirects <= maxRedirects; redirects++) {
+            Request request = new Request.Builder().url(current.toString())
+                    .header("User-Agent", userAgent)
+                    .get().build();
             try (Response response = client.newCall(request).execute()) {
                 if (response.isRedirect()) {
                     String location = response.header("Location");
@@ -102,26 +122,26 @@ public class DocumentExtractionService {
                     }
                     continue;
                 }
-            if (!response.isSuccessful() || response.body() == null) {
-                throw new DocumentExtractionException("文件下载失败，请重新发送一次。");
-            }
-            long contentLength = response.body().contentLength();
-            if (contentLength > maxFileBytes) {
-                throw new DocumentExtractionException("文件超过 " + maxFileBytes / 1024 / 1024 + " MB，暂不处理。");
-            }
-            try (var input = response.body().byteStream(); var output = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[8192];
-                int read;
-                int total = 0;
-                while ((read = input.read(buffer)) != -1) {
-                    total += read;
-                    if (total > maxFileBytes) {
-                        throw new DocumentExtractionException("文件超过 " + maxFileBytes / 1024 / 1024 + " MB，暂不处理。");
-                    }
-                    output.write(buffer, 0, read);
+                if (!response.isSuccessful() || response.body() == null) {
+                    throw new DocumentExtractionException("文件下载失败，请重新发送一次。");
                 }
-                return output.toByteArray();
-            }
+                long contentLength = response.body().contentLength();
+                if (contentLength > maxFileBytes) {
+                    throw new DocumentExtractionException("文件超过 " + maxFileBytes / 1024 / 1024 + " MB，暂不处理。");
+                }
+                try (var input = response.body().byteStream(); var output = new ByteArrayOutputStream()) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    int total = 0;
+                    while ((read = input.read(buffer)) != -1) {
+                        total += read;
+                        if (total > maxFileBytes) {
+                            throw new DocumentExtractionException("文件超过 " + maxFileBytes / 1024 / 1024 + " MB，暂不处理。");
+                        }
+                        output.write(buffer, 0, read);
+                    }
+                    return output.toByteArray();
+                }
             } catch (DocumentExtractionException exception) {
                 throw exception;
             } catch (IOException exception) {
@@ -231,5 +251,13 @@ public class DocumentExtractionService {
             }
         }
         return true;
+    }
+
+    private static int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
+    }
+
+    private static long bounded(long value, long minimum, long maximum, long fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

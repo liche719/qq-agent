@@ -103,18 +103,18 @@ public class MemoryManagementService {
         }
         if ("off".equalsIgnoreCase(trimmed) || "关闭".equals(trimmed)) {
             userService.setMemoryEnabled(userId, false);
-            return "自动记忆已关闭。已有记忆会继续供本次和未来对话参考；你可随时用 /memory 查看或删除。";
+            return "自动记忆已关闭。之后的新对话不会再写入长期记忆或持久化对话证据；已有记忆会继续供本次和未来对话参考，你可随时用 /memory 查看或删除。";
         }
         String reference = forgetReference(trimmed);
         if (reference != null) {
             return forget(userId, reference);
         }
-        return "用法：/memory 查看；/memory on|off；/memory forget 南京理工。也可以使用 C3、W12 这样的编号。记忆由系统自动提取，无需手动添加。";
+        return "用法：/memory 查看；/memory on|off；/memory forget 关键词。也可以使用 C3、W12 这样的编号。记忆由系统自动提取，无需手动添加。";
     }
 
     private String forget(String userId, String reference) {
         if (reference == null || reference.strip().length() < 2) {
-            throw new BizException("请说清要删除哪条，例如：/memory forget 南京理工");
+            throw new BizException("请说清要删除哪条，例如：/memory forget 关键词");
         }
         String normalized = reference.strip();
         if (!normalized.matches("(?i)[CW]\\s*\\d+")) {

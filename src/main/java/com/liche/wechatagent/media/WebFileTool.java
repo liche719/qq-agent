@@ -3,6 +3,8 @@ package com.liche.wechatagent.media;
 import com.liche.wechatagent.channel.OutboundMedia;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.tool.ToolStatusService;
+import com.liche.wechatagent.tool.ToolExecutionPolicy;
+import com.liche.wechatagent.tool.ToolExecutionClass;
 import dev.langchain4j.agent.tool.Tool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -25,27 +27,44 @@ import java.util.Set;
 @Component
 public class WebFileTool {
 
-    private static final int MAX_REDIRECTS = 3;
-    private static final int MAX_LINKS = 20;
+    private static final int DEFAULT_MAX_REDIRECTS = 3;
+    private static final int DEFAULT_MAX_LINKS = 20;
     private static final long DEFAULT_MAX_RESPONSE_BYTES = 2_097_152L;
+    private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
+    private static final long DEFAULT_READ_TIMEOUT_SECONDS = 20;
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; WechatAgent/1.0)";
 
     private final MediaStorageService storageService;
     private final ToolStatusService statusService;
+    private final MediaToolContextService mediaContext;
     private final PublicUrlValidator urlValidator;
     private final OkHttpClient client;
     private final long maxResponseBytes;
+    private final int maxRedirects;
+    private final int maxLinks;
+    private final String userAgent;
 
     @Autowired
     public WebFileTool(MediaStorageService storageService, ToolStatusService statusService,
+                       MediaToolContextService mediaContext,
                        PublicUrlValidator urlValidator,
-                       @Value("${web.max-response-bytes:2097152}") long maxResponseBytes) {
+                       @Value("${web.max-response-bytes:2097152}") long maxResponseBytes,
+                       @Value("${web.max-redirects:3}") int maxRedirects,
+                       @Value("${web.max-links:20}") int maxLinks,
+                       @Value("${web.connect-timeout-seconds:8}") long connectTimeoutSeconds,
+                       @Value("${web.read-timeout-seconds:20}") long readTimeoutSeconds,
+                       @Value("${web.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String userAgent) {
         this.storageService = storageService;
         this.statusService = statusService;
+        this.mediaContext = mediaContext;
         this.urlValidator = urlValidator;
-        this.maxResponseBytes = Math.max(1024, maxResponseBytes);
+        this.maxResponseBytes = bounded(maxResponseBytes, 1_024, Long.MAX_VALUE, DEFAULT_MAX_RESPONSE_BYTES);
+        this.maxRedirects = bounded(maxRedirects, 0, 10, DEFAULT_MAX_REDIRECTS);
+        this.maxLinks = bounded(maxLinks, 1, 100, DEFAULT_MAX_LINKS);
+        this.userAgent = userAgent == null || userAgent.isBlank() ? DEFAULT_USER_AGENT : userAgent.trim();
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(8))
-                .readTimeout(Duration.ofSeconds(20))
+                .connectTimeout(Duration.ofSeconds(bounded(connectTimeoutSeconds, 1, 300, DEFAULT_CONNECT_TIMEOUT_SECONDS)))
+                .readTimeout(Duration.ofSeconds(bounded(readTimeoutSeconds, 1, 600, DEFAULT_READ_TIMEOUT_SECONDS)))
                 .followRedirects(false)
                 .dns(urlValidator::lookupPublic)
                 .build();
@@ -53,17 +72,20 @@ public class WebFileTool {
 
     WebFileTool(MediaStorageService storageService, ToolStatusService statusService,
                 PublicUrlValidator urlValidator) {
-        this(storageService, statusService, urlValidator, DEFAULT_MAX_RESPONSE_BYTES);
+        this(storageService, statusService, new MediaToolContextService(), urlValidator, DEFAULT_MAX_RESPONSE_BYTES,
+                DEFAULT_MAX_REDIRECTS, DEFAULT_MAX_LINKS, DEFAULT_CONNECT_TIMEOUT_SECONDS,
+                DEFAULT_READ_TIMEOUT_SECONDS, DEFAULT_USER_AGENT);
     }
 
     @Tool(value = "列出公开网页中可直接下载的文件链接。仅当用户明确要求寻找或下载该网页的文件时调用。返回链接后，必须根据用户指定的文件调用 downloadWebFile；不得下载登录、付费、版权受限或用户未要求的内容。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String findDownloadableLinks(String pageUrl) {
         statusService.push("我正在查找网页里的可下载文件…");
         try {
             URI current = urlValidator.validate(pageUrl);
-            for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+            for (int redirects = 0; redirects <= maxRedirects; redirects++) {
                 Request request = new Request.Builder().url(current.toString())
-                        .header("User-Agent", "Mozilla/5.0 (compatible; WechatAgent/1.0)").get().build();
+                        .header("User-Agent", userAgent).get().build();
                 try (Response response = client.newCall(request).execute()) {
                     if (response.isRedirect()) {
                         String location = response.header("Location");
@@ -91,13 +113,17 @@ public class WebFileTool {
     }
 
     @Tool(value = "下载用户当前明确指定的公开文件 URL，并保存到该用户独立目录。fileName 应按文件内容命名，summary 应说明文件是什么。下载完成后如用户要求发送，再调用 sendDownloadedFile。不得下载或转发登录、付费、版权受限或用户未明确要求的内容。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    @com.liche.wechatagent.tool.NonIdempotentTool
     public String downloadWebFile(String url, String fileName, String summary) {
         statusService.push("我正在下载这个文件…");
         String userId = requireCurrentUser();
         return storageService.downloadFromWeb(userId, null, url, fileName, summary).message();
     }
 
-    @Tool(value = "将当前用户已下载或保存的本地文件发送到当前 QQ 对话。先用 listStoredMedia 找到 mediaId；仅当用户当前明确要求发送该文件时调用。不能发送其他用户文件。")
+    @Tool(value = "将当前用户已下载或保存的本地文件发送到当前消息通道。先用 listStoredMedia 找到 mediaId；仅当用户当前明确要求发送该文件时调用。不能发送其他用户文件。")
+    @ToolExecutionPolicy(ToolExecutionClass.EXTERNAL_ACTION)
+    @com.liche.wechatagent.tool.NonIdempotentTool
     public String sendDownloadedFile(Long mediaId) {
         statusService.push("我正在发送文件…");
         MediaStorageService.SendableMedia media = storageService.requireSendableMedia(requireCurrentUser(), mediaId);
@@ -105,6 +131,7 @@ public class WebFileTool {
         if (!sent) {
             throw new IllegalStateException("当前通道不支持发送文件，或 QQ 文件上传失败");
         }
+        mediaContext.recordSent(media.fileName());
         return "文件已发送：" + media.fileName();
     }
 
@@ -121,7 +148,7 @@ public class WebFileTool {
                 }
             } catch (IllegalArgumentException ignored) {
             }
-            if (links.size() >= MAX_LINKS) break;
+            if (links.size() >= maxLinks) break;
         }
         if (links.isEmpty()) return "没有发现可直接下载的公开文件链接。";
         StringBuilder result = new StringBuilder("发现以下可下载文件：\n");
@@ -169,9 +196,9 @@ public class WebFileTool {
 
     private boolean hasDownloadResponse(URI link, URI pageUrl) {
         URI current = link;
-        for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+        for (int redirects = 0; redirects <= maxRedirects; redirects++) {
             Request request = new Request.Builder().url(current.toString())
-                    .header("User-Agent", "Mozilla/5.0 (compatible; WechatAgent/1.0)")
+                    .header("User-Agent", userAgent)
                     .header("Referer", pageUrl.getScheme() + "://" + pageUrl.getHost() + "/")
                     .header("Range", "bytes=0-0")
                     .get().build();
@@ -197,5 +224,13 @@ public class WebFileTool {
         String userId = statusService.currentUserId();
         if (userId == null || userId.isBlank()) throw new IllegalStateException("当前用户上下文不存在");
         return userId;
+    }
+
+    private static int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
+    }
+
+    private static long bounded(long value, long minimum, long maximum, long fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

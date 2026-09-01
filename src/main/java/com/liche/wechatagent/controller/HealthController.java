@@ -2,6 +2,7 @@ package com.liche.wechatagent.controller;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
@@ -14,19 +15,32 @@ import java.util.Map;
 @RestController
 public class HealthController {
 
-    private static final ZoneId BEIJING = ZoneId.of("Asia/Shanghai");
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** JVM 启动时间（毫秒），用于前端确认当前实例是否为最新启动 */
     private final long startedAtMillis = ManagementFactory.getRuntimeMXBean().getStartTime();
+    private final ZoneId zone;
+
+    public HealthController(@Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        this.zone = parseZone(timeZoneId);
+    }
 
     @GetMapping("/api/health")
     public Map<String, Object> health() {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("status", "UP");
         map.put("startedAt", Instant.ofEpochMilli(startedAtMillis)
-                .atZone(BEIJING).format(FMT));
-        map.put("time", LocalDateTime.now().toString());
+                .atZone(zone).format(FMT));
+        map.put("time", LocalDateTime.now(zone).format(FMT));
         return map;
+    }
+
+    private ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return DEFAULT_ZONE;
+        }
     }
 }

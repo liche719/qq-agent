@@ -2,7 +2,9 @@ package com.liche.wechatagent.agent;
 
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
 import com.liche.wechatagent.memory.CoreMemoryService;
+import com.liche.wechatagent.config.MemoryPolicyProperties;
 import com.liche.wechatagent.memory.MemoryProvenance;
+import com.liche.wechatagent.memory.MemoryRetrievalService;
 import com.liche.wechatagent.memory.UserWorkMemory;
 import com.liche.wechatagent.memory.UserWorkMemoryRepository;
 import com.liche.wechatagent.memory.WorkMemoryService;
@@ -27,7 +29,7 @@ import java.util.function.Function;
  * 记忆加载规则（每次对话自动执行）：
  * 1. 核心记忆按相关性和最近确认时间在固定预算内加载；
  * 2. 中期工作记忆按「优先级 > 时间倒序」最多 15 条、总字符 ≤1500，超出截断老旧次要内容；
- * 3. 即时对话上下文由编排器拼接。
+ * 3. Redis 窗口之外的历史证据由持久化检索服务按当前问题补充；即时上下文由编排器拼接。
  */
 @Component
 public class MemoryLoader {
@@ -38,42 +40,109 @@ public class MemoryLoader {
     private final UserCoreMemoryRepository coreRepository;
     private final UserWorkMemoryRepository workRepository;
     private final StoredMediaRepository storedMediaRepository;
+    private final MemoryRetrievalService retrievalService;
     private final int workMaxLoad;
     private final int workMaxChars;
     private final int coreMaxLoad;
     private final int coreMaxChars;
     private final int usageTouchIntervalMinutes;
+    private final int linkedMediaMaxPerMemory;
+    private final int linkedMediaSummaryMaxChars;
 
     @Autowired
     public MemoryLoader(UserCoreMemoryRepository coreRepository,
                         UserWorkMemoryRepository workRepository,
                         StoredMediaRepository storedMediaRepository,
+                        MemoryRetrievalService retrievalService,
+                        MemoryPolicyProperties policyProperties,
                         @Value("${memory.work-max-load:15}") int workMaxLoad,
                         @Value("${memory.work-max-chars:1500}") int workMaxChars,
                         @Value("${memory.core-max-load:16}") int coreMaxLoad,
                         @Value("${memory.core-max-chars:2200}") int coreMaxChars,
                         @Value("${memory.usage-touch-interval-minutes:15}") int usageTouchIntervalMinutes) {
+        this(coreRepository, workRepository, storedMediaRepository, retrievalService, policyProperties,
+                workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
+    }
+
+    private MemoryLoader(UserCoreMemoryRepository coreRepository,
+                         UserWorkMemoryRepository workRepository,
+                         StoredMediaRepository storedMediaRepository,
+                         MemoryRetrievalService retrievalService,
+                         MemoryPolicyProperties policyProperties,
+                         int workMaxLoad,
+                         int workMaxChars,
+                         int coreMaxLoad,
+                         int coreMaxChars,
+                         int usageTouchIntervalMinutes,
+                         boolean compatibilityMarker) {
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
         this.storedMediaRepository = storedMediaRepository;
+        this.retrievalService = retrievalService;
         this.workMaxLoad = Math.max(1, workMaxLoad);
         this.workMaxChars = Math.max(1, workMaxChars);
         this.coreMaxLoad = Math.max(1, coreMaxLoad);
         this.coreMaxChars = Math.max(1, coreMaxChars);
         this.usageTouchIntervalMinutes = Math.max(1, usageTouchIntervalMinutes);
+        MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
+        this.linkedMediaMaxPerMemory = bounded(policies.getLinkedMediaMaxPerMemory(), 1, 32,
+                MemoryPolicyProperties.DEFAULT_LINKED_MEDIA_MAX_PER_MEMORY);
+        this.linkedMediaSummaryMaxChars = bounded(policies.getLinkedMediaSummaryMaxChars(), 16, 2_000,
+                MemoryPolicyProperties.DEFAULT_LINKED_MEDIA_SUMMARY_MAX_CHARS);
+    }
+
+    /**
+     * Compatibility constructor for callers created before durable retrieval was introduced.
+     * Spring uses the constructor above; tests and integrations can still use the old signature.
+     */
+    public MemoryLoader(UserCoreMemoryRepository coreRepository,
+                        UserWorkMemoryRepository workRepository,
+                        StoredMediaRepository storedMediaRepository,
+                        MemoryRetrievalService retrievalService,
+                        int workMaxLoad,
+                        int workMaxChars,
+                        int coreMaxLoad,
+                        int coreMaxChars,
+                        int usageTouchIntervalMinutes) {
+        this(coreRepository, workRepository, storedMediaRepository, retrievalService, new MemoryPolicyProperties(),
+                workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
+    }
+
+    public MemoryLoader(UserCoreMemoryRepository coreRepository,
+                        UserWorkMemoryRepository workRepository,
+                        StoredMediaRepository storedMediaRepository,
+                        int workMaxLoad,
+                        int workMaxChars,
+                        int coreMaxLoad,
+                        int coreMaxChars,
+                        int usageTouchIntervalMinutes) {
+        this(coreRepository, workRepository, storedMediaRepository, null, new MemoryPolicyProperties(),
+                workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
     }
 
     MemoryLoader(UserCoreMemoryRepository coreRepository,
                  UserWorkMemoryRepository workRepository,
                  int workMaxLoad,
                  int workMaxChars) {
-        this(coreRepository, workRepository, null, workMaxLoad, workMaxChars, 16, 2200, 15);
+        this(coreRepository, workRepository, null, null, new MemoryPolicyProperties(),
+                workMaxLoad, workMaxChars, 16, 2200, 15, true);
     }
 
     @Transactional
     public LoadedMemory load(String userId, String query) {
+        if (retrievalService != null) {
+            MemoryRetrievalService.RetrievedMemory retrieved = retrievalService.retrieve(userId, query,
+                    coreMaxLoad, coreMaxChars, workMaxLoad, workMaxChars, usageTouchIntervalMinutes);
+            return new LoadedMemory(retrieved.coreSection(), retrieved.workSection());
+        }
+        return loadFromRepositories(userId, query);
+    }
+
+    // Loads and ranks memories directly when durable retrieval is unavailable.
+    private LoadedMemory loadFromRepositories(String userId, String query) {
         LocalDateTime now = LocalDateTime.now();
         List<com.liche.wechatagent.memory.UserCoreMemory> cores = new ArrayList<>(coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
+                .filter(memory -> userId != null && userId.equals(memory.getUserId()))
                 .filter(CoreMemoryService::isActive)
                 .toList());
         cores.sort(Comparator.comparingInt((com.liche.wechatagent.memory.UserCoreMemory memory) ->
@@ -86,6 +155,7 @@ public class MemoryLoader {
                 com.liche.wechatagent.memory.UserCoreMemory::getContent, coreMaxLoad, coreMaxChars);
 
         List<UserWorkMemory> active = new ArrayList<>(workRepository.findByUserIdAndArchivedFalse(userId).stream()
+                .filter(memory -> userId != null && userId.equals(memory.getUserId()))
                 .filter(memory -> WorkMemoryService.isActive(memory, now))
                 .toList());
         active.sort(Comparator.comparingInt((UserWorkMemory memory) -> relevance(memory.getContent(), query)).reversed()
@@ -146,6 +216,7 @@ public class MemoryLoader {
         }
         Map<Long, StoredMedia> result = new HashMap<>();
         storedMediaRepository.findByUserIdAndIdInAndStatus(userId, List.copyOf(ids), StoredMedia.ACTIVE)
+                .stream().filter(media -> userId != null && userId.equals(media.getUserId()))
                 .forEach(media -> result.put(media.getId(), media));
         return result;
     }
@@ -154,7 +225,7 @@ public class MemoryLoader {
         List<String> labels = mediaIds(sourceMediaIds).stream()
                 .map(mediaById::get)
                 .filter(media -> media != null)
-                .limit(3)
+                .limit(linkedMediaMaxPerMemory)
                 .map(this::mediaLabel)
                 .toList();
         return labels.isEmpty() ? "" : "（关联资料：" + String.join("；", labels) + "）";
@@ -162,8 +233,8 @@ public class MemoryLoader {
 
     private String mediaLabel(StoredMedia media) {
         String summary = media.getSummary() == null ? "" : media.getSummary().trim();
-        if (summary.length() > 80) {
-            summary = summary.substring(0, 80) + "…";
+        if (summary.length() > linkedMediaSummaryMaxChars) {
+            summary = summary.substring(0, linkedMediaSummaryMaxChars) + "…";
         }
         return "#" + media.getId() + " " + media.getFileName()
                 + (summary.isBlank() ? "" : "：" + summary);
@@ -211,5 +282,9 @@ public class MemoryLoader {
             }
         }
         return score;
+    }
+
+    private int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

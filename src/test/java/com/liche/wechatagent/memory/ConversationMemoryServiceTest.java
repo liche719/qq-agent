@@ -1,0 +1,132 @@
+package com.liche.wechatagent.memory;
+
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Pageable;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class ConversationMemoryServiceTest {
+
+    @Test
+    void persistsEvidenceWithUserScopeAndRetentionDeadline() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        when(repository.existsByUserIdAndEventKey("u1", "event-1")).thenReturn(false);
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 30, 500);
+        LocalDateTime created = LocalDateTime.of(2026, 9, 1, 10, 0);
+
+        service.record("u1", "user", "event-1", "我要考南京理工大学研究生",
+                List.of("message-1"), created);
+
+        ArgumentCaptor<ConversationMemory> saved = ArgumentCaptor.forClass(ConversationMemory.class);
+        verify(repository).save(saved.capture());
+        assertEquals("u1", saved.getValue().getUserId());
+        assertEquals("user", saved.getValue().getRole());
+        assertEquals(List.of("message-1"), saved.getValue().sourceMessageIdList());
+        assertEquals(created.plusDays(30), saved.getValue().getExpiresAt());
+    }
+
+    @Test
+    void retrievesOnlyCurrentUserEvidenceAndKeepsChronologicalExtractionOrder() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory newest = new ConversationMemory("u1", "assistant", "e2", "回复",
+                List.of("m2"), LocalDateTime.of(2026, 9, 1, 10, 2), null);
+        ConversationMemory oldest = new ConversationMemory("u1", "user", "e1", "用户陈述",
+                List.of("m1"), LocalDateTime.of(2026, 9, 1, 10, 1), null);
+        ConversationMemory foreign = new ConversationMemory("u2", "user", "e3", "其他用户",
+                List.of("m3"), LocalDateTime.of(2026, 9, 1, 10, 3), null);
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class)))
+                .thenReturn(List.of(newest, foreign, oldest));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        var turns = service.recentForExtraction("u1", 20);
+
+        assertEquals(List.of("用户陈述", "回复"), turns.stream().map(turn -> turn.text()).toList());
+        assertTrue(turns.stream().allMatch(turn -> !turn.text().contains("其他用户")));
+    }
+
+    @Test
+    void forgetsLegacyEvidenceByContentWithoutTouchingAnotherUser() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory owned = new ConversationMemory("u1", "user", "e1",
+                "我要考南京理工大学研究生", List.of(), LocalDateTime.now(), null);
+        owned.setId(1L);
+        ConversationMemory foreign = new ConversationMemory("u2", "user", "e2",
+                "我要考南京理工大学研究生", List.of(), LocalDateTime.now(), null);
+        foreign.setId(2L);
+        when(repository.findByUserIdAndIdGreaterThanOrderByIdAsc(eq("u1"), eq(0L), any(Pageable.class)))
+                .thenReturn(List.of(owned, foreign));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        assertEquals(1, service.forgetContent("u1", "用户的长期目标是考南京理工大学研究生"));
+        verify(repository).deleteAll(List.of(owned));
+    }
+
+    @Test
+    void forgetsEvidenceByMessageIdWithoutLoadingAnotherUsersEntireHistory() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory matching = new ConversationMemory("u1", "user", "e1", "用户的私密信息",
+                List.of("m-1"), LocalDateTime.now(), null);
+        matching.setId(1L);
+        ConversationMemory unrelated = new ConversationMemory("u1", "assistant", "e2", "普通回复",
+                List.of("m-2"), LocalDateTime.now(), null);
+        unrelated.setId(2L);
+        when(repository.findByUserIdAndIdGreaterThanOrderByIdAsc(eq("u1"), eq(0L), any(Pageable.class)))
+                .thenReturn(List.of(matching, unrelated));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        assertEquals(1, service.forgetSourceMessageIds("u1", List.of("m-1")));
+
+        verify(repository).deleteAll(List.of(matching));
+    }
+
+    @Test
+    void recallsAnOlderMatchingEvidenceOutsideTheRecentWindow() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory recent = new ConversationMemory("u1", "user", "recent", "最近的普通聊天",
+                List.of("recent-message"), LocalDateTime.now(), null);
+        ConversationMemory olderMatch = new ConversationMemory("u1", "user", "old", "我计划考南京理工大学研究生",
+                List.of("old-message"), LocalDateTime.now().minusMonths(8), null);
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class))).thenReturn(List.of(recent));
+        when(repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(eq("u1"), eq("南京理工"), any(Pageable.class)))
+                .thenReturn(List.of(olderMatch));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        List<ConversationMemory> result = service.relevantForRetrieval("u1", "南京理工");
+
+        assertTrue(result.stream().anyMatch(item -> "old".equals(item.getEventKey())));
+    }
+
+    @Test
+    void neverIncludesForeignMatchesReturnedByRepository() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory foreign = new ConversationMemory("u2", "user", "foreign", "南京理工大学计划",
+                List.of("other-message"), LocalDateTime.now(), null);
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class))).thenReturn(List.of());
+        when(repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(eq("u1"), eq("南京理工"), any(Pageable.class)))
+                .thenReturn(List.of(foreign));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        assertTrue(service.relevantForRetrieval("u1", "南京理工").isEmpty());
+    }
+
+    @Test
+    void purgesExpiredEvidenceWithOneBoundedDatabaseOperation() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        when(repository.deleteExpiredBefore(any(LocalDateTime.class))).thenReturn(3);
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 30, 500);
+
+        assertEquals(3, service.purgeExpired());
+
+        verify(repository).deleteExpiredBefore(any(LocalDateTime.class));
+    }
+}

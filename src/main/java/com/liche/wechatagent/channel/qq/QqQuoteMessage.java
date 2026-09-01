@@ -50,7 +50,9 @@ record QqQuoteMessage(String messageId, String content, List<String> imageUrls, 
      */
     private static QqQuoteMessage fromMessageElements(JsonNode event) {
         JsonNode elements = event.path("msg_elements");
-        if (!elements.isArray() || elements.isEmpty()) return new QqQuoteMessage("", "", List.of(), List.of());
+        if (!elements.isArray() || elements.isEmpty() || !isQuoteElementPayload(event, elements)) {
+            return new QqQuoteMessage("", "", List.of(), List.of());
+        }
 
         List<String> contentParts = new ArrayList<>();
         List<String> images = new ArrayList<>();
@@ -59,6 +61,55 @@ record QqQuoteMessage(String messageId, String content, List<String> imageUrls, 
             collectElementContent(element, contentParts, images, files);
         }
         return new QqQuoteMessage(referenceMessageIndex(event), String.join("\n", contentParts), List.copyOf(images), List.copyOf(files));
+    }
+
+    /**
+     * QQ includes msg_elements on ordinary messages as well.  Treating every
+     * element as a quote makes an old image/file leak into the next task.  Only
+     * the protocol's explicit quote marker (message_type=103, a ref_msg_idx,
+     * or an element-level equivalent) is allowed to enter this parser.
+     */
+    private static boolean isQuoteElementPayload(JsonNode event, JsonNode elements) {
+        if (isQuoteType(event) || !referenceMessageIndex(event).isBlank()) {
+            return true;
+        }
+        return containsQuoteType(elements, 0);
+    }
+
+    private static boolean containsQuoteType(JsonNode node, int depth) {
+        if (node == null || node.isMissingNode() || node.isNull() || depth > 6) {
+            return false;
+        }
+        if (isQuoteType(node)) {
+            return true;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                if (containsQuoteType(child, depth + 1)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                if (containsQuoteType(fields.next().getValue(), depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isQuoteType(JsonNode node) {
+        for (String name : List.of("message_type", "messageType", "msg_type", "msgType")) {
+            JsonNode value = node.path(name);
+            if (!value.isMissingNode() && !value.isNull() && "103".equals(value.asText(""))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void collectElementContent(JsonNode element, List<String> contentParts, List<String> images, List<InboundAttachment> files) {
@@ -99,6 +150,43 @@ record QqQuoteMessage(String messageId, String content, List<String> imageUrls, 
         for (JsonNode extension : event.path("message_scene").path("ext")) {
             String value = extension.asText("");
             if (value.startsWith("ref_msg_idx=")) return value.substring("ref_msg_idx=".length());
+        }
+        String direct = firstText(event, "ref_msg_idx", "refMsgIdx", "reference_message_id", "referenceMessageId");
+        if (!direct.isBlank()) {
+            return direct;
+        }
+        String nested = quoteElementIndex(event.path("msg_elements"), 0);
+        if (!nested.isBlank()) {
+            return nested;
+        }
+        return "";
+    }
+
+    private static String quoteElementIndex(JsonNode node, int depth) {
+        if (node == null || node.isMissingNode() || node.isNull() || depth > 6) {
+            return "";
+        }
+        if (node.isObject()) {
+            if (isQuoteType(node)) {
+                String value = firstText(node, "msg_idx", "message_id", "messageId", "id");
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                String value = quoteElementIndex(fields.next().getValue(), depth + 1);
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                String value = quoteElementIndex(child, depth + 1);
+                if (!value.isBlank()) {
+                    return value;
+                }
+            }
         }
         return "";
     }

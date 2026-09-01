@@ -52,6 +52,17 @@ class AgentLoopTest {
     }
 
     @Test
+    void acceptsConfiguredDisplayNamesForAdditionalDeployments() {
+        Set<String> tools = new LinkedHashSet<>();
+        tools.add("searchWeb");
+        tools.add("customTool");
+        Map<String, String> labels = Map.of("searchWeb", "联网检索", "customTool", "自定义动作");
+
+        assertEquals("已处理。\n\n> _调用工具：联网检索、自定义动作_",
+                AgentLoop.appendToolFooter("已处理。", tools, labels));
+    }
+
+    @Test
     void appendsFailureReasonAfterAutomaticRetry() {
         Map<String, ToolExecutionOutcome> failures = new LinkedHashMap<>();
         failures.put("readWebPage", ToolExecutionOutcome.failure("网页内容超过安全读取上限", 2));
@@ -67,14 +78,21 @@ class AgentLoopTest {
         tools.add("searchWeb");
         String reply = "我找到了官方公告。\n\n**工具调用说明**\n- 调用了搜索工具\n- 已读取结果";
 
-        assertEquals("我找到了官方公告。", AgentLoop.stripModelToolDisclosure(reply, tools));
+        assertEquals("我找到了官方公告。", AgentLoop.stripModelToolDisclosure(reply));
     }
 
     @Test
-    void keepsToolExplanationWhenNoToolActuallySucceeded() {
+    void removesModelGeneratedToolDisclosureEvenWhenNoToolActuallySucceeded() {
         String reply = "工具调用说明：这是一段概念介绍。";
 
-        assertEquals(reply, AgentLoop.stripModelToolDisclosure(reply, Set.of()));
+        assertEquals("", AgentLoop.stripModelToolDisclosure(reply));
+    }
+
+    @Test
+    void removesMarkdownToolFooterGeneratedByTheModel() {
+        String reply = "我先看看。\n\n> _调用工具：查询提醒_";
+
+        assertEquals("我先看看。", AgentLoop.stripModelToolDisclosure(reply));
     }
 
     @Test

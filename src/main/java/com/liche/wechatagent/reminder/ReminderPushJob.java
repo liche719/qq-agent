@@ -3,14 +3,22 @@ package com.liche.wechatagent.reminder;
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
 import com.liche.wechatagent.log.UserScope;
+import com.liche.wechatagent.user.UserProfile;
+import com.liche.wechatagent.user.UserProfileRepository;
 import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
+import org.quartz.CronExpression;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
 
+import java.text.ParseException;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Date;
 import java.util.Map;
 
 /**
@@ -19,6 +27,9 @@ import java.util.Map;
  */
 @Component
 public class ReminderPushJob extends QuartzJobBean {
+
+    private static final Logger log = LoggerFactory.getLogger(ReminderPushJob.class);
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
 
     @Autowired
     private ReminderTaskRepository repository;
@@ -32,6 +43,15 @@ public class ReminderPushJob extends QuartzJobBean {
     @Autowired
     private UserLogService userLogService;
 
+    @Autowired
+    private UserProfileRepository userProfileRepository;
+
+    @org.springframework.beans.factory.annotation.Value("${app.time-zone:Asia/Shanghai}")
+    private String timeZoneId;
+
+    @org.springframework.beans.factory.annotation.Value("${reminder.misfire-grace-seconds:60}")
+    private long misfireGraceSeconds;
+
     @Override
     protected void executeInternal(JobExecutionContext context) {
         JobDataMap data = context.getMergedJobDataMap();
@@ -42,27 +62,36 @@ public class ReminderPushJob extends QuartzJobBean {
         if (task == null || !ReminderTask.STATUS_PENDING.equals(task.getStatus())) {
             return;
         }
+        if (task.getTriggerAt() == null) {
+            return;
+        }
+        if ("ON_TIME".equals(mode) && isStaleOneShot(context, task)) {
+            task.setStatus(ReminderTask.STATUS_EXPIRED);
+            task.setUpdatedAt(LocalDateTime.now(zone()));
+            repository.save(task);
+            userLogService.record(task.getUserId(), "REMINDER_EXPIRED", Map.of("reminderId", reminderId));
+            return;
+        }
+        if ("PREWARM".equals(mode) && !hasCron(task)
+                && (!task.getTriggerAt().isAfter(LocalDateTime.now(zone())) || isLateMisfire(context))) {
+            return;
+        }
         MDC.put("userScope", UserScope.forUser(task.getUserId()));
         try {
             String text = "PREWARM".equals(mode) ? textService.prewarm(task) : textService.onTime(task);
-            // 按用户归属通道发送（微信或 QQ）
-            boolean sent = false;
-            for (WeChatChannel c : channels) {
-                String botId = c.botIdForUser(task.getUserId());
-                if (botId != null) {
-                    c.sendTextFrom(botId, task.getUserId(), text);
-                    sent = true;
-                    break;
-                }
-            }
-            if (!sent && !channels.isEmpty()) {
-                channels.get(0).sendTextFrom(null, task.getUserId(), text);
+            boolean sent = sendToRecordedDelivery(task, text);
+            if (!sent) {
+                log.warn("提醒推送未被通道接受 reminderId={} user={}", reminderId, task.getUserId());
+                return;
             }
 
-            // 一次性提醒：准时推送后标记完成；重复提醒由 Quartz Cron 继续触发
-            if ("ON_TIME".equals(mode) && (task.getCron() == null || task.getCron().isBlank())) {
-                task.setStatus(ReminderTask.STATUS_COMPLETED);
-                task.setUpdatedAt(LocalDateTime.now());
+            if ("ON_TIME".equals(mode)) {
+                if (task.getCron() == null || task.getCron().isBlank()) {
+                    task.setStatus(ReminderTask.STATUS_COMPLETED);
+                } else {
+                    updateNextRecurringTime(task);
+                }
+                task.setUpdatedAt(LocalDateTime.now(zone()));
                 repository.save(task);
             }
             userLogService.record(task.getUserId(), "REMINDER_PUSH",
@@ -70,5 +99,88 @@ public class ReminderPushJob extends QuartzJobBean {
         } finally {
             MDC.remove("userScope");
         }
+    }
+
+    private boolean send(WeChatChannel channel, String botId, String userId, String text) {
+        if (channel.hasReliableSendStatus()) {
+            return channel.sendTextResultFrom(botId, userId, text);
+        }
+        channel.sendTextFrom(botId, userId, text);
+        return true;
+    }
+
+    /**
+     * A reminder is an unsolicited message, so it must use the channel and bot
+     * recorded from the user's own inbound message.  Guessing with the first
+     * available channel can deliver a private reminder to the wrong platform.
+     */
+    private boolean sendToRecordedDelivery(ReminderTask task, String text) {
+        UserProfile profile = userProfileRepository.findById(task.getUserId()).orElse(null);
+        if (profile == null || profile.getLastChannel() == null || profile.getLastChannel().isBlank()) {
+            log.warn("提醒缺少明确投递通道，保留待执行 reminderId={} user={}", task.getId(), task.getUserId());
+            return false;
+        }
+        for (WeChatChannel channel : channels) {
+            if (profile.getLastChannel().equals(channel.channel())) {
+                return send(channel, profile.getLastBotId(), task.getUserId(), text);
+            }
+        }
+        log.warn("提醒投递通道不可用，保留待执行 reminderId={} user={} channel={}",
+                task.getId(), task.getUserId(), profile.getLastChannel());
+        return false;
+    }
+
+    private boolean hasCron(ReminderTask task) {
+        return task.getCron() != null && !task.getCron().isBlank();
+    }
+
+    private boolean isStaleOneShot(JobExecutionContext context, ReminderTask task) {
+        if (hasCron(task)) {
+            return false;
+        }
+        Date scheduled = context.getScheduledFireTime();
+        Date fired = context.getFireTime();
+        if (scheduled != null && fired != null) {
+            return fired.getTime() - scheduled.getTime() > misfireGraceSeconds() * 1_000L;
+        }
+        return !task.getTriggerAt().plusSeconds(misfireGraceSeconds())
+                .isAfter(LocalDateTime.now(zone()));
+    }
+
+    private boolean isLateMisfire(JobExecutionContext context) {
+        Date scheduled = context.getScheduledFireTime();
+        Date fired = context.getFireTime();
+        return scheduled != null && fired != null
+                && fired.getTime() - scheduled.getTime() > misfireGraceSeconds() * 1_000L;
+    }
+
+    private void updateNextRecurringTime(ReminderTask task) {
+        try {
+            String cron = task.getCron().trim();
+            if (cron.split("\\s+").length < 6) {
+                cron = "0 " + cron;
+            }
+            CronExpression expression = new CronExpression(cron);
+            ZoneId zone = zone();
+            Date next = expression.getNextValidTimeAfter(Date.from(LocalDateTime.now(zone)
+                    .atZone(zone).toInstant()));
+            if (next != null) {
+                task.setTriggerAt(LocalDateTime.ofInstant(next.toInstant(), zone));
+            }
+        } catch (ParseException | RuntimeException exception) {
+            // 保留当前触发时间；Quartz 仍按自身 Cron 继续调度。
+        }
+    }
+
+    private ZoneId zone() {
+        try {
+            return ZoneId.of(timeZoneId);
+        } catch (RuntimeException ignored) {
+            return DEFAULT_ZONE;
+        }
+    }
+
+    private long misfireGraceSeconds() {
+        return Math.max(0, Math.min(3_600, misfireGraceSeconds));
     }
 }

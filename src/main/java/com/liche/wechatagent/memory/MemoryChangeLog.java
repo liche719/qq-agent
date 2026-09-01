@@ -28,7 +28,7 @@ public class MemoryChangeLog {
     @Column(length = 128)
     private String userId;
 
-    /** ADD / UPDATE / ARCHIVE / ARCHIVE_CREATE / CONFIRM_REJECT */
+    /** ADD / UPDATE / SUPERSEDE / ARCHIVE / ARCHIVE_CREATE / CONFIRM_REJECT */
     @Column(length = 32)
     private String action;
 

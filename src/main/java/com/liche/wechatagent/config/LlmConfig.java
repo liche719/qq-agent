@@ -15,8 +15,10 @@ public class LlmConfig {
                                @Value("${llm.api-key}") String apiKey,
                                @Value("${llm.model}") String model,
                                @Value("${llm.temperature:0.7}") double temperature,
-                               @Value("${llm.timeout-seconds:60}") int timeoutSeconds) {
-        return new OpenAiCompatChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds);
+                               @Value("${llm.timeout-seconds:60}") int timeoutSeconds,
+                               @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds) {
+        return new OpenAiCompatChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds,
+                connectTimeoutSeconds);
     }
 
     /** 流式模型：对话回复（打字机效果） */
@@ -25,7 +27,9 @@ public class LlmConfig {
                                                  @Value("${llm.api-key}") String apiKey,
                                                  @Value("${llm.model}") String model,
                                                  @Value("${llm.temperature:0.7}") double temperature,
-                                                 @Value("${llm.timeout-seconds:60}") int timeoutSeconds) {
-        return new OpenAiCompatStreamingChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds);
+                                                 @Value("${llm.timeout-seconds:60}") int timeoutSeconds,
+                                                 @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds) {
+        return new OpenAiCompatStreamingChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds,
+                connectTimeoutSeconds);
     }
 }

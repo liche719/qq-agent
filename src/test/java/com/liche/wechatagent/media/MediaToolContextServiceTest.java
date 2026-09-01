@@ -23,7 +23,7 @@ class MediaToolContextServiceTest {
         assertEquals("image-1.png", context.requireCandidate(1).originalName());
         assertEquals("image-1.png", context.requireCandidate(0).originalName());
         assertEquals("周一 Python", context.requireCandidate(2).extractedText());
-        assertTrue(context.promptSection().contains("表情包"));
+        assertTrue(context.promptSection().contains("用途不明"));
         assertTrue(context.completionNotice().contains("只用于当前对话"));
         context.recordSaved(1, "第1周课表.jpg", false, false);
         assertTrue(context.hasSavedCandidate(1));

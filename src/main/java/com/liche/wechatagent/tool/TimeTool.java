@@ -15,10 +15,27 @@ import java.time.format.DateTimeFormatter;
 public class TimeTool {
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm");
+    private final ZoneId zone;
+
+    public TimeTool(@org.springframework.beans.factory.annotation.Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        this.zone = parseZone(timeZoneId);
+    }
+
+    TimeTool() {
+        this("Asia/Shanghai");
+    }
 
     @Tool("获取当前准确的日期、星期和具体时间（含时区），需要时间信息时调用")
     public String getCurrentTime() {
-        LocalDateTime now = LocalDateTime.now(ZoneId.systemDefault());
+        LocalDateTime now = LocalDateTime.now(zone);
         return "当前时间：" + now.format(FMT);
+    }
+
+    private ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return ZoneId.systemDefault();
+        }
     }
 }

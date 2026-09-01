@@ -19,17 +19,24 @@ import java.util.List;
 /** 非流式 OpenAI 兼容 ChatModel（供记忆提取/提醒解析等一次性 LLM 调用使用） */
 public class OpenAiCompatChatModel implements ChatModel {
 
+    private static final int DEFAULT_CONNECT_TIMEOUT_SECONDS = 5;
+
     private final RestClient restClient;
     private final String model;
     private final double temperature;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature, int timeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS);
+    }
+
+    public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature,
+                                 int timeoutSeconds, int connectTimeoutSeconds) {
         this.model = model;
         this.temperature = temperature;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setReadTimeout(Duration.ofSeconds(timeoutSeconds));
+        factory.setConnectTimeout(Duration.ofSeconds(Math.max(1, Math.min(300, connectTimeoutSeconds))));
+        factory.setReadTimeout(Duration.ofSeconds(Math.max(1, Math.min(600, timeoutSeconds))));
         RestClient.Builder builder = RestClient.builder().baseUrl(baseUrl).requestFactory(factory);
         if (apiKey != null && !apiKey.isBlank()) {
             builder = builder.defaultHeader("Authorization", "Bearer " + apiKey);

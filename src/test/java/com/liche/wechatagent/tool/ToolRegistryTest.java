@@ -58,6 +58,25 @@ class ToolRegistryTest {
         assertEquals(0, tool.calls.get());
     }
 
+    @Test
+    void treatsBusinessNotCompletedAsFailureWithoutClaimingSuccess() {
+        IncompleteTool tool = new IncompleteTool();
+        ToolRegistry registry = new ToolRegistry(List.of(tool), 1);
+        ToolExecutionRequest request = ToolExecutionRequest.builder()
+                .id("call-2")
+                .name("create")
+                .arguments("{}")
+                .build();
+
+        ToolExecutionOutcome outcome = registry.execute(request, "user-a");
+
+        assertFalse(outcome.successful());
+        assertEquals(1, outcome.attempts());
+        assertEquals(1, tool.calls.get());
+        assertEquals("还缺具体时间", outcome.failureReason());
+        assertTrue(outcome.content().contains("工具执行失败"));
+    }
+
     private ToolExecutionRequest request() {
         return ToolExecutionRequest.builder()
                 .id("call-1")
@@ -81,6 +100,16 @@ class ToolRegistryTest {
                 throw new IllegalStateException(current == 1 ? "第一次失败" : "外部服务拒绝请求");
             }
             return "第二次成功：" + value;
+        }
+    }
+
+    static class IncompleteTool {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Tool(name = "create", value = "创建测试任务")
+        public ToolBusinessResult create() {
+            calls.incrementAndGet();
+            return ToolBusinessResult.failure("还缺具体时间");
         }
     }
 }

@@ -18,11 +18,32 @@ public interface WeChatChannel {
     }
 
     /**
+     * Sends text and reports whether the channel accepted the request.  The
+     * legacy void method remains for channel implementations that cannot expose
+     * transport status.
+     */
+    default boolean sendTextResultFrom(String botId, String userId, String text) {
+        sendTextFrom(botId, userId, text);
+        return true;
+    }
+
+    /** Whether the channel can distinguish transport failure from acceptance. */
+    default boolean hasReliableSendStatus() {
+        return false;
+    }
+
+    /**
      * 回复指定的一条入站消息。支持引用回复的通道必须使用 replyToMsgId，避免同一用户连续发消息时
      * 把较早请求的结果错误挂到最新消息上；不支持的通道可退化为普通发送。
      */
     default void sendTextReplyFrom(String botId, String userId, String replyToMsgId, String text) {
         sendTextFrom(botId, userId, text);
+    }
+
+    /** Reply variant that reports transport acceptance when the channel supports it. */
+    default boolean sendTextReplyResultFrom(String botId, String userId, String replyToMsgId, String text) {
+        sendTextReplyFrom(botId, userId, replyToMsgId, text);
+        return true;
     }
 
     default boolean sendMediaReplyFrom(String botId, String userId, String replyToMsgId, OutboundMedia media) {
@@ -32,6 +53,11 @@ public interface WeChatChannel {
     /** 该通道是否负责给此用户发消息（返回 botId；不属于本通道返回 null） */
     default String botIdForUser(String userId) {
         return null;
+    }
+
+    /** Whether this channel may deliver unsolicited care messages to the conversation. */
+    default boolean supportsProactiveCare(String userId) {
+        return true;
     }
 
     /**

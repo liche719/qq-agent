@@ -1,6 +1,7 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.agent.AgentOrchestrator;
+import com.liche.wechatagent.channel.InboundAttachment;
 import com.liche.wechatagent.channel.InboundMessage;
 import com.liche.wechatagent.channel.OutboundMessage;
 import com.liche.wechatagent.channel.SimulatorChannel;
@@ -75,6 +76,28 @@ public class SimulatorController {
         return result;
     }
 
+    /** Sends an asynchronous QQ-shaped message, including media and quoted content. */
+    @PostMapping("/qq/send")
+    public Map<String, Object> sendQq(@RequestBody Map<String, Object> body) {
+        String userId = textValue(body, "userId");
+        String content = textValue(body, "content");
+        String msgId = body.containsKey("msgId") ? textValue(body, "msgId") : UUID.randomUUID().toString();
+        List<String> images = stringList(body.get("images"));
+        List<InboundAttachment> attachments = attachments(body.get("attachments"));
+        if (userId.isBlank()) {
+            throw new BizException("userId 不能为空");
+        }
+        if (content.isBlank() && images.isEmpty() && attachments.isEmpty()) {
+            throw new BizException("content、images、attachments 至少提供一项");
+        }
+        InboundMessage message = InboundMessage.textWithQuote(msgId, userId, content, "qq-simulator", "simulator",
+                images, attachments, textValue(body, "quotedContent"),
+                stringList(body.get("quotedImages")), attachments(body.get("quotedAttachments")));
+        orchestrator.onInbound(message);
+        return Map.of("accepted", true, "userId", userId, "msgId", msgId,
+                "poll", "/api/sim/replies?userId=" + userId);
+    }
+
     @GetMapping("/replies")
     public List<OutboundMessage> replies(@RequestParam String userId,
                                          @RequestParam(defaultValue = "50") int limit) {
@@ -97,5 +120,29 @@ public class SimulatorController {
     public Map<String, String> archive(@RequestParam String userId) {
         archiveService.compressIfNeeded(userId);
         return Map.of("status", "done");
+    }
+
+    private String textValue(Map<String, Object> body, String key) {
+        Object value = body.get(key);
+        return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream().filter(item -> item != null).map(String::valueOf)
+                .map(String::trim).filter(item -> !item.isBlank()).toList();
+    }
+
+    private List<InboundAttachment> attachments(Object value) {
+        if (!(value instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                .map(item -> new InboundAttachment(String.valueOf(item.getOrDefault("name", "附件")),
+                        String.valueOf(item.getOrDefault("contentType", "application/octet-stream")),
+                        String.valueOf(item.getOrDefault("url", ""))))
+                .filter(item -> !item.url().isBlank()).toList();
     }
 }

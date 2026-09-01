@@ -2,6 +2,8 @@ package com.liche.wechatagent.tool;
 
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.channel.OutboundMedia;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -30,10 +32,18 @@ public class ToolStatusService {
     }
 
     private final List<WeChatChannel> channels;
+    private final boolean progressEnabled;
     private final ThreadLocal<StatusContext> current = new ThreadLocal<>();
 
-    public ToolStatusService(List<WeChatChannel> channels) {
+    @Autowired
+    public ToolStatusService(List<WeChatChannel> channels,
+                             @Value("${agent.tool-progress-enabled:false}") boolean progressEnabled) {
         this.channels = channels;
+        this.progressEnabled = progressEnabled;
+    }
+
+    public ToolStatusService(List<WeChatChannel> channels) {
+        this(channels, true);
     }
 
     public void bind(String userId, String replyToMsgId, String botId, String channel) {
@@ -61,7 +71,7 @@ public class ToolStatusService {
 
     public void push(String text) {
         StatusContext context = current.get();
-        if (context == null || context.sent || channels.isEmpty()) {
+        if (!progressEnabled || context == null || context.sent || channels.isEmpty()) {
             return;
         }
         WeChatChannel c = channelFor(context.channel);
@@ -82,13 +92,14 @@ public class ToolStatusService {
     }
 
     private WeChatChannel channelFor(String channelName) {
-        if (channelName != null) {
-            for (WeChatChannel c : channels) {
-                if (channelName.equals(c.channel())) {
-                    return c;
-                }
+        if (channelName == null || channelName.isBlank()) {
+            return null;
+        }
+        for (WeChatChannel c : channels) {
+            if (channelName.equals(c.channel())) {
+                return c;
             }
         }
-        return channels.get(0);
+        return null;
     }
 }

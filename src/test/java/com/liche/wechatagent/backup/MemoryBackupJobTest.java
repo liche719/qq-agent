@@ -2,6 +2,8 @@ package com.liche.wechatagent.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.liche.wechatagent.media.StoredMediaRepository;
+import com.liche.wechatagent.memory.ConversationMemory;
+import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import com.liche.wechatagent.memory.MemoryArchiveRepository;
 import com.liche.wechatagent.memory.MemoryChangeLog;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
@@ -25,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -115,5 +119,78 @@ class MemoryBackupJobTest {
         var root = mapper.readTree(state);
         assertEquals(0, root.path("coreMemories").size());
         assertTrue(root.path("changeLogs").get(0).path("afterContent").isNull());
+    }
+
+    @Test
+    void backsUpAndPurgesConversationEvidenceWithinTheOwningUserSnapshot() throws Exception {
+        String userId = "qq:memory-owner";
+        String otherUserId = "qq:other-user";
+        UserProfile owner = new UserProfile(userId, "陪伴助手");
+        UserProfile other = new UserProfile(otherUserId, "陪伴助手");
+        ConversationMemory ownedEvidence = new ConversationMemory(userId, "user", "event-owner",
+                "用户的私密考研计划", List.of("message-owner"), LocalDateTime.now(), null);
+        ConversationMemory foreignEvidence = new ConversationMemory(otherUserId, "user", "event-other",
+                "另一位用户的私密计划", List.of("message-other"), LocalDateTime.now(), null);
+        UserProfileRepository profiles = mock(UserProfileRepository.class);
+        UserCoreMemoryRepository cores = mock(UserCoreMemoryRepository.class);
+        UserWorkMemoryRepository work = mock(UserWorkMemoryRepository.class);
+        MemoryArchiveRepository archives = mock(MemoryArchiveRepository.class);
+        MemoryChangeLogRepository changeLogs = mock(MemoryChangeLogRepository.class);
+        ReminderTaskRepository reminders = mock(ReminderTaskRepository.class);
+        StoredMediaRepository media = mock(StoredMediaRepository.class);
+        ConversationMemoryRepository conversations = mock(ConversationMemoryRepository.class);
+        when(profiles.findAll()).thenReturn(List.of(owner, other));
+        when(profiles.findById(userId)).thenReturn(Optional.of(owner));
+        when(profiles.findById(otherUserId)).thenReturn(Optional.of(other));
+        when(cores.findByUserIdOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(work.findByUserIdAndArchivedFalse(any())).thenReturn(List.of());
+        when(archives.findByUserIdOrderByCreatedAtDesc(any())).thenReturn(List.of());
+        when(changeLogs.findByUserIdOrderByCreatedAtDesc(any(), any())).thenReturn(List.of());
+        when(reminders.findByUserIdAndStatus(any(), eq("PENDING"))).thenReturn(List.of());
+        when(media.findByUserIdOrderByCreatedAtAsc(any())).thenReturn(List.of());
+        when(conversations.findByUserIdOrderByCreatedAtDesc(eq(userId), any())).thenReturn(List.of(ownedEvidence));
+        when(conversations.findByUserIdOrderByCreatedAtDesc(eq(otherUserId), any())).thenReturn(List.of(foreignEvidence));
+        Path backupRoot = tempDirectory.resolve("conversation-backup");
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, archives, changeLogs, reminders, media,
+                conversations, mapper, backupRoot.toString(), 30, 1000,
+                tempDirectory.resolve("stored-media").toString());
+
+        job.backupAll();
+        MemoryBackupJob.PurgeResult result = job.purgeForgottenConversationEvidence(userId,
+                List.of("message-owner"), "用户的私密考研计划");
+
+        assertTrue(result.complete());
+        assertEquals(1, result.filesUpdated());
+        Path dayDirectory = backupRoot.resolve(LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")));
+        List<Path> userDirectories;
+        try (var paths = Files.list(dayDirectory)) {
+            userDirectories = paths.toList();
+        }
+        Path ownerState = userDirectories.stream()
+                .filter(path -> {
+                    try {
+                        return userId.equals(mapper.readTree(Files.readString(path.resolve("state.json")))
+                                .path("userId").asText());
+                    } catch (Exception exception) {
+                        return false;
+                    }
+                })
+                .findFirst().orElseThrow();
+        Path otherState = userDirectories.stream()
+                .filter(path -> {
+                    try {
+                        return otherUserId.equals(mapper.readTree(Files.readString(path.resolve("state.json")))
+                                .path("userId").asText());
+                    } catch (Exception exception) {
+                        return false;
+                    }
+                })
+                .findFirst().orElseThrow();
+        assertEquals(0, mapper.readTree(Files.readString(ownerState.resolve("state.json")))
+                .path("conversationMemories").size());
+        var otherStateJson = mapper.readTree(Files.readString(otherState.resolve("state.json")));
+        assertEquals(1, otherStateJson.path("conversationMemories").size());
+        assertTrue(otherStateJson.toString().contains("另一位用户的私密计划"));
     }
 }

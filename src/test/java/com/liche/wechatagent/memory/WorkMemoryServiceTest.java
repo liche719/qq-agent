@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -77,5 +78,55 @@ class WorkMemoryServiceTest {
         assertEquals("FORGET", log.getValue().getAction());
         assertNull(log.getValue().getBeforeContent());
         assertNull(log.getValue().getAfterContent());
+    }
+
+    @Test
+    void keepsThePreviousWorkFactAsSupersededWhenItChanges() {
+        UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
+        MemoryChangeLogRepository changeLogRepository = mock(MemoryChangeLogRepository.class);
+        UserWorkMemory previous = new UserWorkMemory("u1", "本周在北京参加培训", 3, "extraction");
+        previous.setId(20L);
+        when(workRepository.findById(20L)).thenReturn(Optional.of(previous));
+        when(workRepository.save(any(UserWorkMemory.class))).thenAnswer(invocation -> {
+            UserWorkMemory value = invocation.getArgument(0);
+            if (value.getId() == null) {
+                value.setId(21L);
+            }
+            return value;
+        });
+        WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);
+
+        UserWorkMemory replacement = service.replaceFromExtraction("u1", 20L,
+                "本周在南京参加培训", new MemoryProvenance("USER_DERIVED", 90, List.of("m-21"), List.of()),
+                null, new MemoryAttributes(3, 90, List.of("南京培训")));
+
+        assertEquals(MemoryStatus.SUPERSEDED.name(), previous.getStatus());
+        assertEquals(21L, previous.getSupersededById());
+        assertEquals("本周在南京参加培训", replacement.getContent());
+    }
+
+    @Test
+    void deletingTheLatestWorkFactAlsoFindsOnlyItsOwnSupersededHistory() {
+        UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
+        MemoryChangeLogRepository changeLogRepository = mock(MemoryChangeLogRepository.class);
+        UserWorkMemory old = new UserWorkMemory("u1", "本周在北京参加培训", 3, "extraction");
+        old.setId(20L);
+        old.setStatus(MemoryStatus.SUPERSEDED.name());
+        old.setSupersededById(21L);
+        UserWorkMemory latest = new UserWorkMemory("u1", "本周在南京参加培训", 3, "extraction");
+        latest.setId(21L);
+        UserWorkMemory foreign = new UserWorkMemory("u2", "其他用户的培训", 3, "extraction");
+        foreign.setId(22L);
+        foreign.setStatus(MemoryStatus.SUPERSEDED.name());
+        foreign.setSupersededById(21L);
+        when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of(old, foreign));
+        when(workRepository.findById(20L)).thenReturn(Optional.of(old));
+        WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);
+
+        List<ForgottenMemory> removed = service.forgetSupersededHistory("u1", 21L);
+
+        assertEquals(List.of(20L), removed.stream().map(ForgottenMemory::id).toList());
+        verify(workRepository).delete(old);
+        verify(workRepository, never()).delete(foreign);
     }
 }

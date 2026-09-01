@@ -69,4 +69,30 @@ class MemoryForgetServiceTest {
                 org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString());
         assertTrue(outcome.legacyContextReset());
     }
+
+    @Test
+    void purgesConversationSnapshotsAlongsideDurableEvidence() {
+        CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
+        WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
+        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        ConversationMemoryService conversations = mock(ConversationMemoryService.class);
+        ForgottenMemory forgotten = new ForgottenMemory("CORE", 8L, "用户的私密长期目标", "", List.of("m-8"));
+        when(coreMemoryService.delete("u1", 8L)).thenReturn(forgotten);
+        when(contextStore.removeMemoryEvidence("u1", List.of("m-8"), "用户的私密长期目标")).thenReturn(true);
+        when(backupJob.purgeForgottenMemory("u1", "CORE", 8L))
+                .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
+        when(backupJob.purgeForgottenConversationEvidence("u1", List.of("m-8"), "用户的私密长期目标"))
+                .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
+        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService, archiveService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob, conversations);
+
+        MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "CORE", 8L);
+
+        verify(conversations).forgetSourceMessageIds("u1", List.of("m-8"));
+        verify(backupJob).purgeForgottenConversationEvidence("u1", List.of("m-8"), "用户的私密长期目标");
+        assertTrue(outcome.backupsComplete());
+    }
 }

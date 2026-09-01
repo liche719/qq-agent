@@ -16,8 +16,14 @@ public record MemoryProvenance(String sourceType, int confidence, List<String> s
     }
 
     public static MemoryProvenance automatic(String source) {
-        String type = "archive_summary".equalsIgnoreCase(source) ? "SYSTEM_SUMMARY" : "USER_EXPLICIT";
-        return new MemoryProvenance(type, "SYSTEM_SUMMARY".equals(type) ? 70 : 100, List.of(), List.of());
+        String normalized = source == null ? "" : source.trim();
+        if ("archive_summary".equalsIgnoreCase(normalized)) {
+            return new MemoryProvenance("SYSTEM_SUMMARY", 70, List.of(), List.of());
+        }
+        if ("user_explicit".equalsIgnoreCase(normalized) || "confirm".equalsIgnoreCase(normalized)) {
+            return new MemoryProvenance("USER_EXPLICIT", 100, List.of(), List.of());
+        }
+        return new MemoryProvenance("USER_DERIVED", 85, List.of(), List.of());
     }
 
     public static MemoryProvenance userExplicit(List<String> sourceMessageIds, List<Long> sourceMediaIds) {

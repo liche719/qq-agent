@@ -2,11 +2,14 @@ package com.liche.wechatagent.search;
 
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.network.PublicUrlValidator;
+import com.liche.wechatagent.tool.ToolExecutionPolicy;
+import com.liche.wechatagent.tool.ToolExecutionClass;
 import dev.langchain4j.agent.tool.Tool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.jsoup.Jsoup;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -19,22 +22,28 @@ import java.util.List;
 @Component
 public class WebPageTool {
 
-    private static final int MAX_REDIRECTS = 3;
+    private static final int DEFAULT_MAX_REDIRECTS = 3;
+    private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
+    private static final long DEFAULT_READ_TIMEOUT_SECONDS = 20;
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; WechatAgent/1.0)";
 
     private final OkHttpClient client;
     private final int maxResponseBytes;
     private final int maxTextChars;
+    private final int maxRedirects;
+    private final String userAgent;
     private final PublicUrlValidator urlValidator;
 
     @Tool(value = "读取指定公开网页的正文。当用户给出 URL，或需要查看搜索结果中的具体页面、文章详情时调用。只支持公开 HTTP/HTTPS 页面。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String readWebPage(String url) {
         status("我正在打开这个网页…");
         try {
             URI current = urlValidator.validate(url);
-            for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
+            for (int redirects = 0; redirects <= maxRedirects; redirects++) {
                 Request request = new Request.Builder()
                         .url(current.toString())
-                        .header("User-Agent", "Mozilla/5.0 (compatible; WechatAgent/1.0)")
+                        .header("User-Agent", userAgent)
                         .header("Accept", "text/html,text/plain,application/json;q=0.9,*/*;q=0.1")
                         .get()
                         .build();
@@ -99,20 +108,35 @@ public class WebPageTool {
 
     private final ToolStatusService statusService;
 
+    @Autowired
     public WebPageTool(ToolStatusService statusService,
                        @Value("${web.max-response-bytes:2097152}") int maxResponseBytes,
                        @Value("${web.max-text-chars:12000}") int maxTextChars,
+                       @Value("${web.max-redirects:3}") int maxRedirects,
+                       @Value("${web.connect-timeout-seconds:8}") long connectTimeoutSeconds,
+                       @Value("${web.read-timeout-seconds:20}") long readTimeoutSeconds,
+                       @Value("${web.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String userAgent,
                        PublicUrlValidator urlValidator) {
         this.statusService = statusService;
-        this.maxResponseBytes = maxResponseBytes;
-        this.maxTextChars = maxTextChars;
+        this.maxResponseBytes = bounded(maxResponseBytes, 1_024, Integer.MAX_VALUE, 2_097_152);
+        this.maxTextChars = bounded(maxTextChars, 256, 1_000_000, 12_000);
+        this.maxRedirects = bounded(maxRedirects, 0, 10, DEFAULT_MAX_REDIRECTS);
+        this.userAgent = userAgent == null || userAgent.isBlank() ? DEFAULT_USER_AGENT : userAgent.trim();
         this.urlValidator = urlValidator;
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(8))
-                .readTimeout(Duration.ofSeconds(20))
+                .connectTimeout(Duration.ofSeconds(bounded(connectTimeoutSeconds, 1, 300, DEFAULT_CONNECT_TIMEOUT_SECONDS)))
+                .readTimeout(Duration.ofSeconds(bounded(readTimeoutSeconds, 1, 600, DEFAULT_READ_TIMEOUT_SECONDS)))
                 .followRedirects(false)
                 .dns(urlValidator::lookupPublic)
                 .build();
+    }
+
+    WebPageTool(ToolStatusService statusService,
+                int maxResponseBytes,
+                int maxTextChars,
+                PublicUrlValidator urlValidator) {
+        this(statusService, maxResponseBytes, maxTextChars, DEFAULT_MAX_REDIRECTS,
+                DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, urlValidator);
     }
 
     private String readBody(Response response) throws IOException {
@@ -151,5 +175,13 @@ public class WebPageTool {
         }
         String clipped = text.length() <= maxTextChars ? text : text.substring(0, maxTextChars) + "\n[网页正文过长，已截断]";
         return "网页：" + url + (title.isBlank() ? "" : "\n标题：" + title) + "\n正文：\n" + clipped;
+    }
+
+    private static int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
+    }
+
+    private static long bounded(long value, long minimum, long maximum, long fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

@@ -1,8 +1,15 @@
 server:
-  port: 8080
-  # 对个人本机机器人，默认不向校园网或局域网暴露管理页面和内部 API。
+  port: ${SERVER_PORT:8080}
+  # 本机部署默认不向局域网或公网暴露管理页面和内部 API。
   # 如确有反向代理部署需求，必须显式设置 SERVER_ADDRESS 并启用 production profile。
   address: ${SERVER_ADDRESS:127.0.0.1}
+
+app:
+  time-zone: ${APP_TIME_ZONE:Asia/Shanghai}
+
+scheduler:
+  task-pool-size: ${SCHEDULER_TASK_POOL_SIZE:2}
+  thread-name-prefix: ${SCHEDULER_THREAD_NAME_PREFIX:scheduled-task-}
 
 spring:
   application:
@@ -13,13 +20,13 @@ spring:
   config:
     import: optional:file:.env[.properties]
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=${APP_TIME_ZONE:Asia/Shanghai}&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false
     username: ${MYSQL_USER:}
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 8
-      minimum-idle: 2
+      maximum-pool-size: ${MYSQL_POOL_MAX_SIZE:8}
+      minimum-idle: ${MYSQL_POOL_MIN_IDLE:2}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -27,14 +34,14 @@ spring:
     properties:
       hibernate:
         jdbc:
-          time_zone: Asia/Shanghai
+          time_zone: ${APP_TIME_ZONE:Asia/Shanghai}
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       database: 0
       password: ${REDIS_PASSWORD:}
-      timeout: 3s
+      timeout: ${REDIS_TIMEOUT:3s}
   quartz:
     job-store-type: jdbc
     jdbc:
@@ -47,44 +54,106 @@ spring:
       org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
       org.quartz.jobStore.tablePrefix: QRTZ_
       org.quartz.jobStore.isClustered: false
-      org.quartz.threadPool.threadCount: 4
+      org.quartz.threadPool.threadCount: ${QUARTZ_THREAD_COUNT:4}
   jackson:
-    time-zone: Asia/Shanghai
+    time-zone: ${APP_TIME_ZONE:Asia/Shanghai}
 
 llm:
   base-url: ${LLM_BASE_URL:https://api.deepseek.com/v1}
   model: ${LLM_MODEL:deepseek-chat}
   api-key: ${LLM_API_KEY:}
-  temperature: 0.7
-  timeout-seconds: 60
+  temperature: ${LLM_TEMPERATURE:0.7}
+  timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
+  connect-timeout-seconds: ${LLM_CONNECT_TIMEOUT_SECONDS:5}
 
 agent:
+  message-batch-thread-name-prefix: ${AGENT_MESSAGE_BATCH_THREAD_NAME_PREFIX:message-batch-}
   workers: ${AGENT_WORKERS:8}
   queue-capacity: ${AGENT_QUEUE_CAPACITY:200}
   global-queue-capacity: ${AGENT_GLOBAL_QUEUE_CAPACITY:400}
   user-queue-idle-minutes: ${AGENT_USER_QUEUE_IDLE_MINUTES:30}
   message-batch-window-millis: ${AGENT_MESSAGE_BATCH_WINDOW_MILLIS:1500}
   message-batch-max-window-millis: ${AGENT_MESSAGE_BATCH_MAX_WINDOW_MILLIS:4000}
+  # 仅在媒体消息后极短时间内、且命中可配置的补充关系规则时合并纯文本；普通新问题不会继承旧媒体。
+  message-batch-continuation-window-millis: ${AGENT_MESSAGE_BATCH_CONTINUATION_WINDOW_MILLIS:900}
+  message-batch-continuation-pattern: '${AGENT_MESSAGE_BATCH_CONTINUATION_PATTERN:}'
+  tool-retry-attempts: ${AGENT_TOOL_RETRY_ATTEMPTS:1}
+  tool-max-result-chars: ${AGENT_TOOL_MAX_RESULT_CHARS:8000}
+  max-tool-rounds: ${AGENT_MAX_TOOL_ROUNDS:8}
+  stream-timeout-seconds: ${AGENT_STREAM_TIMEOUT_SECONDS:120}
+  image-max-redirects: ${AGENT_IMAGE_MAX_REDIRECTS:3}
+  image-connect-timeout-seconds: ${AGENT_IMAGE_CONNECT_TIMEOUT_SECONDS:8}
+  image-read-timeout-seconds: ${AGENT_IMAGE_READ_TIMEOUT_SECONDS:20}
+  stream-chunk-chars: ${AGENT_STREAM_CHUNK_CHARS:24}
+  stream-chunk-delay-ms: ${AGENT_STREAM_CHUNK_DELAY_MS:120}
+  # 工具执行期间不额外发送气泡，避免 QQ 把进度和最终答案拆成多条消息。
+  tool-progress-enabled: ${AGENT_TOOL_PROGRESS_ENABLED:false}
+  message-idempotency-ttl-hours: ${AGENT_MESSAGE_IDEMPOTENCY_TTL_HOURS:24}
+  policy:
+    # 可按部署语言覆盖；留空或非法表达式时回退到内置安全规则。
+    current-time-pattern: '${AGENT_CURRENT_TIME_PATTERN:(?s).*?(?:现在(?:是)?几点|当前(?:是)?几点|(?:现在|当前)(?:的)?时间|今天(?:是)?(?:几号|星期几|周几|日期)).*}'
+    default-persona: '${AGENT_DEFAULT_PERSONA:你是用户的专属长期智能助手，说话自然口语化，像真人一样沟通，拒绝生硬机械的机器人话术。你会自动记住用户的重要信息和目标，帮用户设置提醒、搜索资料。用户可以随时用 /set-prompt 指令重新设定你的身份和性格。}'
+    max-persona-chars: ${AGENT_MAX_PERSONA_CHARS:2000}
+    tool-display-names:
+      searchWeb: 搜索
+      searchLatestWeb: 搜索
+      readWebPage: 读取网页
+      getCurrentTime: 获取时间
+      parseReminder: 创建提醒
+      replaceReminder: 调整提醒
+      cancelReminder: 取消提醒
+      listReminders: 查看提醒
+      getReminderStatus: 查询提醒状态
+      saveImportantMedia: 保存文件
+      inspectRecentUnstoredMedia: 查看刚才的媒体
+      listStoredMedia: 查找已保存文件
+      readStoredMedia: 读取已保存文件
+      inspectStoredMedia: 审阅文件
+      deleteStoredMedia: 删除文件
+      findDownloadableLinks: 查找下载文件
+      downloadWebFile: 下载文件
+      sendDownloadedFile: 发送文件
 
 searxng:
   base-url: ${SEARXNG_BASE_URL:http://localhost:8888}
-  timeout-seconds: 15
-  max-results: 5
+  language: ${SEARXNG_LANGUAGE:zh-CN}
+  timeout-seconds: ${SEARXNG_TIMEOUT_SECONDS:15}
+  connect-timeout-seconds: ${SEARXNG_CONNECT_TIMEOUT_SECONDS:5}
+  max-results: ${SEARXNG_MAX_RESULTS:10}
 
 document:
   max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}
   max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:60000}
   max-pdf-pages: ${DOCUMENT_MAX_PDF_PAGES:10}
+  max-redirects: ${DOCUMENT_MAX_REDIRECTS:3}
+  connect-timeout-seconds: ${DOCUMENT_CONNECT_TIMEOUT_SECONDS:8}
+  read-timeout-seconds: ${DOCUMENT_READ_TIMEOUT_SECONDS:30}
+  user-agent: '${DOCUMENT_USER_AGENT:Mozilla/5.0 (compatible; WechatAgent/1.0)}'
 
 media:
+  context:
+    pending-ttl-minutes: ${MEDIA_CONTEXT_PENDING_TTL_MINUTES:30}
+    max-pending-per-conversation: ${MEDIA_CONTEXT_MAX_PENDING_PER_CONVERSATION:8}
+    excerpt-max-chars: ${MEDIA_CONTEXT_EXCERPT_MAX_CHARS:4000}
   storage:
     root: ${MEDIA_STORAGE_ROOT:stored-media}
     max-file-bytes: ${MEDIA_STORAGE_MAX_FILE_BYTES:20971520}
     inspection-token-minutes: ${MEDIA_INSPECTION_TOKEN_MINUTES:5}
+    max-redirects: ${MEDIA_STORAGE_MAX_REDIRECTS:3}
+    connect-timeout-seconds: ${MEDIA_STORAGE_CONNECT_TIMEOUT_SECONDS:8}
+    read-timeout-seconds: ${MEDIA_STORAGE_READ_TIMEOUT_SECONDS:30}
+    max-list-results: ${MEDIA_STORAGE_MAX_LIST_RESULTS:20}
+    inspection-max-text-chars: ${MEDIA_STORAGE_INSPECTION_MAX_TEXT_CHARS:4000}
+    user-agent: '${MEDIA_STORAGE_USER_AGENT:Mozilla/5.0 (compatible; WechatAgent/1.0)}'
 
 web:
   max-response-bytes: ${WEB_MAX_RESPONSE_BYTES:2097152}
   max-text-chars: ${WEB_MAX_TEXT_CHARS:12000}
+  max-redirects: ${WEB_MAX_REDIRECTS:3}
+  max-links: ${WEB_MAX_LINKS:20}
+  connect-timeout-seconds: ${WEB_CONNECT_TIMEOUT_SECONDS:8}
+  read-timeout-seconds: ${WEB_READ_TIMEOUT_SECONDS:20}
+  user-agent: '${WEB_USER_AGENT:Mozilla/5.0 (compatible; WechatAgent/1.0)}'
 
 qq:
   # QQ 官方机器人（需先在 QQ 开放平台创建机器人并获取 AppID/AppSecret）
@@ -93,6 +162,23 @@ qq:
   client-secret: ${QQ_CLIENT_SECRET:}
   sandbox: ${QQ_SANDBOX:true}
   group-enabled: ${QQ_GROUP_ENABLED:false}
+  api-connect-timeout-seconds: ${QQ_API_CONNECT_TIMEOUT_SECONDS:5}
+  api-read-timeout-seconds: ${QQ_API_READ_TIMEOUT_SECONDS:15}
+  websocket-connect-timeout-seconds: ${QQ_WEBSOCKET_CONNECT_TIMEOUT_SECONDS:10}
+  passive-window-ms: ${QQ_PASSIVE_WINDOW_MS:300000}
+  typing-keepalive-ms: ${QQ_TYPING_KEEPALIVE_MS:50000}
+  ephemeral-cache-ttl-ms: ${QQ_EPHEMERAL_CACHE_TTL_MS:1800000}
+  stream-state-ttl-ms: ${QQ_STREAM_STATE_TTL_MS:600000}
+  max-conversation-cache-entries: ${QQ_MAX_CONVERSATION_CACHE_ENTRIES:2048}
+  max-message-cache-entries: ${QQ_MAX_MESSAGE_CACHE_ENTRIES:4096}
+  user-agent: '${QQ_USER_AGENT:qqbot-nodejs/1.0.4}'
+  reconnect-backoff-ms: ${QQ_RECONNECT_BACKOFF_MS:2000,5000,10000,30000}
+  reconnect-delay-ms: ${QQ_RECONNECT_DELAY_MS:2000}
+  token-default-expire-seconds: ${QQ_TOKEN_DEFAULT_EXPIRE_SECONDS:7200}
+  token-refresh-lead-ms: ${QQ_TOKEN_REFRESH_LEAD_MS:60000}
+  default-heartbeat-ms: ${QQ_DEFAULT_HEARTBEAT_MS:45000}
+  input-notify-seconds: ${QQ_INPUT_NOTIFY_SECONDS:60}
+  markdown-max-chars: ${QQ_MARKDOWN_MAX_CHARS:4000}
 
 wechat:
   channel:
@@ -104,34 +190,78 @@ wechat:
     heartbeat-interval-ms: ${ILINK_HEARTBEAT_MS:3000}
 
 memory:
-  context-rounds: 10
+  extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}
+  extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
+  context-rounds: ${MEMORY_CONTEXT_ROUNDS:10}
   context-ttl-hours: ${MEMORY_CONTEXT_TTL_HOURS:720}
   core-max-load: ${MEMORY_CORE_MAX_LOAD:16}
   core-max-chars: ${MEMORY_CORE_MAX_CHARS:2200}
-  work-max-load: 15
-  work-max-chars: 1500
-  work-archive-threshold: 20
-  work-archive-batch: 10
-  extraction-window-seconds: 3
+  work-max-load: ${MEMORY_WORK_MAX_LOAD:15}
+  work-max-chars: ${MEMORY_WORK_MAX_CHARS:1500}
+  work-archive-threshold: ${MEMORY_WORK_ARCHIVE_THRESHOLD:20}
+  work-archive-batch: ${MEMORY_WORK_ARCHIVE_BATCH:10}
+  archive-sweep-interval-ms: ${MEMORY_ARCHIVE_SWEEP_INTERVAL_MS:600000}
+  archive-sweep-initial-delay-ms: ${MEMORY_ARCHIVE_SWEEP_INITIAL_DELAY_MS:300000}
+  extraction-window-seconds: ${MEMORY_EXTRACTION_WINDOW_SECONDS:3}
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
-  dedup-threshold: 0.8
+  dedup-threshold: ${MEMORY_DEDUP_THRESHOLD:0.8}
   usage-touch-interval-minutes: ${MEMORY_USAGE_TOUCH_INTERVAL_MINUTES:15}
-  extraction-recent-turns: 20
+  extraction-max-candidates: ${MEMORY_EXTRACTION_MAX_CANDIDATES:32}
+  extraction-max-content-chars: ${MEMORY_EXTRACTION_MAX_CONTENT_CHARS:4000}
+  extraction-max-keywords: ${MEMORY_EXTRACTION_MAX_KEYWORDS:8}
+  extraction-default-confidence: ${MEMORY_EXTRACTION_DEFAULT_CONFIDENCE:85}
+  extraction-recent-turns: ${MEMORY_EXTRACTION_RECENT_TURNS:20}
+  min-confidence: ${MEMORY_MIN_CONFIDENCE:60}
+  default-work-priority: ${MEMORY_DEFAULT_WORK_PRIORITY:3}
+  default-core-importance: ${MEMORY_DEFAULT_CORE_IMPORTANCE:5}
+  default-work-importance: ${MEMORY_DEFAULT_WORK_IMPORTANCE:3}
+  core-max-content-chars: ${MEMORY_CORE_MAX_CONTENT_CHARS_LIMIT:4000}
+  work-max-content-chars: ${MEMORY_WORK_MAX_CONTENT_CHARS_LIMIT:2000}
+  linked-media-max-per-memory: ${MEMORY_LINKED_MEDIA_MAX_PER_MEMORY:3}
+  linked-media-summary-max-chars: ${MEMORY_LINKED_MEDIA_SUMMARY_MAX_CHARS:80}
+  historical-item-max-chars: ${MEMORY_HISTORICAL_ITEM_MAX_CHARS:1200}
+  archive-summary-target-chars: ${MEMORY_ARCHIVE_SUMMARY_TARGET_CHARS:100}
+  archive-summary-max-chars: ${MEMORY_ARCHIVE_SUMMARY_MAX_CHARS:1000}
+  archive-summary-confidence: ${MEMORY_ARCHIVE_SUMMARY_CONFIDENCE:70}
+  # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
+  history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
+  conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}
+  negation-markers: ${MEMORY_NEGATION_MARKERS:不再,不想,不会,取消,放弃,停止,改考,不喜欢,不需要}
+  historical-retrieval-limit: ${MEMORY_HISTORICAL_RETRIEVAL_LIMIT:8}
+  historical-min-score: ${MEMORY_HISTORICAL_MIN_SCORE:3}
+  conversation-extraction-limit: ${MEMORY_CONVERSATION_EXTRACTION_LIMIT:80}
+  conversation-retrieval-limit: ${MEMORY_CONVERSATION_RETRIEVAL_LIMIT:2000}
+  conversation-search-per-term: ${MEMORY_CONVERSATION_SEARCH_PER_TERM:16}
+  conversation-max-retrieval-terms: ${MEMORY_CONVERSATION_MAX_RETRIEVAL_TERMS:8}
+  conversation-forget-scan-batch: ${MEMORY_CONVERSATION_FORGET_SCAN_BATCH:250}
+  conversation-retention-days: ${MEMORY_CONVERSATION_RETENTION_DAYS:3650}
+  conversation-max-content-chars: ${MEMORY_CONVERSATION_MAX_CONTENT_CHARS:12000}
   lifecycle-scan-interval-ms: ${MEMORY_LIFECYCLE_SCAN_INTERVAL_MS:3600000}
   lifecycle-initial-delay-ms: ${MEMORY_LIFECYCLE_INITIAL_DELAY_MS:60000}
 
 reminder:
-  default-prewarm-minutes: 10
+  default-prewarm-minutes: ${REMINDER_DEFAULT_PREWARM_MINUTES:10}
+  max-recent-status-results: ${REMINDER_MAX_RECENT_STATUS_RESULTS:12}
+  misfire-grace-seconds: ${REMINDER_MISFIRE_GRACE_SECONDS:60}
+  recovery-scan-interval-ms: ${REMINDER_RECOVERY_SCAN_INTERVAL_MS:300000}
+  recovery-initial-delay-ms: ${REMINDER_RECOVERY_INITIAL_DELAY_MS:120000}
 
 care:
   scan-interval-ms: ${CARE_SCAN_INTERVAL_MS:60000}
   initial-delay-ms: ${CARE_INITIAL_DELAY_MS:30000}
+  delivery-time: ${CARE_DELIVERY_TIME:20:30}
+  focus-max-chars: ${CARE_FOCUS_MAX_CHARS:100}
+  min-focus-priority: ${CARE_MIN_FOCUS_PRIORITY:4}
+  weekly-day: ${CARE_WEEKLY_DAY:SUNDAY}
+  retry-delay-minutes: ${CARE_RETRY_DELAY_MINUTES:60}
 
 backup:
   dir: ${BACKUP_DIR:backup}
-  cron: "0 0 3 * * ?"
-  retention-days: 30
+  cron: '${BACKUP_CRON:0 0 3 * * ?}'
+  retention-days: ${BACKUP_RETENTION_DAYS:30}
+  conversation-limit: ${BACKUP_CONVERSATION_LIMIT:10000}
+  change-log-limit: ${BACKUP_CHANGE_LOG_LIMIT:5000}
 
 logging:
   file:

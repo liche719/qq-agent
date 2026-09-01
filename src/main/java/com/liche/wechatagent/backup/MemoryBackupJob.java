@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
+import com.liche.wechatagent.memory.ConversationMemory;
+import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import com.liche.wechatagent.memory.MemoryArchiveRepository;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
@@ -30,10 +32,14 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /** 每日备份用户记忆、提醒和已保存资料，并以校验和记录可恢复的媒体副本。 */
@@ -42,6 +48,9 @@ public class MemoryBackupJob {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryBackupJob.class);
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final int DEFAULT_CONVERSATION_BACKUP_LIMIT = 10_000;
+    private static final int DEFAULT_CHANGE_LOG_LIMIT = 5_000;
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
 
     public record PurgeResult(int filesUpdated, boolean complete) {
     }
@@ -53,11 +62,37 @@ public class MemoryBackupJob {
     private final MemoryChangeLogRepository changeLogRepository;
     private final ReminderTaskRepository reminderRepository;
     private final StoredMediaRepository storedMediaRepository;
+    private final ConversationMemoryRepository conversationMemoryRepository;
     private final ObjectMapper objectMapper;
     private final Path backupDir;
     private final Path mediaRoot;
     private final int retentionDays;
+    private final int conversationBackupLimit;
+    private final int changeLogLimit;
+    private final ZoneId zone;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    public MemoryBackupJob(UserProfileRepository userProfileRepository,
+                           UserCoreMemoryRepository coreRepository,
+                           UserWorkMemoryRepository workRepository,
+                           MemoryArchiveRepository archiveRepository,
+                           MemoryChangeLogRepository changeLogRepository,
+                           ReminderTaskRepository reminderRepository,
+                           StoredMediaRepository storedMediaRepository,
+                           ConversationMemoryRepository conversationMemoryRepository,
+                           ObjectMapper objectMapper,
+                           @Value("${backup.dir:backup}") String backupDir,
+                           @Value("${backup.retention-days:30}") int retentionDays,
+                           @Value("${backup.conversation-limit:10000}") int conversationBackupLimit,
+                            @Value("${media.storage.root:stored-media}") String mediaRoot,
+                            @Value("${backup.change-log-limit:5000}") int changeLogLimit,
+                            @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+                reminderRepository, storedMediaRepository, conversationMemoryRepository, objectMapper, backupDir,
+                retentionDays, conversationBackupLimit, mediaRoot, changeLogLimit, timeZoneId, true);
+    }
+
+    /** Backwards-compatible constructor retained for focused tests and older embedders. */
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
                            UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
@@ -66,9 +101,50 @@ public class MemoryBackupJob {
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
                            ObjectMapper objectMapper,
-                           @Value("${backup.dir:backup}") String backupDir,
-                           @Value("${backup.retention-days:30}") int retentionDays,
-                           @Value("${media.storage.root:stored-media}") String mediaRoot) {
+                           String backupDir,
+                           int retentionDays,
+                           String mediaRoot) {
+        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+                reminderRepository, storedMediaRepository, null, objectMapper, backupDir, retentionDays,
+                DEFAULT_CONVERSATION_BACKUP_LIMIT, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId());
+    }
+
+    /** Compatibility constructor for callers that include durable conversation evidence. */
+    public MemoryBackupJob(UserProfileRepository userProfileRepository,
+                           UserCoreMemoryRepository coreRepository,
+                           UserWorkMemoryRepository workRepository,
+                           MemoryArchiveRepository archiveRepository,
+                           MemoryChangeLogRepository changeLogRepository,
+                           ReminderTaskRepository reminderRepository,
+                           StoredMediaRepository storedMediaRepository,
+                           ConversationMemoryRepository conversationMemoryRepository,
+                           ObjectMapper objectMapper,
+                           String backupDir,
+                           int retentionDays,
+                           int conversationBackupLimit,
+                           String mediaRoot) {
+        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+                reminderRepository, storedMediaRepository, conversationMemoryRepository, objectMapper,
+                backupDir, retentionDays, conversationBackupLimit, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT,
+                DEFAULT_ZONE.getId());
+    }
+
+    private MemoryBackupJob(UserProfileRepository userProfileRepository,
+                            UserCoreMemoryRepository coreRepository,
+                            UserWorkMemoryRepository workRepository,
+                            MemoryArchiveRepository archiveRepository,
+                            MemoryChangeLogRepository changeLogRepository,
+                            ReminderTaskRepository reminderRepository,
+                            StoredMediaRepository storedMediaRepository,
+                            ConversationMemoryRepository conversationMemoryRepository,
+                            ObjectMapper objectMapper,
+                            String backupDir,
+                            int retentionDays,
+                            int conversationBackupLimit,
+                            String mediaRoot,
+                            int changeLogLimit,
+                            String timeZoneId,
+                            boolean initializationMarker) {
         this.userProfileRepository = userProfileRepository;
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
@@ -76,16 +152,20 @@ public class MemoryBackupJob {
         this.changeLogRepository = changeLogRepository;
         this.reminderRepository = reminderRepository;
         this.storedMediaRepository = storedMediaRepository;
+        this.conversationMemoryRepository = conversationMemoryRepository;
         this.objectMapper = objectMapper;
         this.backupDir = Path.of(backupDir).toAbsolutePath().normalize();
         this.mediaRoot = Path.of(mediaRoot).toAbsolutePath().normalize();
         this.retentionDays = Math.max(1, retentionDays);
+        this.conversationBackupLimit = Math.max(100, conversationBackupLimit);
+        this.changeLogLimit = Math.max(100, changeLogLimit);
+        this.zone = parseZone(timeZoneId);
     }
 
     @Scheduled(cron = "${backup.cron:0 0 3 * * ?}")
     public void backupAll() {
         try {
-            Path dayDir = checkedChild(backupDir, LocalDate.now().format(DAY));
+            Path dayDir = checkedChild(backupDir, LocalDate.now(zone).format(DAY));
             Files.createDirectories(dayDir);
             int userCount = 0;
             for (var profile : userProfileRepository.findAll()) {
@@ -107,14 +187,8 @@ public class MemoryBackupJob {
         if (!Files.isDirectory(backupDir)) {
             return new PurgeResult(0, true);
         }
-        List<Path> dayDirectories;
-        try (Stream<Path> paths = Files.list(backupDir)) {
-            dayDirectories = paths.filter(Files::isDirectory)
-                    .filter(path -> path.getFileName().toString().matches("\\d{8}"))
-                    .toList();
-        } catch (IOException exception) {
-            log.warn("列出历史备份失败 userHash={} layer={} targetId={} reason={}", shortHash(userId), layer, targetId,
-                    exception.getClass().getSimpleName());
+        List<Path> dayDirectories = backupDayDirectories(userId, layer, targetId);
+        if (dayDirectories == null) {
             return new PurgeResult(0, false);
         }
         int updated = 0;
@@ -126,7 +200,7 @@ public class MemoryBackupJob {
                 continue;
             }
             try {
-                if (redactBackupState(stateFile, layer, targetId)) {
+                if (redactBackupState(stateFile, userId, layer, targetId)) {
                     updated++;
                 }
             } catch (Exception exception) {
@@ -138,10 +212,66 @@ public class MemoryBackupJob {
         return new PurgeResult(updated, complete);
     }
 
+    /** Redacts conversation evidence that supported a user-forgotten memory from local snapshots. */
+    public PurgeResult purgeForgottenConversationEvidence(String userId, List<String> sourceMessageIds,
+                                                          String rememberedContent) {
+        Set<String> sourceIds = normalizeMessageIds(sourceMessageIds);
+        String normalizedContent = normalizeForComparison(rememberedContent);
+        if (userId == null || userId.isBlank() || (sourceIds.isEmpty() && normalizedContent.length() < 6)) {
+            return new PurgeResult(0, true);
+        }
+        if (!Files.isDirectory(backupDir)) {
+            return new PurgeResult(0, true);
+        }
+        List<Path> dayDirectories = backupDayDirectories(userId, "CONVERSATION", null);
+        if (dayDirectories == null) {
+            return new PurgeResult(0, false);
+        }
+        int updated = 0;
+        boolean complete = true;
+        for (Path dayDirectory : dayDirectories) {
+            Path userDirectory = checkedChild(dayDirectory, "user-" + shortHash(userId));
+            Path stateFile = checkedChild(userDirectory, "state.json");
+            if (!Files.isRegularFile(stateFile)) {
+                continue;
+            }
+            try {
+                if (redactConversationEvidence(stateFile, userId, sourceIds, normalizedContent)) {
+                    updated++;
+                }
+            } catch (Exception exception) {
+                complete = false;
+                log.warn("清理历史对话备份失败 userHash={} day={} reason={}", shortHash(userId),
+                        dayDirectory.getFileName(), exception.getClass().getSimpleName());
+            }
+        }
+        return new PurgeResult(updated, complete);
+    }
+
+    private List<Path> backupDayDirectories(String userId, String layer, Long targetId) {
+        try (Stream<Path> paths = Files.list(backupDir)) {
+            return paths.filter(Files::isDirectory)
+                    .filter(path -> path.getFileName().toString().matches("\\d{8}"))
+                    .toList();
+        } catch (IOException exception) {
+            log.warn("列出历史备份失败 userHash={} layer={} targetId={} reason={}", shortHash(userId), layer, targetId,
+                    exception.getClass().getSimpleName());
+            return null;
+        }
+    }
+
     private void backupUser(Path dayDir, String userId) throws IOException {
         Path userDir = checkedChild(dayDir, "user-" + shortHash(userId));
         Files.createDirectories(userDir);
         List<StoredMedia> media = storedMediaRepository.findByUserIdOrderByCreatedAtAsc(userId);
+        List<ConversationMemory> conversations = conversationEvidenceForBackup(userId);
+        ObjectNode node = buildBackupState(userId, userDir, media, conversations);
+        writeAtomically(userDir.resolve("state.json"), objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(node));
+    }
+
+    // Collects all user-scoped records and media artifacts into one backup document.
+    private ObjectNode buildBackupState(String userId, Path userDir, List<StoredMedia> media,
+                                        List<ConversationMemory> conversations) throws IOException {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("userId", userId);
         node.set("profile", objectMapper.valueToTree(userProfileRepository.findById(userId).orElse(null)));
@@ -149,11 +279,36 @@ public class MemoryBackupJob {
         node.set("workMemories", objectMapper.valueToTree(workRepository.findByUserIdAndArchivedFalse(userId)));
         node.set("archives", objectMapper.valueToTree(archiveRepository.findByUserIdOrderByCreatedAtDesc(userId)));
         node.set("changeLogs", objectMapper.valueToTree(
-                changeLogRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 5000))));
+                changeLogRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, changeLogLimit))));
+        node.set("conversationMemories", objectMapper.valueToTree(conversations));
+        node.put("conversationMemoryBackupLimit", conversationBackupLimit);
         node.set("reminders", objectMapper.valueToTree(reminderRepository.findByUserIdAndStatus(userId, "PENDING")));
         node.set("storedMedia", objectMapper.valueToTree(media));
         node.set("mediaArtifacts", backupMedia(userDir, userId, media));
-        writeAtomically(userDir.resolve("state.json"), objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(node));
+        return node;
+    }
+
+    private List<ConversationMemory> conversationEvidenceForBackup(String userId) {
+        if (conversationMemoryRepository == null || userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<ConversationMemory> records = conversationMemoryRepository.findByUserIdOrderByCreatedAtDesc(userId,
+                    PageRequest.of(0, conversationBackupLimit));
+            if (records == null) {
+                return List.of();
+            }
+            return records.stream()
+                    .filter(record -> record != null && userId.equals(record.getUserId()))
+                    .filter(record -> record.getExpiresAt() == null || record.getExpiresAt().isAfter(LocalDateTime.now(zone)))
+                    .sorted(Comparator.comparing(ConversationMemory::getCreatedAt,
+                            Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList();
+        } catch (Exception exception) {
+            log.warn("备份持久化对话证据失败 userHash={} reason={}", shortHash(userId),
+                    exception.getClass().getSimpleName());
+            return List.of();
+        }
     }
 
     private ArrayNode backupMedia(Path userDir, String userId, List<StoredMedia> media) throws IOException {
@@ -193,11 +348,8 @@ public class MemoryBackupJob {
         return artifacts;
     }
 
-    private boolean redactBackupState(Path stateFile, String layer, Long targetId) throws IOException {
-        JsonNode parsed = objectMapper.readTree(Files.readString(stateFile, StandardCharsets.UTF_8));
-        if (!(parsed instanceof ObjectNode state)) {
-            throw new IOException("备份状态文件不是对象");
-        }
+    private boolean redactBackupState(Path stateFile, String userId, String layer, Long targetId) throws IOException {
+        ObjectNode state = readOwnedState(stateFile, userId);
         boolean changed = removeMemoryRecord(state, layer, targetId);
         changed |= redactChangeLogs(state, layer, targetId);
         if ("WORK".equals(layer)) {
@@ -210,6 +362,27 @@ public class MemoryBackupJob {
             writeAtomically(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
         }
         return changed;
+    }
+
+    private boolean redactConversationEvidence(Path stateFile, String userId, Set<String> sourceMessageIds,
+                                               String rememberedContent) throws IOException {
+        ObjectNode state = readOwnedState(stateFile, userId);
+        if (!removeConversationRecords(state, sourceMessageIds, rememberedContent)) {
+            return false;
+        }
+        writeAtomically(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
+        return true;
+    }
+
+    private ObjectNode readOwnedState(Path stateFile, String userId) throws IOException {
+        JsonNode parsed = objectMapper.readTree(Files.readString(stateFile, StandardCharsets.UTF_8));
+        if (!(parsed instanceof ObjectNode state)) {
+            throw new IOException("备份状态文件不是对象");
+        }
+        if (!userId.equals(state.path("userId").asText())) {
+            throw new IOException("备份状态用户不匹配");
+        }
+        return state;
     }
 
     private boolean removeMemoryRecord(ObjectNode state, String layer, Long targetId) {
@@ -252,6 +425,96 @@ public class MemoryBackupJob {
             }
         }
         return changed;
+    }
+
+    private boolean removeConversationRecords(ObjectNode state, Set<String> sourceMessageIds,
+                                              String rememberedContent) {
+        ArrayNode records = array(state, "conversationMemories");
+        if (records == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (int index = records.size() - 1; index >= 0; index--) {
+            JsonNode record = records.get(index);
+            if (!conversationMatches(record, sourceMessageIds, rememberedContent)) {
+                continue;
+            }
+            records.remove(index);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private boolean conversationMatches(JsonNode record, Set<String> sourceMessageIds, String rememberedContent) {
+        if (record == null) {
+            return false;
+        }
+        if (sourceMessageIds != null && !sourceMessageIds.isEmpty()) {
+            return backupSourceMessageIds(record).stream().anyMatch(sourceMessageIds::contains);
+        }
+        return rememberedContent != null && rememberedContent.length() >= 6
+                && contentContains(record.path("content").asText(""), rememberedContent);
+    }
+
+    private Set<String> backupSourceMessageIds(JsonNode record) {
+        Set<String> ids = new LinkedHashSet<>();
+        JsonNode value = record.path("sourceMessageIds");
+        if (value.isArray()) {
+            for (JsonNode item : value) {
+                String text = item.asText("").trim();
+                if (!text.isBlank()) {
+                    ids.add(text);
+                }
+            }
+            return ids;
+        }
+        String serialized = value.asText("");
+        for (String item : serialized.split("\\|")) {
+            String text = item.trim();
+            if (!text.isBlank()) {
+                ids.add(text);
+            }
+        }
+        return ids;
+    }
+
+    private Set<String> normalizeMessageIds(List<String> values) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (values == null) {
+            return ids;
+        }
+        for (String value : values) {
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            ids.add(value.replace('|', '_').trim());
+        }
+        return ids;
+    }
+
+    private boolean contentContains(String content, String target) {
+        String normalized = normalizeForComparison(content);
+        if (normalized.length() < 6) {
+            return false;
+        }
+        if (normalized.contains(target) || target.contains(normalized)) {
+            return true;
+        }
+        int maximum = Math.min(24, Math.min(normalized.length(), target.length()));
+        for (int length = maximum; length >= 6; length--) {
+            for (int start = 0; start + length <= normalized.length(); start++) {
+                if (target.contains(normalized.substring(start, start + length))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizeForComparison(String value) {
+        return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[\\p{P}\\p{Z}\\s]+", "")
+                .trim();
     }
 
     private List<Long> removeArchivesReferencingWork(ObjectNode state, Long workId) {
@@ -383,7 +646,7 @@ public class MemoryBackupJob {
         if (!Files.isDirectory(backupDir)) {
             return;
         }
-        LocalDate cutoff = LocalDate.now().minusDays(retentionDays);
+        LocalDate cutoff = LocalDate.now(zone).minusDays(retentionDays);
         try (Stream<Path> dirs = Files.list(backupDir)) {
             dirs.filter(Files::isDirectory)
                     .filter(path -> path.getFileName().toString().matches("\\d{8}"))
@@ -415,6 +678,14 @@ public class MemoryBackupJob {
                     log.warn("删除备份文件失败: {}", path);
                 }
             });
+        }
+    }
+
+    private ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return DEFAULT_ZONE;
         }
     }
 }

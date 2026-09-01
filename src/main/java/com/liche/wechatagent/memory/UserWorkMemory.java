@@ -49,6 +49,11 @@ public class UserWorkMemory {
 
     private Integer confidence = 100;
 
+    private Integer importance = 3;
+
+    @Column(length = 1000)
+    private String keywords = "";
+
     private LocalDateTime validFrom;
 
     private LocalDateTime validUntil;
@@ -56,6 +61,10 @@ public class UserWorkMemory {
     private LocalDateTime lastConfirmedAt;
 
     private LocalDateTime lastUsedAt;
+
+    private LocalDateTime lastDecisionAt;
+
+    private Long supersededById;
 
     @Column(length = 2000)
     private String sourceMessageIds = "";
@@ -75,9 +84,12 @@ public class UserWorkMemory {
         this.status = MemoryStatus.ACTIVE.name();
         this.sourceType = "USER_EXPLICIT";
         this.confidence = 100;
+        this.importance = 3;
+        this.keywords = "";
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
         this.validFrom = this.createdAt;
         this.lastConfirmedAt = this.createdAt;
+        this.lastDecisionAt = this.createdAt;
     }
 }

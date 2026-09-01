@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +24,8 @@ public class InboundMessageBatcher {
 
     private static final Logger log = LoggerFactory.getLogger(InboundMessageBatcher.class);
     private static final long DEFAULT_MAX_WINDOW_MILLIS = 4_000;
+    private static final String DEFAULT_CONTINUATION_PATTERN =
+            "^(?:还有|另外|补充|再来|一起|这些|这个|那个|上面|刚才|帮我看看|帮我一起看看|看一下|都在这里).*";
 
     private static final class PendingBatch {
         private final ArrayList<InboundMessage> messages = new ArrayList<>();
@@ -43,20 +47,32 @@ public class InboundMessageBatcher {
     private final ScheduledExecutorService scheduler;
     private final long windowMillis;
     private final long maxWindowMillis;
+    private final long continuationWindowMillis;
+    private final Pattern continuationPattern;
     private final Object monitor = new Object();
     private final Map<String, PendingBatch> pendingByConversation = new HashMap<>();
 
     @Autowired
     public InboundMessageBatcher(@Qualifier("messageBatchScheduler") ScheduledExecutorService scheduler,
                                  @Value("${agent.message-batch-window-millis:1500}") long windowMillis,
-                                 @Value("${agent.message-batch-max-window-millis:4000}") long maxWindowMillis) {
+                                 @Value("${agent.message-batch-max-window-millis:4000}") long maxWindowMillis,
+                                 @Value("${agent.message-batch-continuation-window-millis:900}") long continuationWindowMillis,
+                                 @Value("${agent.message-batch-continuation-pattern:}") String continuationPattern) {
+        this(scheduler, windowMillis, maxWindowMillis, continuationWindowMillis, compilePattern(continuationPattern));
+    }
+
+    private InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis, long maxWindowMillis,
+                                  long continuationWindowMillis, Pattern continuationPattern) {
         this.scheduler = scheduler;
         this.windowMillis = Math.max(0, windowMillis);
         this.maxWindowMillis = Math.max(this.windowMillis, maxWindowMillis);
+        this.continuationWindowMillis = Math.max(0, continuationWindowMillis);
+        this.continuationPattern = continuationPattern;
     }
 
     InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis) {
-        this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS);
+        this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS, Math.min(windowMillis, 900),
+                Pattern.compile(DEFAULT_CONTINUATION_PATTERN));
     }
 
     public void submit(InboundMessage message, Consumer<InboundMessageBatch> consumer) {
@@ -116,7 +132,16 @@ public class InboundMessageBatcher {
         if (isCommand(incoming)) {
             return false;
         }
-        return hasMediaOrQuote(incoming) || isContinuation(incoming.content());
+        if (hasMediaOrQuote(incoming)) {
+            return true;
+        }
+        if (!pendingHasMediaOrQuote(pending)) {
+            return false;
+        }
+        if (System.currentTimeMillis() - pending.openedAtMillis > continuationWindowMillis) {
+            return false;
+        }
+        return isContinuation(incoming.content());
     }
 
     private boolean hasMediaOrQuote(InboundMessage message) {
@@ -135,8 +160,23 @@ public class InboundMessageBatcher {
         if (content == null || content.isBlank()) {
             return true;
         }
-        String compact = content.replaceAll("\\s+", "");
-        return compact.matches("^(还有|另外|补充|再来|一起|这些|这个|那个|上面|刚才|帮我看看|帮我一起看看|看一下|都在这里).*");
+        return continuationPattern != null && continuationPattern.matcher(content.strip()).matches();
+    }
+
+    private boolean pendingHasMediaOrQuote(PendingBatch pending) {
+        return pending.messages.stream().anyMatch(this::hasMediaOrQuote);
+    }
+
+    private static Pattern compilePattern(String expression) {
+        if (expression == null || expression.isBlank()) {
+            return null;
+        }
+        try {
+            return Pattern.compile(expression, Pattern.DOTALL);
+        } catch (PatternSyntaxException exception) {
+            log.warn("消息批处理补充消息规则无效，将关闭文本补充聚合: {}", exception.getDescription());
+            return null;
+        }
     }
 
     private String conversationKey(InboundMessage message) {

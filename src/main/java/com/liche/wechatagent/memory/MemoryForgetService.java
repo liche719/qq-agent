@@ -5,6 +5,7 @@ import com.liche.wechatagent.backup.MemoryBackupJob;
 import com.liche.wechatagent.exception.BizException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -27,6 +28,26 @@ public class MemoryForgetService {
     private final ContextStore contextStore;
     private final MemoryMutationLock mutationLock;
     private final MemoryBackupJob backupJob;
+    private final ConversationMemoryService conversationMemoryService;
+
+    @Autowired
+    public MemoryForgetService(CoreMemoryService coreMemoryService,
+                               WorkMemoryService workMemoryService,
+                               MemoryArchiveService archiveService,
+                               MemoryExtractionScheduler extractionScheduler,
+                               ContextStore contextStore,
+                               MemoryMutationLock mutationLock,
+                               MemoryBackupJob backupJob,
+                               ConversationMemoryService conversationMemoryService) {
+        this.coreMemoryService = coreMemoryService;
+        this.workMemoryService = workMemoryService;
+        this.archiveService = archiveService;
+        this.extractionScheduler = extractionScheduler;
+        this.contextStore = contextStore;
+        this.mutationLock = mutationLock;
+        this.backupJob = backupJob;
+        this.conversationMemoryService = conversationMemoryService;
+    }
 
     public MemoryForgetService(CoreMemoryService coreMemoryService,
                                WorkMemoryService workMemoryService,
@@ -35,13 +56,8 @@ public class MemoryForgetService {
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob) {
-        this.coreMemoryService = coreMemoryService;
-        this.workMemoryService = workMemoryService;
-        this.archiveService = archiveService;
-        this.extractionScheduler = extractionScheduler;
-        this.contextStore = contextStore;
-        this.mutationLock = mutationLock;
-        this.backupJob = backupJob;
+        this(coreMemoryService, workMemoryService, archiveService, extractionScheduler, contextStore,
+                mutationLock, backupJob, null);
     }
 
     public ForgetOutcome forget(String userId, String layer, Long memoryId) {
@@ -50,7 +66,12 @@ public class MemoryForgetService {
         boolean backupsComplete = true;
         for (ForgottenMemory forgotten : state.forgotten()) {
             MemoryBackupJob.PurgeResult result = backupJob.purgeForgottenMemory(userId, forgotten.layer(), forgotten.id());
-            backupsComplete &= result.complete();
+            backupsComplete &= result != null && result.complete();
+            if (conversationMemoryService != null) {
+                MemoryBackupJob.PurgeResult conversationResult = backupJob.purgeForgottenConversationEvidence(
+                        userId, forgotten.sourceMessageIds(), forgotten.content());
+                backupsComplete &= conversationResult != null && conversationResult.complete();
+            }
         }
         if (!backupsComplete) {
             log.warn("记忆已遗忘，但历史本机备份未完全清理 user={} layer={} targetId={}", userId, layer, memoryId);
@@ -67,6 +88,11 @@ public class MemoryForgetService {
         };
         List<ForgottenMemory> forgotten = new ArrayList<>();
         forgotten.add(primary);
+        if ("CORE".equals(primary.layer())) {
+            forgotten.addAll(coreMemoryService.forgetSupersededHistory(userId, primary.id()));
+        } else if ("WORK".equals(primary.layer())) {
+            forgotten.addAll(workMemoryService.forgetSupersededHistory(userId, primary.id()));
+        }
         if (primary.isArchiveSummary()) {
             forgotten.addAll(archiveService.forgetSummary(userId, primary.content()));
         } else if ("WORK".equals(primary.layer())) {
@@ -76,11 +102,19 @@ public class MemoryForgetService {
         boolean legacyContextReset = false;
         for (ForgottenMemory item : forgotten) {
             if (item.sourceMessageIds().isEmpty()) {
-                contextCleared |= contextStore.clearForMemoryForget(userId);
+                if (conversationMemoryService != null) {
+                    conversationMemoryService.forgetContent(userId, item.content());
+                }
+                if (!legacyContextReset) {
+                    contextCleared |= contextStore.clearForMemoryForget(userId);
+                }
                 legacyContextReset = true;
-                break;
+                continue;
             }
             contextCleared |= contextStore.removeMemoryEvidence(userId, item.sourceMessageIds(), item.content());
+            if (conversationMemoryService != null) {
+                conversationMemoryService.forgetSourceMessageIds(userId, item.sourceMessageIds());
+            }
         }
         return new ForgetState(List.copyOf(forgotten), contextCleared, legacyContextReset);
     }

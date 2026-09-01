@@ -19,3 +19,5 @@ target/
 application-local.yml
 !src/main/resources/application-local.yml
 .env
+
+/tmp/

@@ -1,6 +1,7 @@
 package com.liche.wechatagent.memory;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.liche.wechatagent.config.MemoryPolicyProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.HashSet;
@@ -10,13 +11,27 @@ import java.util.Set;
 @Component
 public class MemoryContentSimilarity {
 
-    private static final List<String> NEGATION_MARKERS = List.of(
+    private static final List<String> DEFAULT_NEGATION_MARKERS = List.of(
             "不再", "不想", "不会", "取消", "放弃", "停止", "改考", "不喜欢", "不需要");
 
     private final double threshold;
+    private final List<String> negationMarkers;
 
-    public MemoryContentSimilarity(@Value("${memory.dedup-threshold:0.8}") double threshold) {
-        this.threshold = Math.max(0.60d, Math.min(0.98d, threshold));
+    @Autowired
+    public MemoryContentSimilarity(MemoryPolicyProperties policyProperties) {
+        this(policyProperties == null ? 0.8d : policyProperties.getDedupThreshold(),
+                policyProperties == null ? DEFAULT_NEGATION_MARKERS : policyProperties.getNegationMarkers());
+    }
+
+    public MemoryContentSimilarity(double threshold) {
+        this(threshold, DEFAULT_NEGATION_MARKERS);
+    }
+
+    MemoryContentSimilarity(double threshold, List<String> negationMarkers) {
+        this.threshold = Double.isFinite(threshold) && threshold >= 0.60d && threshold <= 0.98d
+                ? threshold : 0.8d;
+        this.negationMarkers = negationMarkers == null || negationMarkers.isEmpty()
+                ? DEFAULT_NEGATION_MARKERS : List.copyOf(negationMarkers);
     }
 
     public boolean isDuplicate(String first, String second) {
@@ -53,7 +68,7 @@ public class MemoryContentSimilarity {
     }
 
     private boolean containsNegation(String value) {
-        return NEGATION_MARKERS.stream().anyMatch(value::contains);
+        return negationMarkers.stream().anyMatch(value::contains);
     }
 
     private Set<String> bigrams(String value) {
@@ -66,7 +81,7 @@ public class MemoryContentSimilarity {
     }
 
     private String normalize(String value) {
-        return value == null ? "" : value.toLowerCase()
+        return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("[\\p{P}\\p{Z}\\s]+", "")
                 .trim();
     }

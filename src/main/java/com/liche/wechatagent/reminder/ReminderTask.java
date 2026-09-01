@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 /** 定时提醒任务（Quartz JDBC 持久化，重启自动恢复） */
 @Entity
@@ -24,6 +25,7 @@ public class ReminderTask {
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_COMPLETED = "COMPLETED";
     public static final String STATUS_CANCELLED = "CANCELLED";
+    public static final String STATUS_EXPIRED = "EXPIRED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -39,7 +41,7 @@ public class ReminderTask {
     /** 准时触发时间 */
     private LocalDateTime triggerAt;
 
-    /** 提前预热分钟数（默认 10） */
+    /** 提前预热分钟数；新任务由 ReminderService 的部署策略提供默认值。 */
     private Integer prewarmMinutes = 10;
 
     /** 重复规则 Cron 表达式，null 表示一次性 */
@@ -54,13 +56,19 @@ public class ReminderTask {
     private LocalDateTime updatedAt;
 
     public ReminderTask(String userId, String content, LocalDateTime triggerAt, Integer prewarmMinutes, String cron) {
+        this(userId, content, triggerAt, prewarmMinutes, cron, ZoneId.of("Asia/Shanghai"), 10);
+    }
+
+    public ReminderTask(String userId, String content, LocalDateTime triggerAt, Integer prewarmMinutes, String cron,
+                        ZoneId zone, int defaultPrewarmMinutes) {
         this.userId = userId;
         this.content = content;
         this.triggerAt = triggerAt;
-        this.prewarmMinutes = prewarmMinutes == null ? 10 : prewarmMinutes;
+        this.prewarmMinutes = prewarmMinutes == null ? Math.max(0, defaultPrewarmMinutes) : prewarmMinutes;
         this.cron = cron;
         this.status = STATUS_PENDING;
-        this.createdAt = LocalDateTime.now();
-        this.updatedAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(zone == null ? ZoneId.of("Asia/Shanghai") : zone);
+        this.createdAt = now;
+        this.updatedAt = now;
     }
 }

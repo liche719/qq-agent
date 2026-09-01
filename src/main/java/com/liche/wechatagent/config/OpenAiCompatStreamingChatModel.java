@@ -26,6 +26,8 @@ import java.util.concurrent.TimeUnit;
 /** 流式 OpenAI 兼容 StreamingChatModel（SSE 逐段解析，用于对话回复的「打字机」体验） */
 public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
 
+    private static final int DEFAULT_CONNECT_TIMEOUT_SECONDS = 5;
+
     private final OkHttpClient client;
     private final String baseUrl;
     private final String apiKey;
@@ -35,13 +37,18 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
                                           double temperature, int timeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS);
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
+                                          double temperature, int timeoutSeconds, int connectTimeoutSeconds) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.temperature = temperature;
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .connectTimeout(Math.max(1, Math.min(300, connectTimeoutSeconds)), TimeUnit.SECONDS)
+                .readTimeout(Math.max(1, Math.min(600, timeoutSeconds)), TimeUnit.SECONDS)
                 .build();
     }
 

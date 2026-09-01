@@ -109,4 +109,31 @@ class QqQuoteMessageTest {
         assertEquals("quoted-2", quote.messageId());
         assertEquals("原课表内容", quote.content());
     }
+
+    @Test
+    void doesNotTreatOrdinaryMessageElementsAsAQuote() throws Exception {
+        QqQuoteMessage quote = QqQuoteMessage.fromEvent(objectMapper.readTree("""
+                {"content":"普通消息","message_type":0,
+                 "msg_elements":[{"content":"普通消息","msg_idx":"current-1",
+                   "attachments":[{"content_type":"image/png","url":"https://cdn.example/current.png"}]}]}
+                """));
+
+        assertEquals("", quote.messageId());
+        assertEquals("", quote.content());
+        assertTrue(quote.imageUrls().isEmpty());
+        assertTrue(quote.attachments().isEmpty());
+    }
+
+    @Test
+    void readsQuotedFileFromElementMarkedAsQuote() throws Exception {
+        QqQuoteMessage quote = QqQuoteMessage.fromEvent(objectMapper.readTree("""
+                {"msg_elements":[{"message_type":103,"msg_idx":"quoted-file-2",
+                  "content":"附件说明","attachments":[
+                    {"content_type":"application/pdf","filename":"资料.pdf","url":"https://cdn.example/file.pdf"}]}]}
+                """));
+
+        assertEquals("quoted-file-2", quote.messageId());
+        assertTrue(quote.content().contains("资料.pdf"));
+        assertEquals("https://cdn.example/file.pdf", quote.attachments().getFirst().url());
+    }
 }

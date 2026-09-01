@@ -129,15 +129,20 @@ public class ClawBotChannel implements WeChatChannel {
 
     @Override
     public void sendTextFrom(String botId, String userId, String text) {
+        sendTextResultFrom(botId, userId, text);
+    }
+
+    @Override
+    public boolean sendTextResultFrom(String botId, String userId, String text) {
         BotSession session = findSession(botId);
         if (session == null) {
             log.warn("找不到对应机器人(botId={})，无法发送给 {}", botId, userId);
-            return;
+            return false;
         }
         ILinkClient c = session.client;
         if (c == null || !c.isLoggedIn()) {
             log.warn("机器人未登录，无法发送给 {}", userId);
-            return;
+            return false;
         }
         try {
             c.sendText(userId, text);
@@ -146,9 +151,16 @@ public class ClawBotChannel implements WeChatChannel {
             } catch (Exception ignored) {
             }
             log.info("[ilink:{}] 发送 -> {} ({} chars)", session.name, userId, text == null ? 0 : text.length());
+            return true;
         } catch (Exception e) {
             log.warn("[ilink:{}] 发送失败 userId={}", session.name, userId, e);
+            return false;
         }
+    }
+
+    @Override
+    public boolean hasReliableSendStatus() {
+        return true;
     }
 
     // ---------- 扫码登录（无名字） ----------

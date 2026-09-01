@@ -3,6 +3,8 @@ package com.liche.wechatagent.media;
 import com.liche.wechatagent.channel.InboundAttachment;
 import com.liche.wechatagent.document.ExtractedDocument;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -14,8 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class MediaToolContextService {
 
-    private static final long PENDING_MEDIA_TTL_MS = 30 * 60 * 1000L;
-    private static final int MAX_PENDING_MEDIA_PER_CONVERSATION = 8;
+    private static final long DEFAULT_PENDING_MEDIA_TTL_MINUTES = 30;
+    private static final int DEFAULT_MAX_PENDING_MEDIA_PER_CONVERSATION = 8;
+    private static final int DEFAULT_EXCERPT_MAX_CHARS = 4_000;
 
     private record SavedNotice(int mediaIndex, String fileName, boolean duplicate, boolean olderVersionPreserved) {
     }
@@ -46,7 +49,7 @@ public class MediaToolContextService {
                                 String mediaSourceMessageId, String userText,
                                 int attachmentCount, List<MediaCandidate> candidates, CandidateOrigin candidateOrigin,
                                 PendingMediaKey pendingKey, List<SavedNotice> savedNotices,
-                                List<ReadableMedia> readableMedia) {
+                                List<ReadableMedia> readableMedia, List<String> sentNotices) {
     }
 
     private record PendingMedia(String sourceMessageId, List<MediaCandidate> candidates,
@@ -55,6 +58,24 @@ public class MediaToolContextService {
 
     private final ThreadLocal<CurrentMedia> current = new ThreadLocal<>();
     private final Map<PendingMediaKey, PendingMedia> pendingBySource = new ConcurrentHashMap<>();
+    private final long pendingMediaTtlMillis;
+    private final int maxPendingMediaPerConversation;
+    private final int excerptMaxChars;
+
+    @Autowired
+    public MediaToolContextService(
+            @Value("${media.context.pending-ttl-minutes:30}") long pendingMediaTtlMinutes,
+            @Value("${media.context.max-pending-per-conversation:8}") int maxPendingMediaPerConversation,
+            @Value("${media.context.excerpt-max-chars:4000}") int excerptMaxChars) {
+        this.pendingMediaTtlMillis = Math.max(1, Math.min(24 * 60, pendingMediaTtlMinutes)) * 60_000L;
+        this.maxPendingMediaPerConversation = Math.max(1, Math.min(100, maxPendingMediaPerConversation));
+        this.excerptMaxChars = Math.max(256, Math.min(100_000, excerptMaxChars));
+    }
+
+    public MediaToolContextService() {
+        this(DEFAULT_PENDING_MEDIA_TTL_MINUTES, DEFAULT_MAX_PENDING_MEDIA_PER_CONVERSATION,
+                DEFAULT_EXCERPT_MAX_CHARS);
+    }
 
     public void bind(String userId, String messageId, String userText, List<String> images,
                      List<InboundAttachment> attachments, List<ExtractedDocument> documents) {
@@ -80,13 +101,13 @@ public class MediaToolContextService {
             long now = System.currentTimeMillis();
             pendingKey = new PendingMediaKey(scope, messageId);
             pendingBySource.put(pendingKey, new PendingMedia(messageId, List.copyOf(candidates), now,
-                    now + PENDING_MEDIA_TTL_MS));
+                    now + pendingMediaTtlMillis));
             prunePending(scope, now);
         }
         current.set(new CurrentMedia(userId, scope, taskId == null ? messageId : taskId, messageId,
                 mediaSourceMessageId, userText == null ? "" : userText,
                 sizeOf(attachments) + sizeOf(quotedAttachments), List.copyOf(candidates), origin, pendingKey,
-                new ArrayList<>(), new ArrayList<>()));
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
     }
 
     public void unbind() {
@@ -137,7 +158,7 @@ public class MediaToolContextService {
         CurrentMedia activated = new CurrentMedia(media.userId(), media.scope(), media.taskId(), media.messageId(),
                 pending.sourceMessageId(), media.userText(), media.attachmentCount(), pending.candidates(),
                 CandidateOrigin.PREVIOUS_UNSAVED_UPLOAD, key,
-                media.savedNotices(), media.readableMedia());
+                media.savedNotices(), media.readableMedia(), media.sentNotices());
         current.set(activated);
         for (MediaCandidate candidate : activated.candidates()) {
             if (candidate.image() && candidate.sourceUrl() != null && !candidate.sourceUrl().isBlank()) {
@@ -199,25 +220,19 @@ public class MediaToolContextService {
         return result;
     }
 
-    private boolean currentUserRequestedDeletion() {
+    public void recordSent(String fileName) {
         CurrentMedia media = current.get();
-        if (media == null) return false;
-        String text = media.userText().replaceAll("\\s+", "");
-        if (text.matches(".*(不要|别|不许|不能|无需|不用)(删除|删掉|删|移除|清理).*")
-                || text.matches(".*(没说|没有说|并未说).*(删除|删掉|移除|清理).*")
-                || (text.matches(".*(怎么|如何|为什么|是否|能不能|可不可以|吗|么).*")
-                && text.matches(".*(删除|删掉|移除|清理).*"))) {
-            return false;
+        if (media != null && fileName != null && !fileName.isBlank()) {
+            media.sentNotices().add(fileName.trim());
         }
-        return text.matches(".*(不要了|不需要了|作废|扔掉).*")
-                || text.matches(".*(请|帮我|麻烦|给我|把|将).*(删除|删掉|移除|清理).*")
-                || text.matches("^(删除|删掉|移除|清理)(它|这个|这份|文件|资料|课表|图片)?.*")
-                || text.matches(".*(删除|删掉|移除|清理).*(吧|了)$");
     }
 
     public String completionNotice() {
         CurrentMedia media = current.get();
         if (media == null) return "";
+        if (!media.sentNotices().isEmpty()) {
+            return "📤 已确认发送：" + String.join("、", media.sentNotices()) + "。";
+        }
         if (!media.savedNotices().isEmpty()) {
             StringBuilder notice = new StringBuilder("📎 ");
             for (int index = 0; index < media.savedNotices().size(); index++) {
@@ -253,8 +268,8 @@ public class MediaToolContextService {
                     .append(candidate.image() ? "图片" : "文件")
                     .append("，原名：").append(candidate.originalName()).append("\n");
         }
-        text.append("只有对用户未来仍有价值的个人资料才调用 saveImportantMedia；例如课表、证书、长期项目资料。")
-                .append("表情包、随手截图、临时图片、重复文件和一次性资料不要保存。")
+        text.append("只有对用户未来仍有明显复用价值的个人资料才调用 saveImportantMedia；")
+                .append("请综合内容、用户语境和是否已有等价副本判断，临时、低价值、重复或用途不明的媒体不要保存。")
                 .append("保存时由你根据内容给出清晰文件名、内容摘要和重要原因。");
         return text.toString();
     }
@@ -291,7 +306,7 @@ public class MediaToolContextService {
                 .sorted(Comparator.comparingLong((Map.Entry<PendingMediaKey, PendingMedia> entry) -> entry.getValue().createdAt())
                         .reversed())
                 .toList();
-        for (int index = MAX_PENDING_MEDIA_PER_CONVERSATION; index < scoped.size(); index++) {
+        for (int index = maxPendingMediaPerConversation; index < scoped.size(); index++) {
             Map.Entry<PendingMediaKey, PendingMedia> entry = scoped.get(index);
             pendingBySource.remove(entry.getKey(), entry.getValue());
         }
@@ -352,8 +367,7 @@ public class MediaToolContextService {
     }
 
     private String excerpt(String text) {
-        int maxLength = 4_000;
-        return text.length() <= maxLength ? text : text.substring(0, maxLength) + "…（内容已截断）";
+        return text.length() <= excerptMaxChars ? text : text.substring(0, excerptMaxChars) + "…（内容已截断）";
     }
 
     private String safeOriginalName(InboundAttachment attachment, int index) {

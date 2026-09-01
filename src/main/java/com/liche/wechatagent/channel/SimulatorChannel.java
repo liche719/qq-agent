@@ -21,8 +21,22 @@ public class SimulatorChannel implements WeChatChannel {
     private final ConcurrentMap<String, List<OutboundMessage>> outbox = new ConcurrentHashMap<>();
 
     @Override
+    public String channel() {
+        return "simulator";
+    }
+
+    @Override
     public void sendText(String userId, String text) {
-        OutboundMessage msg = new OutboundMessage(userId, text, System.currentTimeMillis());
+        store(userId, text, null);
+    }
+
+    @Override
+    public void sendTextReplyFrom(String botId, String userId, String replyToMsgId, String text) {
+        store(userId, text, replyToMsgId);
+    }
+
+    private void store(String userId, String text, String replyToMsgId) {
+        OutboundMessage msg = new OutboundMessage(userId, text, System.currentTimeMillis(), replyToMsgId);
         outbox.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(msg);
         log.info("[simulator] 推送 -> {} ({} chars)", userId, text == null ? 0 : text.length());
     }

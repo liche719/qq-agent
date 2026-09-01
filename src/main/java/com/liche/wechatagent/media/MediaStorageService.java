@@ -1,19 +1,12 @@
 package com.liche.wechatagent.media;
 
 import com.liche.wechatagent.network.PublicUrlValidator;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -37,12 +30,12 @@ import java.util.function.Supplier;
 @Service
 public class MediaStorageService {
 
-    private static final int MAX_REDIRECTS = 3;
-    private static final int MAX_LIST_RESULTS = 20;
-    private static final int MAX_INSPECTION_TEXT_CHARS = 4000;
-
-    private record DownloadedMedia(byte[] bytes, String contentType) {
-    }
+    private static final int DEFAULT_MAX_REDIRECTS = 3;
+    private static final int DEFAULT_MAX_LIST_RESULTS = 20;
+    private static final int DEFAULT_MAX_INSPECTION_TEXT_CHARS = 4000;
+    private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
+    private static final long DEFAULT_READ_TIMEOUT_SECONDS = 30;
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; WechatAgent/1.0)";
 
     private record InspectionGrant(String token, Instant expiresAt) {
     }
@@ -57,30 +50,49 @@ public class MediaStorageService {
     }
 
     private final StoredMediaRepository repository;
-    private final PublicUrlValidator urlValidator;
     private final Path storageRoot;
     private final long maxFileBytes;
     private final Duration inspectionTtl;
-    private final OkHttpClient client;
+    private final int maxListResults;
+    private final int maxInspectionTextChars;
+    private final MediaDownloadService downloadService;
     private final Map<String, InspectionGrant> inspectionGrants = new ConcurrentHashMap<>();
     private final Map<String, Object> userLocks = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public MediaStorageService(StoredMediaRepository repository,
                                PublicUrlValidator urlValidator,
                                @Value("${media.storage.root:stored-media}") String storageRoot,
                                @Value("${media.storage.max-file-bytes:20971520}") long maxFileBytes,
-                               @Value("${media.storage.inspection-token-minutes:5}") long inspectionTokenMinutes) {
+                               @Value("${media.storage.inspection-token-minutes:5}") long inspectionTokenMinutes,
+                               @Value("${media.storage.max-redirects:3}") int maxRedirects,
+                               @Value("${media.storage.connect-timeout-seconds:8}") long connectTimeoutSeconds,
+                               @Value("${media.storage.read-timeout-seconds:30}") long readTimeoutSeconds,
+                               @Value("${media.storage.max-list-results:20}") int maxListResults,
+                               @Value("${media.storage.inspection-max-text-chars:4000}") int maxInspectionTextChars,
+                               @Value("${media.storage.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String userAgent) {
         this.repository = repository;
-        this.urlValidator = urlValidator;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
-        this.maxFileBytes = maxFileBytes;
+        this.maxFileBytes = bounded(maxFileBytes, 1_024, Long.MAX_VALUE, 20 * 1024 * 1024L);
         this.inspectionTtl = Duration.ofMinutes(Math.max(1, inspectionTokenMinutes));
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(8))
-                .readTimeout(Duration.ofSeconds(30))
-                .followRedirects(false)
-                .dns(urlValidator::lookupPublic)
-                .build();
+        this.maxListResults = bounded(maxListResults, 1, 100, DEFAULT_MAX_LIST_RESULTS);
+        this.maxInspectionTextChars = bounded(maxInspectionTextChars, 256, 100_000,
+                DEFAULT_MAX_INSPECTION_TEXT_CHARS);
+        this.downloadService = new MediaDownloadService(urlValidator, this.maxFileBytes,
+                bounded(maxRedirects, 0, 10, DEFAULT_MAX_REDIRECTS),
+                bounded(connectTimeoutSeconds, 1, 300, DEFAULT_CONNECT_TIMEOUT_SECONDS),
+                bounded(readTimeoutSeconds, 1, 600, DEFAULT_READ_TIMEOUT_SECONDS),
+                userAgent == null || userAgent.isBlank() ? DEFAULT_USER_AGENT : userAgent.trim());
+    }
+
+    public MediaStorageService(StoredMediaRepository repository,
+                               PublicUrlValidator urlValidator,
+                               String storageRoot,
+                               long maxFileBytes,
+                               long inspectionTokenMinutes) {
+        this(repository, urlValidator, storageRoot, maxFileBytes, inspectionTokenMinutes,
+                DEFAULT_MAX_REDIRECTS, DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS,
+                DEFAULT_MAX_LIST_RESULTS, DEFAULT_MAX_INSPECTION_TEXT_CHARS, DEFAULT_USER_AGENT);
     }
 
     public String save(String userId, String sourceMessageId, MediaCandidate candidate,
@@ -93,14 +105,14 @@ public class MediaStorageService {
         requireUserId(userId);
         requireText(summary, "内容摘要", 4);
         requireText(importanceReason, "重要性原因", 4);
-        DownloadedMedia downloaded = download(candidate);
+        MediaDownloadService.DownloadedMedia downloaded = downloadService.download(candidate);
         return withUserLock(userId, () -> saveDownloaded(userId, sourceMessageId, candidate, requestedName,
                 summary, importanceReason, downloaded));
     }
 
     private SaveOutcome saveDownloaded(String userId, String sourceMessageId, MediaCandidate candidate,
                                        String requestedName, String summary, String importanceReason,
-                                       DownloadedMedia downloaded) {
+                                       MediaDownloadService.DownloadedMedia downloaded) {
         String sha256 = sha256(downloaded.bytes());
         var duplicate = repository.findFirstByUserIdAndSha256AndStatus(userId, sha256, StoredMedia.ACTIVE);
         if (duplicate.isPresent()) {
@@ -151,17 +163,23 @@ public class MediaStorageService {
         requireUserId(userId);
         String keyword = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         List<StoredMedia> matches = repository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE,
-                        PageRequest.of(0, MAX_LIST_RESULTS * 5))
+                        PageRequest.of(0, maxListResults * 5))
                 .stream()
                 .filter(media -> keyword.isBlank() || searchableText(media).contains(keyword))
                 .sorted(Comparator.comparing(StoredMedia::getUpdatedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))
-                .limit(MAX_LIST_RESULTS)
+                .limit(maxListResults)
                 .toList();
-        if (matches.isEmpty()) {
-            return "没有找到匹配的已保存文件。";
+        boolean fallback = matches.isEmpty() && !keyword.isBlank();
+        if (fallback) {
+            matches = repository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE,
+                            PageRequest.of(0, maxListResults))
+                    .stream().limit(maxListResults).toList();
         }
-        StringBuilder result = new StringBuilder("当前用户已保存的文件：\n");
+        if (matches.isEmpty()) return "没有找到已保存的文件。";
+        StringBuilder result = new StringBuilder(fallback
+                ? "没有精确匹配，以下是最近保存的文件，请结合文件名和摘要核对：\n"
+                : "当前用户已保存的文件：\n");
         for (StoredMedia media : matches) {
             result.append("- ID=").append(media.getId())
                     .append("，文件名=").append(media.getFileName())
@@ -184,10 +202,7 @@ public class MediaStorageService {
         Instant now = Instant.now();
         inspectionGrants.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
         inspectionGrants.put(grantKey(userId, mediaId), new InspectionGrant(token, now.plus(inspectionTtl)));
-        String extractedText = blankToEmpty(media.getExtractedText());
-        if (extractedText.length() > MAX_INSPECTION_TEXT_CHARS) {
-            extractedText = extractedText.substring(0, MAX_INSPECTION_TEXT_CHARS) + "…（内容已截断）";
-        }
+        String extractedText = limitedExtractedText(media);
         return "文件审阅结果：\n"
                 + "ID=" + media.getId() + "\n"
                 + "文件名=" + media.getFileName() + "\n"
@@ -208,10 +223,7 @@ public class MediaStorageService {
         if (!Files.isRegularFile(file)) {
             throw new IllegalStateException("文件记录存在，但磁盘文件已丢失，无法读取");
         }
-        String extracted = blankToEmpty(media.getExtractedText());
-        if (extracted.length() > MAX_INSPECTION_TEXT_CHARS) {
-            extracted = extracted.substring(0, MAX_INSPECTION_TEXT_CHARS) + "…（内容已截断）";
-        }
+        String extracted = limitedExtractedText(media);
         String description = "已读取用户长期保存的文件：\nID=" + media.getId()
                 + "\n文件名=" + media.getFileName()
                 + "\n保存时间=" + formatTime(media.getCreatedAt())
@@ -232,6 +244,15 @@ public class MediaStorageService {
         } catch (IOException exception) {
             throw new IllegalStateException("读取已保存图片失败", exception);
         }
+    }
+
+    // Limits extracted document text before it is exposed to the model or user.
+    private String limitedExtractedText(StoredMedia media) {
+        String extracted = blankToEmpty(media.getExtractedText());
+        if (extracted.length() <= maxInspectionTextChars) {
+            return extracted;
+        }
+        return extracted.substring(0, maxInspectionTextChars) + "…（内容已截断）";
     }
 
     public SaveOutcome downloadFromWeb(String userId, String sourceMessageId, String url, String fileName, String summary) {
@@ -298,95 +319,6 @@ public class MediaStorageService {
                     + "，文件名=" + media.getFileName() + "，原因=" + reason.trim();
         } catch (IOException exception) {
             throw new IllegalStateException("文件移入回收目录失败，未执行删除", exception);
-        }
-    }
-
-    private DownloadedMedia download(MediaCandidate candidate) {
-        String source = candidate.sourceUrl();
-        if (source == null || source.isBlank()) {
-            throw new IllegalArgumentException("当前媒体没有可用下载地址");
-        }
-        if (source.startsWith("data:")) {
-            return decodeDataUrl(source, candidate.contentType());
-        }
-        URI current;
-        try {
-            current = urlValidator.validate(source);
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("媒体下载地址无效或不安全", exception);
-        }
-        for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-            Request request = new Request.Builder().url(current.toString())
-                    .header("User-Agent", "Mozilla/5.0 (compatible; WechatAgent/1.0)")
-                    .header("Referer", current.getScheme() + "://" + current.getHost() + "/")
-                    .get().build();
-            try (Response response = client.newCall(request).execute()) {
-                if (response.isRedirect()) {
-                    String location = response.header("Location");
-                    if (location == null || location.isBlank()) {
-                        throw new IllegalStateException("媒体下载跳转地址为空");
-                    }
-                    current = urlValidator.validate(current.resolve(location).toString());
-                    continue;
-                }
-                if (!response.isSuccessful() || response.body() == null) {
-                    throw new IllegalStateException("媒体下载失败，HTTP " + response.code());
-                }
-                String contentType = normalizeContentType(response.header("Content-Type"), candidate.contentType());
-                if (contentType.contains("text/html")) {
-                    throw new IllegalStateException("下载结果是网页或登录提示，不是可保存的文件");
-                }
-                return new DownloadedMedia(readLimited(response.body().byteStream(), response.body().contentLength()), contentType);
-            } catch (IOException exception) {
-                throw new IllegalStateException("媒体下载失败，请重新发送", exception);
-            }
-        }
-        throw new IllegalStateException("媒体下载跳转次数过多");
-    }
-
-    private DownloadedMedia decodeDataUrl(String value, String fallbackContentType) {
-        int comma = value.indexOf(',');
-        if (comma < 0) {
-            throw new IllegalArgumentException("图片 data URL 格式无效");
-        }
-        String metadata = value.substring(5, comma);
-        String encoded = value.substring(comma + 1);
-        String contentType = normalizeContentType(metadata.split(";", 2)[0], fallbackContentType);
-        try {
-            if (metadata.toLowerCase(Locale.ROOT).contains(";base64")
-                    && encoded.length() > (maxFileBytes * 4 / 3) + 8) {
-                throw new IllegalArgumentException("文件超过允许保存的大小");
-            }
-            byte[] decoded = metadata.toLowerCase(Locale.ROOT).contains(";base64")
-                    ? Base64.getDecoder().decode(encoded)
-                    : java.net.URLDecoder.decode(encoded, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
-            return new DownloadedMedia(readLimited(new ByteArrayInputStream(decoded), decoded.length), contentType);
-        } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("图片 data URL 无法解码", exception);
-        }
-    }
-
-    private byte[] readLimited(InputStream input, long declaredLength) {
-        if (declaredLength > maxFileBytes) {
-            throw new IllegalArgumentException("文件超过允许保存的大小");
-        }
-        try (input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int total = 0;
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > maxFileBytes) {
-                    throw new IllegalArgumentException("文件超过允许保存的大小");
-                }
-                output.write(buffer, 0, read);
-            }
-            if (total == 0) {
-                throw new IllegalArgumentException("不能保存空文件");
-            }
-            return output.toByteArray();
-        } catch (IOException exception) {
-            throw new IllegalStateException("读取媒体内容失败", exception);
         }
     }
 
@@ -538,5 +470,13 @@ public class MediaStorageService {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("当前环境不支持 SHA-256", exception);
         }
+    }
+
+    private static int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
+    }
+
+    private static long bounded(long value, long minimum, long maximum, long fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

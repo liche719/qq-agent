@@ -1,6 +1,7 @@
 package com.liche.wechatagent.user;
 
 import com.liche.wechatagent.exception.BizException;
+import com.liche.wechatagent.config.AgentPolicyProperties;
 import com.liche.wechatagent.log.UserLogService;
 import org.springframework.stereotype.Service;
 
@@ -11,22 +12,33 @@ import java.util.Map;
 @Service
 public class UserService {
 
-    public static final String DEFAULT_PERSONA =
-            "你是用户的专属长期智能助手，说话自然口语化，像真人一样沟通，拒绝生硬机械的机器人话术。"
-                    + "你会自动记住用户的重要信息和目标，帮用户设置提醒、搜索资料。"
-                    + "用户可以随时用 /set-prompt 指令重新设定你的身份和性格。";
+    public static final String DEFAULT_PERSONA = AgentPolicyProperties.DEFAULT_PERSONA;
 
     private final UserProfileRepository userProfileRepository;
     private final UserLogService userLogService;
+    private final String defaultPersona;
+    private final int maxPersonaChars;
 
-    public UserService(UserProfileRepository userProfileRepository, UserLogService userLogService) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public UserService(UserProfileRepository userProfileRepository,
+                       UserLogService userLogService,
+                       AgentPolicyProperties policyProperties) {
         this.userProfileRepository = userProfileRepository;
         this.userLogService = userLogService;
+        AgentPolicyProperties policies = policyProperties == null ? new AgentPolicyProperties() : policyProperties;
+        this.defaultPersona = policies.getDefaultPersona() == null || policies.getDefaultPersona().isBlank()
+                ? DEFAULT_PERSONA : policies.getDefaultPersona().trim();
+        int configuredMax = policies.getMaxPersonaChars();
+        this.maxPersonaChars = configuredMax < 128 || configuredMax > 10_000 ? 2_000 : configuredMax;
+    }
+
+    public UserService(UserProfileRepository userProfileRepository, UserLogService userLogService) {
+        this(userProfileRepository, userLogService, new AgentPolicyProperties());
     }
 
     public UserProfile getOrCreate(String userId) {
         return userProfileRepository.findById(userId)
-                .orElseGet(() -> userProfileRepository.save(new UserProfile(userId, DEFAULT_PERSONA)));
+                .orElseGet(() -> userProfileRepository.save(new UserProfile(userId, defaultPersona)));
     }
 
     public UserProfile get(String userId) {
@@ -39,8 +51,8 @@ public class UserService {
         if (newPersona == null || newPersona.isBlank()) {
             throw new BizException("人设内容不能为空");
         }
-        if (newPersona.length() > 2000) {
-            throw new BizException("人设内容太长了，控制在 2000 字以内吧");
+        if (newPersona.length() > maxPersonaChars) {
+            throw new BizException("人设内容太长了，控制在 " + maxPersonaChars + " 字以内吧");
         }
         UserProfile profile = get(userId);
         profile.setPersona(newPersona.trim());

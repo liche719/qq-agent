@@ -3,6 +3,7 @@ package com.liche.wechatagent.search;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -15,14 +16,28 @@ import java.util.List;
 @Component
 public class SearxngClient {
 
+    private static final int DEFAULT_CONNECT_TIMEOUT_SECONDS = 5;
+    private static final String DEFAULT_LANGUAGE = "zh-CN";
+
     public record SearchHit(String url, String title, String content, String publishedDate) {
     }
 
     private final String baseUrl;
+    private final int connectTimeoutSeconds;
+    private final String language;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public SearxngClient(@Value("${searxng.base-url}") String baseUrl) {
+    @Autowired
+    public SearxngClient(@Value("${searxng.base-url}") String baseUrl,
+                         @Value("${searxng.connect-timeout-seconds:5}") int connectTimeoutSeconds,
+                         @Value("${searxng.language:zh-CN}") String language) {
         this.baseUrl = baseUrl;
+        this.connectTimeoutSeconds = bounded(connectTimeoutSeconds, 1, 120, DEFAULT_CONNECT_TIMEOUT_SECONDS);
+        this.language = language == null || language.isBlank() ? DEFAULT_LANGUAGE : language.trim();
+    }
+
+    public SearxngClient(String baseUrl) {
+        this(baseUrl, DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_LANGUAGE);
     }
 
     public List<SearchHit> search(String query, int timeoutSeconds) {
@@ -31,7 +46,7 @@ public class SearxngClient {
 
     public List<SearchHit> search(String query, int timeoutSeconds, String timeRange) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(5));
+        factory.setConnectTimeout(Duration.ofSeconds(connectTimeoutSeconds));
         factory.setReadTimeout(Duration.ofSeconds(timeoutSeconds));
         RestClient client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
 
@@ -40,7 +55,7 @@ public class SearxngClient {
                     uriBuilder.path("/search")
                             .queryParam("q", query)
                             .queryParam("format", "json")
-                            .queryParam("language", "zh-CN");
+                            .queryParam("language", language);
                     if (timeRange != null && !timeRange.isBlank()) {
                         uriBuilder.queryParam("time_range", timeRange);
                     }
@@ -63,5 +78,9 @@ public class SearxngClient {
         } catch (Exception e) {
             throw new RuntimeException("SearX-NG 返回解析失败", e);
         }
+    }
+
+    private int bounded(int value, int minimum, int maximum, int fallback) {
+        return value < minimum || value > maximum ? fallback : value;
     }
 }

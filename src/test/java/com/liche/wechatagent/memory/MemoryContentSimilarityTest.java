@@ -24,4 +24,11 @@ class MemoryContentSimilarityTest {
     void keepsUnrelatedFactsSeparate() {
         assertFalse(similarity.isDuplicate("用户正在准备考研", "用户喜欢喝奶茶"));
     }
+
+    @Test
+    void fallsBackToTheSafeDefaultForInvalidThresholds() {
+        MemoryContentSimilarity invalid = new MemoryContentSimilarity(Double.NaN);
+
+        assertTrue(invalid.isDuplicate("用户的长期目标是完成研究计划", "用户长期目标是完成研究计划"));
+    }
 }
