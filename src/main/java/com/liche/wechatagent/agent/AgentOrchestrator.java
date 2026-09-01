@@ -229,13 +229,25 @@ public class AgentOrchestrator {
         MDC.put("userScope", UserScope.forUser(msg.userId()));
         String taskId = UUID.randomUUID().toString();
         MDC.put("taskId", taskId);
+        if (taskStateStore != null) {
+            taskStateStore.start(taskId, msg.userId(), batch.replyToMsgId());
+            taskStateStore.step(taskId, "PROCESSING_MESSAGE");
+        }
         toolStatusService.bind(msg.userId(), batch.replyToMsgId(), msg.botId(), msg.channel());
         try {
             conversationTraceLogger.inbound(batch.replyAnchor());
             String reply = handleSafely(batch, taskId).text();
             conversationTraceLogger.assistant(msg.userId(), reply);
+            if (taskStateStore != null) {
+                taskStateStore.finish(taskId, "SUCCEEDED", msg.userId(), batch.replyToMsgId());
+                taskStateStore.step(taskId, "REPLY_READY");
+            }
             return reply;
         } catch (Exception e) {
+            if (taskStateStore != null) {
+                taskStateStore.fail(taskId, msg.userId(), batch.replyToMsgId(), e.getClass().getSimpleName());
+                taskStateStore.step(taskId, "FAILED");
+            }
             log.error("消息处理异常 user={} msgId={}", msg.userId(), msg.msgId(), e);
             return "抱歉，我这边出了点小问题，请稍后再试一次。";
         } finally {
