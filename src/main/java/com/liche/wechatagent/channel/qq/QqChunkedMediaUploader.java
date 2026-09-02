@@ -10,6 +10,8 @@ import okhttp3.Response;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -30,16 +32,15 @@ final class QqChunkedMediaUploader {
     }
 
     String upload(RestClient api, String token, String userId, Path file, String fileName, int fileType) throws Exception {
-        byte[] bytes = Files.readAllBytes(file);
-        String md5 = digest(bytes, "MD5");
-        String sha1 = digest(bytes, "SHA-1");
-        int firstLength = Math.min(bytes.length, 10_002_432);
-        String md5_10m = digest(java.util.Arrays.copyOf(bytes, firstLength), "MD5");
+        long fileSize = Files.size(file);
+        String md5 = digestFile(file, "MD5", Long.MAX_VALUE);
+        String sha1 = digestFile(file, "SHA-1", Long.MAX_VALUE);
+        String md5_10m = digestFile(file, "MD5", 10_002_432L);
         String prepare = api.post().uri("/v2/users/{userId}/upload_prepare", userId)
                 .header("Authorization", "QQBot " + token)
                 .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                 .body(objectMapper.writeValueAsString(java.util.Map.of(
-                        "file_type", fileType, "file_size", String.valueOf(bytes.length),
+                        "file_type", fileType, "file_size", String.valueOf(fileSize),
                         "file_name", fileName, "md5", md5, "sha1", sha1, "md5_10m", md5_10m)))
                 .retrieve().body(String.class);
         JsonNode node = objectMapper.readTree(prepare);
@@ -48,9 +49,10 @@ final class QqChunkedMediaUploader {
         JsonNode parts = node.path("parts");
         for (JsonNode part : parts) {
             int index = part.path("index").asInt();
-            int offset = index * part.path("block_size").asInt(node.path("block_size").asInt(5 * 1024 * 1024));
-            int length = Math.min(part.path("block_size").asInt(5 * 1024 * 1024), bytes.length - offset);
-            byte[] chunk = java.util.Arrays.copyOfRange(bytes, offset, offset + length);
+            int blockSize = part.path("block_size").asInt(node.path("block_size").asInt(5 * 1024 * 1024));
+            long offset = (long) index * blockSize;
+            int length = (int) Math.min(blockSize, fileSize - offset);
+            byte[] chunk = readChunk(file, offset, length);
             uploadChunkWithRetry(part.path("presigned_url").asText(), chunk, index);
             api.post().uri("/v2/users/{userId}/upload_part_finish", userId)
                     .header("Authorization", "QQBot " + token)
@@ -95,5 +97,28 @@ final class QqChunkedMediaUploader {
 
     private String digest(byte[] bytes, String algorithm) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance(algorithm).digest(bytes));
+    }
+
+    private String digestFile(Path file, String algorithm, long maxBytes) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance(algorithm);
+        byte[] buffer = new byte[8192];
+        long remaining = maxBytes;
+        try (InputStream input = Files.newInputStream(file)) {
+            int read;
+            while (remaining > 0 && (read = input.read(buffer, 0, (int) Math.min(buffer.length, remaining))) != -1) {
+                digest.update(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private byte[] readChunk(Path file, long offset, int length) throws IOException {
+        byte[] chunk = new byte[length];
+        try (RandomAccessFile input = new RandomAccessFile(file.toFile(), "r")) {
+            input.seek(offset);
+            input.readFully(chunk);
+        }
+        return chunk;
     }
 }
