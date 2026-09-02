@@ -98,6 +98,7 @@ public class QqChannel implements WeChatChannel {
     @Value("${qq.max-message-chars:4000}")
     private int maxMessageChars;
     private final QqWebSocketClient gatewayClient;
+    private final QqChunkedMediaUploader chunkedMediaUploader;
     private volatile ScheduledExecutorService heartbeatExecutor;
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile ScheduledExecutorService typingExecutor;
@@ -187,6 +188,7 @@ public class QqChannel implements WeChatChannel {
         this.userAgent = policies.getUserAgent() == null || policies.getUserAgent().isBlank()
                 ? QqRuntimeProperties.DEFAULT_USER_AGENT : policies.getUserAgent().trim();
         this.gatewayClient = new QqWebSocketClient(this.websocketConnectTimeoutSeconds, this.userAgent);
+        this.chunkedMediaUploader = new QqChunkedMediaUploader(objectMapper, this.apiConnectTimeoutSeconds);
         this.orchestrator = orchestrator;
     }
 
@@ -795,12 +797,25 @@ public class QqChannel implements WeChatChannel {
         try {
             long fileSize = Files.size(media.localFile());
             long outboundLimit = maxOutboundMediaBytes > 0 ? maxOutboundMediaBytes : 20 * 1024 * 1024L;
-            if (fileSize <= 0 || fileSize > outboundLimit) {
+            if (fileSize <= 0) {
                 log.warn("[qq] media send rejected user={} file={} size={} maxBytes={}",
                         userId, media.fileName(), fileSize, outboundLimit);
                 return false;
             }
             ensureToken();
+            if (fileSize > outboundLimit && fileSize <= 200L * 1024 * 1024) {
+                chunkedMediaUploader.upload(buildRestClient(apiBase), accessToken, userId,
+                        media.localFile(), media.fileName(), qqFileType(media.contentType()));
+                mediaSendSuccessCount.incrementAndGet();
+                mediaSendDurationMillis.addAndGet((System.nanoTime() - started) / 1_000_000L);
+                log.info("[qq] chunked media sent user={} file={} size={}", userId, media.fileName(), fileSize);
+                return true;
+            }
+            if (fileSize > outboundLimit) {
+                log.warn("[qq] media send rejected user={} file={} size={} maxBytes={}",
+                        userId, media.fileName(), fileSize, outboundLimit);
+                return false;
+            }
             ObjectNode body = objectMapper.createObjectNode();
             body.put("file_type", qqFileType(media.contentType()));
             body.put("file_data", Base64.getEncoder().encodeToString(Files.readAllBytes(media.localFile())));
