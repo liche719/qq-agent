@@ -107,6 +107,13 @@ public class AgentTaskStateStore {
         }
     }
 
+    public Set<String> findTaskIds() {
+        try {
+            Set<String> ids = redis.opsForSet().members("agent:tasks:index");
+            return ids == null ? Set.of() : Set.copyOf(ids);
+        } catch (RuntimeException ignored) { return Set.of(); }
+    }
+
     /** Atomically claims a single manual retry and returns its immutable task envelope. */
     public Map<Object, Object> claimManualRetry(String taskId) {
         Map<Object, Object> state = find(taskId);

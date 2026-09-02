@@ -8,6 +8,7 @@ public class ManagementAccessProperties {
     private String adminApiKey = "";
     private boolean requireKey;
     private boolean allowLoopbackWithoutKey = true;
+    private String allowedIps = "127.0.0.1,::1";
 
     public String getAdminApiKey() {
         return adminApiKey;
@@ -32,4 +33,7 @@ public class ManagementAccessProperties {
     public void setAllowLoopbackWithoutKey(boolean allowLoopbackWithoutKey) {
         this.allowLoopbackWithoutKey = allowLoopbackWithoutKey;
     }
+
+    public String getAllowedIps() { return allowedIps; }
+    public void setAllowedIps(String allowedIps) { this.allowedIps = allowedIps == null ? "" : allowedIps.trim(); }
 }

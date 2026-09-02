@@ -325,6 +325,10 @@ public class QqChannel implements WeChatChannel {
         }, "qq-reconnect-delay").start();
     }
 
+    public void requestReconnect() { reconnect(); }
+
+    public void cleanupCaches() { pruneEphemeralCaches(System.currentTimeMillis()); }
+
     private synchronized void ensureToken() {
         if (accessToken != null && System.currentTimeMillis() < tokenExpireAtMs - tokenRefreshLeadMillis) return;
         try {
