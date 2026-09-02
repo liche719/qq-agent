@@ -895,8 +895,8 @@ public class QqChannel implements WeChatChannel {
 
     private boolean sendLongMessage(String userId, String replyToMsgId, String text) {
         int limit = Math.max(256, maxMessageChars);
+        List<String> parts = new java.util.ArrayList<>();
         int offset = 0;
-        boolean first = true;
         while (offset < text.length()) {
             int end = Math.min(text.length(), offset + limit);
             if (end < text.length()) {
@@ -904,12 +904,16 @@ public class QqChannel implements WeChatChannel {
                 if (breakAt > offset + limit / 2) end = breakAt;
             }
             String part = text.substring(offset, end).trim();
-            if (!part.isBlank() && !sendPassive(userId, first ? replyToMsgId : null, part, looksLikeMarkdown(part))) {
-                log.warn("[qq] long message delivery failed user={} offset={} length={}", userId, offset, part.length());
+            if (!part.isBlank()) parts.add(part);
+            offset = end;
+        }
+        for (int index = 0; index < parts.size(); index++) {
+            String part = parts.get(index);
+            String labeled = "[" + (index + 1) + "/" + parts.size() + "]\n" + part;
+            if (!sendPassive(userId, index == 0 ? replyToMsgId : null, labeled, looksLikeMarkdown(labeled))) {
+                log.warn("[qq] long message delivery failed user={} part={} total={}", userId, index + 1, parts.size());
                 return false;
             }
-            offset = end;
-            first = false;
         }
         return true;
     }
