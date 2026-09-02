@@ -247,7 +247,20 @@ src/main/java/com/liche/wechatagent
 
 - QQ 私聊中回复/引用一条消息时，机器人会读取被引用消息的文本和图片，并将其作为本轮回答的只读背景。
 - 网关事件未直接带引用正文时，机器人会按当前 QQ 用户和被引用消息 ID 通过 QQ 官方接口回取；接口短暂不可用时才退回本机有时限、容量受控的短期缓存。
-- 引用内容不会被当作当前用户新说的话写进长期记忆，也不会被自动保存为当前上传文件。
+  - 引用内容不会被当作当前用户新说的话写进长期记忆，也不会被自动保存为当前上传文件。
+
+## QQ 官方能力边界
+
+本项目只把 QQ 开放平台文档明确提供的协议能力作为平台能力使用；其余是本地应用层逻辑，不伪装成 QQ 原生功能。
+
+- **保留**：文本/Markdown、图片/视频/语音/文件富媒体（含官方预上传与分片上传）、单聊消息查询与引用解析、带 `message_id` 的消息撤回（官方限制为发送后 2 分钟内）、WebSocket 事件与心跳/鉴权。
+- **应用层**：长文本按 QQ 消息长度拆分后用“继续/下一页”等普通文本取下一页；工具确认使用普通文本令牌；任务重试、状态快照、运行时指标和长期记忆均由本服务负责。
+- **不保留**：QQ 官方文档未提供的原生分页控件、动态确认按钮回调、超时后无消息 ID 的撤回，以及声称由 QQ 网关提供的任务恢复机制。
+
+依据：
+`https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html`、
+`https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/rich-media.html`、
+`https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages_message_id.delete.html`。
 
 ## 主动关怀
 

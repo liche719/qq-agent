@@ -147,7 +147,7 @@ public class QqChannel implements WeChatChannel {
                      @Value("${qq.api-connect-timeout-seconds:5}") long apiConnectTimeoutSeconds,
                      @Value("${qq.api-read-timeout-seconds:15}") long apiReadTimeoutSeconds,
                      @Value("${qq.websocket-connect-timeout-seconds:10}") long websocketConnectTimeoutSeconds,
-                     @Value("${qq.passive-window-ms:300000}") long passiveWindowMillis,
+                     @Value("${qq.passive-window-ms:3600000}") long passiveWindowMillis,
                      @Value("${qq.typing-keepalive-ms:50000}") long typingKeepaliveMillis,
                      @Value("${qq.ephemeral-cache-ttl-ms:1800000}") long ephemeralCacheTtlMillis,
                      @Value("${qq.stream-state-ttl-ms:600000}") long streamStateTtlMillis,
@@ -163,7 +163,7 @@ public class QqChannel implements WeChatChannel {
 
     QqChannel(String appId, String clientSecret, boolean sandbox, AgentOrchestrator orchestrator) {
         this(appId, clientSecret, sandbox, false,
-                5, 15, 10, 5 * 60 * 1000L, 50_000L, 30 * 60 * 1000L,
+                5, 15, 10, 60 * 60 * 1000L, 50_000L, 30 * 60 * 1000L,
                 10 * 60 * 1000L, 2_048, 4_096, orchestrator, new QqRuntimeProperties(), true);
     }
 
@@ -183,7 +183,7 @@ public class QqChannel implements WeChatChannel {
         this.apiReadTimeoutSeconds = bounded(apiReadTimeoutSeconds, 1, 600, 15);
         this.websocketConnectTimeoutSeconds = bounded(websocketConnectTimeoutSeconds, 1, 120,
                 10);
-        this.passiveWindowMillis = bounded(passiveWindowMillis, 1_000, 3_600_000, 5 * 60 * 1000L);
+        this.passiveWindowMillis = bounded(passiveWindowMillis, 1_000, 3_600_000, 60 * 60 * 1000L);
         this.typingKeepaliveMillis = bounded(typingKeepaliveMillis, 1_000, 60_000, 50_000L);
         this.ephemeralCacheTtlMillis = bounded(ephemeralCacheTtlMillis, 1_000, 86_400_000,
                 30 * 60 * 1000L);
@@ -1046,7 +1046,7 @@ public class QqChannel implements WeChatChannel {
     }
 
     /**
-     * 优先被动回复（带 msg_id，5 分钟窗口内有效）；失败则降级主动消息。
+     * 优先被动回复（带 msg_id，私聊 60 分钟窗口内有效）；失败则降级主动消息。
      * 被动消息每用户每天 1000 条上限且未认证频控 5/qp、30/qpm —— 主动仅作兜底。
      */
     private boolean sendWithPassiveFirst(String userId, String replyToMsgId, String text) {

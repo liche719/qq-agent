@@ -167,7 +167,7 @@ qq:
   api-connect-timeout-seconds: ${QQ_API_CONNECT_TIMEOUT_SECONDS:5}
   api-read-timeout-seconds: ${QQ_API_READ_TIMEOUT_SECONDS:15}
   websocket-connect-timeout-seconds: ${QQ_WEBSOCKET_CONNECT_TIMEOUT_SECONDS:10}
-  passive-window-ms: ${QQ_PASSIVE_WINDOW_MS:300000}
+  passive-window-ms: ${QQ_PASSIVE_WINDOW_MS:3600000}
   typing-keepalive-ms: ${QQ_TYPING_KEEPALIVE_MS:50000}
   ephemeral-cache-ttl-ms: ${QQ_EPHEMERAL_CACHE_TTL_MS:1800000}
   stream-state-ttl-ms: ${QQ_STREAM_STATE_TTL_MS:600000}
