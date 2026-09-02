@@ -1075,6 +1075,7 @@ public class QqChannel implements WeChatChannel {
                 if (sent) {
                     log.info("[qq] stream session done user={}", userId);
                 } else {
+                    removeIncompleteStream(userId, state);
                     log.warn("[qq] stream final delivery failed; orchestrator will use standard reply user={}", userId);
                 }
             }
@@ -1082,6 +1083,7 @@ public class QqChannel implements WeChatChannel {
             @Override
             public void onError(Throwable t) {
                 state.failed = true;
+                removeIncompleteStream(userId, state);
                 streamStates.remove(userId);
                 log.warn("[qq] stream failed user={}: {}", userId, t.getMessage());
             }
@@ -1091,6 +1093,14 @@ public class QqChannel implements WeChatChannel {
                 return state.done && !state.failed;
             }
         };
+    }
+
+    private void removeIncompleteStream(String userId, StreamSessionState state) {
+        String streamMessageId = state == null ? null : state.streamMsgId;
+        if (streamMessageId == null || streamMessageId.isBlank()) return;
+        if (!deleteMessage(null, userId, streamMessageId)) {
+            log.warn("[qq] unable to remove incomplete stream user={} messageId={}", userId, streamMessageId);
+        }
     }
 
     /** 发送一帧流式消息（append 模式：content_raw 为增量）；首帧成功后记录 stream_msg_id */
