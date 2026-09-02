@@ -50,6 +50,11 @@ public interface WeChatChannel {
         return false;
     }
 
+    /** Best-effort removal of a bot message previously sent in this conversation. */
+    default boolean deleteMessage(String botId, String userId, String messageId) {
+        return false;
+    }
+
     /** 该通道是否负责给此用户发消息（返回 botId；不属于本通道返回 null） */
     default String botIdForUser(String userId) {
         return null;

@@ -793,6 +793,23 @@ public class QqChannel implements WeChatChannel {
         }
     }
 
+    @Override
+    public boolean deleteMessage(String botId, String userId, String messageId) {
+        if (isGroupConversation(userId) || userId == null || userId.isBlank()
+                || messageId == null || messageId.isBlank()) return false;
+        try {
+            ensureToken();
+            buildRestClient(apiBase).delete().uri("/v2/users/{openid}/messages/{messageId}", userId, messageId)
+                    .header("Authorization", "QQBot " + accessToken)
+                    .retrieve().toBodilessEntity();
+            log.info("[qq] deleted bot message user={} messageId={}", userId, messageId);
+            return true;
+        } catch (Exception exception) {
+            log.warn("[qq] delete message failed user={} messageId={} reason={}", userId, messageId, exception.getMessage());
+            return false;
+        }
+    }
+
     private int qqFileType(String contentType) {
         String normalized = contentType == null ? "" : contentType.toLowerCase();
         if (normalized.startsWith("image/png") || normalized.startsWith("image/jpeg")) return 1;
