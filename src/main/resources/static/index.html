@@ -136,16 +136,7 @@
     </div>
   </section>
 
-  <section class="panel" id="adminPanel">
-    <div class="panel-head"><h2>运维监控</h2><button id="monitorRefresh" class="ghost">刷新</button></div>
-    <p class="desc">本机管理面板：查看应用、QQ、任务、用户、记忆与近期日志。</p>
-    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <input id="adminKey" type="password" placeholder="管理密钥（如已关闭可留空）" style="height:36px;flex:1;min-width:220px;border:1px solid rgba(30,41,59,.16);border-radius:10px;padding:0 12px;">
-      <select id="monitorInterval" class="ghost"><option value="5000">5 秒</option><option value="10000" selected>10 秒</option><option value="30000">30 秒</option><option value="60000">60 秒</option><option value="0">暂停</option></select>
-    </div>
-    <div id="monitorStatus" class="mode-tip"></div><pre id="monitorOutput" style="margin-top:12px;white-space:pre-wrap;max-height:360px;overflow:auto;font:12px ui-monospace,monospace;background:rgba(15,23,42,.04);padding:14px;border-radius:12px;">未加载</pre>
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;"><button id="qqReconnect" class="ghost">QQ 重连</button><button id="cacheCleanup" class="ghost">清理过期缓存</button><button id="tasksView" class="ghost">任务</button><button id="usersView" class="ghost">用户</button><button id="logsView" class="ghost">日志</button></div>
-  </section>
+  <section class="panel"><h2>大运维监控</h2><p class="desc">监控页面独立运行，查看完整系统状态、趋势、任务、用户和日志。</p><div style="margin-top:18px"><a class="primary" href="/admin.html" style="display:inline-flex;align-items:center;text-decoration:none;">进入大运维监控面板</a></div></section>
 
   <section class="panel">
     <div class="panel-head">
@@ -173,13 +164,11 @@
 var QR_LIB = (typeof QRCode !== 'undefined');
 var pendingTimer = null;
 var beforeCount = -1;
-var monitorTimer = null;
 
 function el(id) { return document.getElementById(id); }
 
 function api(path, opts) {
   var options = opts || {};
-  options.headers = Object.assign({}, options.headers || {}, {'X-Agent-Admin-Key': el('adminKey') ? el('adminKey').value : ''});
   return fetch(path, options).then(function (res) {
     if (!res.ok) {
       return res.json().then(function (j) { throw new Error(j.message || ('请求失败 ' + res.status)); });
@@ -188,14 +177,6 @@ function api(path, opts) {
   });
 }
 
-function loadMonitor() {
-  api('/api/admin/overview').then(function (data) {
-    el('monitorStatus').textContent = '最后刷新：' + new Date().toLocaleString();
-    el('monitorStatus').className = 'mode-tip'; el('monitorOutput').textContent = JSON.stringify(data, null, 2);
-  }).catch(function (e) { el('monitorStatus').textContent = '监控读取失败：' + e.message; el('monitorStatus').className = 'mode-tip error'; });
-}
-function loadMonitorData(path) { api(path).then(function(data){ el('monitorStatus').textContent='最后刷新：'+new Date().toLocaleString(); el('monitorOutput').textContent=JSON.stringify(data,null,2); }).catch(function(e){ el('monitorStatus').textContent='读取失败：'+e.message; el('monitorStatus').className='mode-tip error'; }); }
-function resetMonitorTimer() { if (monitorTimer) clearInterval(monitorTimer); var ms = Number(el('monitorInterval').value); if (ms) monitorTimer = setInterval(loadMonitor, ms); }
 
 function shortOpenid(o) {
   if (!o) return '未知';
@@ -325,14 +306,6 @@ function doLogout(openid) {
 
 el('scanBtn').addEventListener('click', doScan);
 el('qrClose').addEventListener('click', closeQr);
-el('monitorRefresh').addEventListener('click', loadMonitor);
-el('monitorInterval').addEventListener('change', resetMonitorTimer);
-el('adminKey').addEventListener('change', loadMonitor);
-el('qqReconnect').addEventListener('click', function () { if (window.confirm('确认触发 QQ 重连？')) api('/api/admin/actions/qq/reconnect', {method:'POST'}).then(loadMonitor).catch(function(e){alert(e.message);}); });
-el('cacheCleanup').addEventListener('click', function () { if (window.confirm('确认清理过期内存缓存？不会删除数据库数据。')) api('/api/admin/actions/cache/cleanup', {method:'POST'}).then(loadMonitor).catch(function(e){alert(e.message);}); });
-el('tasksView').addEventListener('click', function(){loadMonitorData('/api/admin/tasks');});
-el('usersView').addEventListener('click', function(){loadMonitorData('/api/admin/users');});
-el('logsView').addEventListener('click', function(){loadMonitorData('/api/admin/logs');});
 
 api('/api/health').then(function (h) {
   if (h.startedAt) {
@@ -346,7 +319,6 @@ api('/api/health').then(function (h) {
 
 loadBots(true);
 setInterval(function () { loadBots(false); }, 4000);
-loadMonitor(); resetMonitorTimer();
 </script>
 </body>
 </html>

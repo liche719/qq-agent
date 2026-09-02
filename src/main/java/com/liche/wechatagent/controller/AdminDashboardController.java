@@ -15,6 +15,9 @@ import com.liche.wechatagent.user.UserProfileRepository;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.lang.management.ManagementFactory;
@@ -37,14 +40,16 @@ public class AdminDashboardController {
     private final OperationLogRepository logs;
     private final ObjectProvider<QqChannel> qq;
     private final Deque<Map<String,Object>> history = new ConcurrentLinkedDeque<>();
+    private final JdbcTemplate jdbc;
+    private final StringRedisTemplate redis;
 
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
             UserWorkMemoryRepository work, ReminderTaskRepository reminders,
-            OperationLogRepository logs, ObjectProvider<QqChannel> qq) {
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis) {
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
-        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq;
+        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis;
     }
 
     @GetMapping("/overview")
@@ -58,25 +63,31 @@ public class AdminDashboardController {
         out.put("jvm", jvm); out.put("users", users.count()); out.put("conversations", conversations.count());
         out.put("episodes", episodes.count()); out.put("coreMemories", core.count()); out.put("workMemories", work.count());
         out.put("reminders", reminders.count()); out.put("tasks", taskSummary());
+        out.put("dependencies", dependencyHealth());
         List<String> alerts = new ArrayList<>();
         if ("DOWN".equals(out.get("qq"))) alerts.add("QQ 网关已离线");
         if (!tasks.findByStatus("UNKNOWN_RESULT").isEmpty()) alerts.add("存在 UNKNOWN_RESULT 任务");
         out.put("alerts", alerts); sample(out); return out;
     }
 
+    @Scheduled(fixedDelayString="${management.dashboard.metrics-sample-ms:10000}")
+    public void scheduledSample() { overview(); }
+
     @GetMapping("/metrics/history") public List<Map<String,Object>> history() { return List.copyOf(history); }
 
     @GetMapping("/tasks") public Map<String,Object> taskList(@RequestParam(defaultValue="") String status,
+            @RequestParam(defaultValue="") String query,
             @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size) {
         List<Map<Object,Object>> all = tasks.findTaskIds().stream().map(tasks::find).filter(m -> !m.isEmpty())
-                .filter(m -> status.isBlank() || status.equals(String.valueOf(m.get("status")))).toList();
+                .filter(m -> status.isBlank() || status.equals(String.valueOf(m.get("status"))))
+                .filter(m -> query.isBlank() || m.toString().toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
         int from=Math.min(Math.max(0,page)*Math.max(1,size),all.size()), to=Math.min(from+Math.max(1,size),all.size());
         return Map.of("total",all.size(),"items",all.subList(from,to));
     }
 
     @GetMapping("/users") public List<Map<String,Object>> userList() {
         return users.findAll().stream().map(u -> {
-            Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", mask(u.getUserId()));
+            Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", u.getUserId());
             out.put("lastSeenAt", String.valueOf(u.getLastSeenAt())); out.put("channel", String.valueOf(u.getLastChannel()));
             out.put("createdAt", String.valueOf(u.getCreatedAt())); return out;
         }).toList();
@@ -89,7 +100,10 @@ public class AdminDashboardController {
         out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId)); return out;
     }
 
-    @GetMapping("/logs") public List<OperationLog> logs() { return logs.findTop100ByOrderByCreatedAtDesc(); }
+    @GetMapping("/logs") public List<OperationLog> logs(@RequestParam(defaultValue="") String level, @RequestParam(defaultValue="") String query) {
+        return logs.findTop100ByOrderByCreatedAtDesc().stream().filter(x -> level.isBlank() || x.getAction().toUpperCase(Locale.ROOT).contains(level.toUpperCase(Locale.ROOT)))
+                .filter(x -> query.isBlank() || (String.valueOf(x.getDetail())+x.getAction()).toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
+    }
 
     @PostMapping("/actions/qq/reconnect") public Map<String,Object> reconnect(HttpServletRequest request) {
         QqChannel channel=qq.getIfAvailable(); if(channel==null) return Map.of("accepted",false,"message","QQ 未启用");
@@ -104,6 +118,7 @@ public class AdminDashboardController {
     }
 
     private Map<String,Object> taskSummary() { Map<String,Object> m=new LinkedHashMap<>(); for(String s:List.of("RUNNING","FAILED","UNKNOWN_RESULT","REPLY_SENT")) m.put(s,tasks.findByStatus(s).size()); return m; }
+    private Map<String,String> dependencyHealth() { Map<String,String> m=new LinkedHashMap<>(); try { jdbc.queryForObject("SELECT 1", Integer.class); m.put("mysql","UP"); } catch(Exception e){m.put("mysql","DOWN");} try { redis.getConnectionFactory().getConnection().ping(); m.put("redis","UP"); } catch(Exception e){m.put("redis","DOWN");} return m; }
     private void sample(Map<String,Object> overview) { Map<String,Object> s=new LinkedHashMap<>(); s.put("at", Instant.now().toString()); s.put("qq",overview.get("qq")); s.put("users",overview.get("users")); s.put("tasks",overview.get("tasks")); s.put("jvm",overview.get("jvm")); history.addLast(s); while(history.size()>360) history.pollFirst(); }
     private String mask(String value) { if(value==null||value.length()<5)return "***"; return value.substring(0,2)+"***"+value.substring(value.length()-2); }
     private void audit(HttpServletRequest request, String action, String detail) { try { logs.save(new OperationLog("admin", action, detail+" ip="+request.getRemoteAddr())); } catch (RuntimeException ignored) {} }

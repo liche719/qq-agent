@@ -289,3 +289,5 @@ management:
     require-key: ${ADMIN_REQUIRE_KEY:false}
     allow-loopback-without-key: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:true}
     allowed-ips: ${ADMIN_ALLOWED_IPS:127.0.0.1,::1}
+  dashboard:
+    metrics-sample-ms: ${ADMIN_METRICS_SAMPLE_MS:10000}
