@@ -212,6 +212,11 @@ public class QqChannel implements WeChatChannel {
         log.info("QQ bot WebSocket connected");
     }
 
+    public boolean isGatewayConnected() {
+        WebSocket current = ws;
+        return current != null && running.get();
+    }
+
     private void reconnect() {
         if (!running.get()) return;
         stopHeartbeat();
