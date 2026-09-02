@@ -113,6 +113,9 @@ public class QqChannel implements WeChatChannel {
     private final ConcurrentMap<String, ScheduledFuture<?>> typingTasks = new ConcurrentHashMap<>();
     /** Only short-lived, per-user copies of received messages, used when QQ quote lookup is temporarily unavailable. */
     private final ConcurrentMap<String, ReceivedQuote> receivedMessages = new ConcurrentHashMap<>();
+    /** User-scoped continuation pages for long replies; never shared between conversations. */
+    private final ConcurrentMap<String, PendingPages> pendingPages = new ConcurrentHashMap<>();
+    private record PendingPages(List<String> pages, long expiresAt) { }
 
     private record ReceivedQuote(QqQuoteMessage message, long expiresAt) {
     }
@@ -507,6 +510,8 @@ public class QqChannel implements WeChatChannel {
         String content = message.content();
         if (message.bot()) { log.info("[qq] ignore bot-self msg -> {}", openid); return; }
         if (openid.isBlank()) return;
+        if (handleContinuationRequest(openid, content, data.path("id").asText(""))) return;
+        pendingPages.remove(openid);
         QqAttachmentParser.Payload payload = message.attachments();
         if (payload.empty() && content.isBlank()) { log.info("[qq] recv (empty, no attachments) -> {}", openid); return; }
         rememberReplyWindow(openid, msgId);
@@ -523,6 +528,30 @@ public class QqChannel implements WeChatChannel {
         log.info("[qq] recv(image x{}, file x{}, quote={} chars/{} images) -> {}", payload.images().size(),
                 payload.attachments().size(), quote.content().length(), quote.imageUrls().size(), openid);
         orchestrator.onInbound(inbound);
+    }
+
+    private boolean handleContinuationRequest(String userId, String content, String replyToMsgId) {
+        if (!isContinuationCommand(content)) return false;
+        PendingPages pending = pendingPages.get(userId);
+        if (pending == null || pending.expiresAt() <= System.currentTimeMillis() || pending.pages().isEmpty()) {
+            if (pending != null) pendingPages.remove(userId, pending);
+            return false;
+        }
+        String page = pending.pages().getFirst();
+        List<String> remaining = pending.pages().subList(1, pending.pages().size());
+        boolean sent = sendPassive(userId, replyToMsgId, page, looksLikeMarkdown(page));
+        if (sent) {
+            if (remaining.isEmpty()) pendingPages.remove(userId, pending);
+            else pendingPages.put(userId, new PendingPages(List.copyOf(remaining), pending.expiresAt()));
+        }
+        return sent;
+    }
+
+    private boolean isContinuationCommand(String content) {
+        if (content == null) return false;
+        String value = content.trim().toLowerCase(java.util.Locale.ROOT);
+        return value.equals("继续") || value.equals("下一页") || value.equals("继续查看")
+                || value.equals("/next") || value.equals("/more");
     }
 
     // Converts a group mention event while keeping the group conversation scope.
@@ -923,13 +952,19 @@ public class QqChannel implements WeChatChannel {
             if (!part.isBlank()) parts.add(part);
             offset = end;
         }
+        if (parts.isEmpty()) return true;
+        List<String> labeledPages = new java.util.ArrayList<>();
         for (int index = 0; index < parts.size(); index++) {
-            String part = parts.get(index);
-            String labeled = "[" + (index + 1) + "/" + parts.size() + "]\n" + part;
-            if (!sendPassive(userId, index == 0 ? replyToMsgId : null, labeled, looksLikeMarkdown(labeled))) {
-                log.warn("[qq] long message delivery failed user={} part={} total={}", userId, index + 1, parts.size());
-                return false;
-            }
+            labeledPages.add("[" + (index + 1) + "/" + parts.size() + "]\n" + parts.get(index));
+        }
+        if (!sendPassive(userId, replyToMsgId, labeledPages.getFirst(), looksLikeMarkdown(labeledPages.getFirst()))) {
+            log.warn("[qq] long message delivery failed user={} part=1 total={}", userId, parts.size());
+            return false;
+        }
+        if (labeledPages.size() > 1) {
+            long expiresAt = System.currentTimeMillis() + ephemeralCacheTtlMillis;
+            pendingPages.put(userId, new PendingPages(List.copyOf(labeledPages.subList(1, labeledPages.size())), expiresAt));
+            log.info("[qq] long message paged user={} remainingPages={}", userId, labeledPages.size() - 1);
         }
         return true;
     }
