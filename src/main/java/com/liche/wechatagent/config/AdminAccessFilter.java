@@ -26,7 +26,8 @@ public class AdminAccessFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !path.startsWith("/api/clawbot") && !path.startsWith("/api/sim");
+        return !path.startsWith("/api/clawbot") && !path.startsWith("/api/sim")
+                && !path.startsWith("/api/agent/tasks");
     }
 
     @Override

@@ -8,6 +8,8 @@ import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** Durable, user-scoped lifecycle state for asynchronous agent executions. */
 @Component
@@ -24,6 +26,20 @@ public class AgentTaskStateStore {
     public void start(String taskId, String userId, String replyToMessageId) {
         save(taskId, Map.of("status", "RUNNING", "userId", safe(userId),
                 "replyToMessageId", safe(replyToMessageId), "startedAt", Instant.now().toString()));
+    }
+
+    /** Stores a bounded, replay-safe task envelope. Binary media and URLs are deliberately excluded. */
+    public void captureInput(String taskId, InboundMessageBatch batch) {
+        if (batch == null || taskId == null || taskId.isBlank()) return;
+        String content = batch.historyContent();
+        if (content.length() > 8000) content = content.substring(0, 8000) + "…";
+        save(taskId, Map.of(
+                "inputContent", safe(content),
+                "inputMessageIds", safe(String.join(",", batch.messageIds())),
+                "inputMediaCount", String.valueOf(batch.images().size() + batch.attachments().size()),
+                "inputQuotedMediaCount", String.valueOf(batch.quotedImages().size() + batch.quotedAttachments().size()),
+                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty())
+        ));
     }
 
     public void finish(String taskId, String status, String userId, String replyToMessageId) {
@@ -67,6 +83,18 @@ public class AgentTaskStateStore {
             return redis.opsForHash().entries("agent:task:" + taskId);
         } catch (RuntimeException ignored) {
             return Map.of();
+        }
+    }
+
+    public Set<String> findByStatus(String status) {
+        if (status == null || status.isBlank()) return Set.of();
+        try {
+            var ids = redis.opsForSet().members("agent:tasks:index");
+            if (ids == null) return Set.of();
+            return ids.stream().filter(id -> status.equals(redis.opsForHash().get("agent:task:" + id, "status")))
+                    .collect(Collectors.toUnmodifiableSet());
+        } catch (RuntimeException ignored) {
+            return Set.of();
         }
     }
 

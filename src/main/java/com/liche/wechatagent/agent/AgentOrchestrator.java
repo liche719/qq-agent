@@ -161,6 +161,7 @@ public class AgentOrchestrator {
             MDC.put("taskId", taskId);
             if (taskStateStore != null) {
                 taskStateStore.start(taskId, batch.userId(), batch.replyToMsgId());
+                taskStateStore.captureInput(taskId, batch);
                 taskStateStore.step(taskId, "PROCESSING_MESSAGE");
             }
             toolStatusService.bind(batch.userId(), batch.replyToMsgId(), batch.botId(), batch.channel());
@@ -256,6 +257,7 @@ public class AgentOrchestrator {
         MDC.put("taskId", taskId);
         if (taskStateStore != null) {
             taskStateStore.start(taskId, msg.userId(), batch.replyToMsgId());
+            taskStateStore.captureInput(taskId, batch);
             taskStateStore.step(taskId, "PROCESSING_MESSAGE");
         }
         toolStatusService.bind(msg.userId(), batch.replyToMsgId(), msg.botId(), msg.channel());
