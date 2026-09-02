@@ -89,6 +89,8 @@ public class QqChannel implements WeChatChannel {
     private final AtomicLong textSendFailureCount = new AtomicLong();
     private final AtomicLong mediaSendSuccessCount = new AtomicLong();
     private final AtomicLong mediaSendFailureCount = new AtomicLong();
+    private final AtomicLong textSendDurationMillis = new AtomicLong();
+    private final AtomicLong mediaSendDurationMillis = new AtomicLong();
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
     @Value("${media.storage.max-file-bytes:20971520}")
@@ -227,7 +229,13 @@ public class QqChannel implements WeChatChannel {
                 "textSendSuccess", textSendSuccessCount.get(),
                 "textSendFailure", textSendFailureCount.get(),
                 "mediaSendSuccess", mediaSendSuccessCount.get(),
-                "mediaSendFailure", mediaSendFailureCount.get());
+                "mediaSendFailure", mediaSendFailureCount.get(),
+                "textSendAverageMs", averageMillis(textSendDurationMillis, textSendSuccessCount.get() + textSendFailureCount.get()),
+                "mediaSendAverageMs", averageMillis(mediaSendDurationMillis, mediaSendSuccessCount.get() + mediaSendFailureCount.get()));
+    }
+
+    private long averageMillis(AtomicLong total, long count) {
+        return count == 0 ? 0 : total.get() / count;
     }
 
     private void reconnect() {
@@ -762,11 +770,13 @@ public class QqChannel implements WeChatChannel {
 
     @Override
     public boolean sendTextReplyResultFrom(String botId, String userId, String replyToMsgId, String text) {
+        long started = System.nanoTime();
         try {
             boolean sent = sendWithPassiveFirst(userId, replyToMsgId, text);
             if (sent) textSendSuccessCount.incrementAndGet(); else textSendFailureCount.incrementAndGet();
             return sent;
         } finally {
+            textSendDurationMillis.addAndGet((System.nanoTime() - started) / 1_000_000L);
             if (!isGroupConversation(userId)) {
                 stopTyping(userId);
             }
@@ -777,6 +787,7 @@ public class QqChannel implements WeChatChannel {
 
     @Override
     public boolean sendMediaReplyFrom(String botId, String userId, String replyToMsgId, OutboundMedia media) {
+        long started = System.nanoTime();
         if (isGroupConversation(userId) || media == null || media.localFile() == null || !Files.isRegularFile(media.localFile())) {
             return false;
         }
@@ -807,6 +818,8 @@ public class QqChannel implements WeChatChannel {
             mediaSendFailureCount.incrementAndGet();
             log.warn("[qq] media send failed user={}: {}", userId, exception.getMessage());
             return false;
+        } finally {
+            mediaSendDurationMillis.addAndGet((System.nanoTime() - started) / 1_000_000L);
         }
     }
 
