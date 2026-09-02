@@ -199,8 +199,24 @@ public class AgentOrchestrator {
             if (reply != null && !reply.isBlank()) {
                 WeChatChannel c = channelFor(batch.channel());
                 if (c != null && !(sink != null && sink.isDone())) {
-                    c.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
-                    if (taskStateStore != null) taskStateStore.step(taskId, "REPLY_SENT");
+                    try {
+                        boolean sent;
+                        if (c.hasReliableSendStatus()) {
+                            sent = c.sendTextReplyResultFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
+                        } else {
+                            c.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
+                            sent = true;
+                        }
+                        if (sent) {
+                            if (taskStateStore != null) taskStateStore.step(taskId, "REPLY_SENT");
+                        } else {
+                            markReplyDeliveryFailed(taskId, batch, "通道未确认消息发送成功");
+                        }
+                    } catch (RuntimeException sendFailure) {
+                        markReplyDeliveryFailed(taskId, batch,
+                                sendFailure.getClass().getSimpleName() + ": "
+                                        + (sendFailure.getMessage() == null ? "消息发送异常" : sendFailure.getMessage()));
+                    }
                 }
             }
         });
@@ -211,6 +227,15 @@ public class AgentOrchestrator {
                 channel.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), "现在消息有点多，请稍后再试一次。");
             }
         }
+    }
+
+    private void markReplyDeliveryFailed(String taskId, InboundMessageBatch batch, String reason) {
+        if (taskStateStore != null) {
+            taskStateStore.fail(taskId, batch.userId(), batch.replyToMsgId(), reason);
+            taskStateStore.step(taskId, "REPLY_DELIVERY_FAILED");
+        }
+        log.error("agent_reply_delivery_failed task={} user={} replyTo={} reason={}",
+                taskId, batch.userId(), batch.replyToMsgId(), reason);
     }
 
     /** 同步入口：模拟器调试用，直接返回回复文本 */
