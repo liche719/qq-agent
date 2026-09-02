@@ -252,7 +252,8 @@ public class CoreMemoryService {
 
     public static boolean isExplicit(UserCoreMemory memory) {
         return memory != null && (memory.getSourceType() == null || memory.getSourceType().isBlank()
-                || "USER_EXPLICIT".equalsIgnoreCase(memory.getSourceType()));
+                || "USER_EXPLICIT".equalsIgnoreCase(memory.getSourceType())
+                || "USER_DERIVED".equalsIgnoreCase(memory.getSourceType()));
     }
 
     private void applyProvenance(UserCoreMemory memory, MemoryProvenance provenance, boolean mergeExisting) {

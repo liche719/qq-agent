@@ -76,6 +76,10 @@ public class QqChannel implements WeChatChannel {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AgentOrchestrator orchestrator;
     private final AtomicBoolean running = new AtomicBoolean(true);
+    /** Ensures only one gateway connection loop can be active at a time. */
+    private final AtomicBoolean connectLoopActive = new AtomicBoolean(false);
+    /** Coalesces simultaneous disconnect callbacks into one delayed reconnect. */
+    private final AtomicBoolean reconnectPending = new AtomicBoolean(false);
     private final QqMessageSequence messageSequence = new QqMessageSequence();
 
     private volatile String accessToken;
@@ -218,7 +222,20 @@ public class QqChannel implements WeChatChannel {
     public String channel() { return "qq"; }
 
     @EventListener(ApplicationReadyEvent.class)
-    public void start() { new Thread(this::connectLoop, "qq-connect").start(); }
+    public void start() { startConnectLoop("qq-connect"); }
+
+    private void startConnectLoop(String threadName) {
+        if (!running.get() || !connectLoopActive.compareAndSet(false, true)) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                connectLoop();
+            } finally {
+                connectLoopActive.set(false);
+            }
+        }, threadName).start();
+    }
 
     private void connectLoop() {
         int attempt = 0;
@@ -294,10 +311,18 @@ public class QqChannel implements WeChatChannel {
     }
 
     private void reconnect() {
-        if (!running.get()) return;
+        if (!running.get() || !reconnectPending.compareAndSet(false, true)) return;
         stopHeartbeat();
-        try { Thread.sleep(reconnectDelayMillis); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
-        new Thread(this::connectLoop, "qq-reconnect").start();
+        new Thread(() -> {
+            try {
+                Thread.sleep(reconnectDelayMillis);
+                reconnectPending.set(false);
+                startConnectLoop("qq-reconnect");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                reconnectPending.set(false);
+            }
+        }, "qq-reconnect-delay").start();
     }
 
     private synchronized void ensureToken() {
@@ -364,6 +389,10 @@ public class QqChannel implements WeChatChannel {
             lastGatewayEventAtMillis = System.currentTimeMillis();
             if (QqChannel.this.ws == webSocket) QqChannel.this.ws = null;
             log.warn("QQ WebSocket closed: code={} reason={}", code, reason);
+            if (code == 1000 && ("client shutdown".equalsIgnoreCase(reason)
+                    || "shutdown".equalsIgnoreCase(reason))) {
+                return;
+            }
             if (code == 4004) {
                 log.error("QQ 鉴权失败：请检查 QQ 开放平台 IP 白名单（当前出口 IP）与 AppID/AppSecret");
                 running.set(false);
