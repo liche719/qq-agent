@@ -41,6 +41,12 @@ public class AgentTaskStateStore {
                 "replyToMessageId", safe(replyToMessageId), "failureReason", safe(reason)));
     }
 
+    public void markReplySent(String taskId) {
+        if (taskId == null || taskId.isBlank()) return;
+        save(taskId, Map.of("status", "REPLY_SENT", "replySentAt", Instant.now().toString(),
+                "currentStep", "REPLY_SENT"));
+    }
+
     private void save(String taskId, Map<String, String> values) {
         if (taskId == null || taskId.isBlank()) return;
         try {

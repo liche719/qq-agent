@@ -208,7 +208,7 @@ public class AgentOrchestrator {
                             sent = true;
                         }
                         if (sent) {
-                            if (taskStateStore != null) taskStateStore.step(taskId, "REPLY_SENT");
+                            if (taskStateStore != null) taskStateStore.markReplySent(taskId);
                         } else {
                             markReplyDeliveryFailed(taskId, batch, "通道未确认消息发送成功");
                         }
