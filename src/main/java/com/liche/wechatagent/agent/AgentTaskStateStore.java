@@ -38,7 +38,8 @@ public class AgentTaskStateStore {
                 "inputMessageIds", safe(String.join(",", batch.messageIds())),
                 "inputMediaCount", String.valueOf(batch.images().size() + batch.attachments().size()),
                 "inputQuotedMediaCount", String.valueOf(batch.quotedImages().size() + batch.quotedAttachments().size()),
-                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty())
+                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty()),
+                "channel", safe(batch.channel()), "botId", safe(batch.botId())
         ));
     }
 
@@ -95,6 +96,23 @@ public class AgentTaskStateStore {
                     .collect(Collectors.toUnmodifiableSet());
         } catch (RuntimeException ignored) {
             return Set.of();
+        }
+    }
+
+    /** Atomically claims a single manual retry and returns its immutable task envelope. */
+    public Map<Object, Object> claimManualRetry(String taskId) {
+        Map<Object, Object> state = find(taskId);
+        if (!"UNKNOWN_RESULT".equals(String.valueOf(state.get("status")))
+                || !"true".equals(String.valueOf(state.get("replaySafe")))
+                || String.valueOf(state.get("inputContent")).isBlank()) return Map.of();
+        try {
+            String claimKey = "agent:task:" + taskId + ":retry-claimed";
+            Boolean claimed = redis.opsForValue().setIfAbsent(claimKey, "1", ttl);
+            if (!Boolean.TRUE.equals(claimed)) return Map.of();
+            save(taskId, Map.of("status", "RETRY_REQUESTED", "retryRequestedAt", Instant.now().toString()));
+            return find(taskId);
+        } catch (RuntimeException ignored) {
+            return Map.of();
         }
     }
 

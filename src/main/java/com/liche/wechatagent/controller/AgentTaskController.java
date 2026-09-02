@@ -1,6 +1,8 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.agent.AgentTaskStateStore;
+import com.liche.wechatagent.agent.AgentOrchestrator;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,9 +17,20 @@ import java.util.Map;
 @RequestMapping("/api/agent/tasks")
 public class AgentTaskController {
     private final AgentTaskStateStore store;
+    private final AgentOrchestrator orchestrator;
 
-    public AgentTaskController(AgentTaskStateStore store) {
+    public AgentTaskController(AgentTaskStateStore store, AgentOrchestrator orchestrator) {
         this.store = store;
+        this.orchestrator = orchestrator;
+    }
+
+    @PostMapping("/{taskId}/retry")
+    public ResponseEntity<Map<String, Object>> retry(@PathVariable String taskId) {
+        boolean accepted = orchestrator.retryTask(taskId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("accepted", accepted);
+        body.put("message", accepted ? "已安全重新排队；只重试文本快照任务。" : "任务不可重试：可能已有副作用、缺少安全快照或已被重试。");
+        return accepted ? ResponseEntity.accepted().body(body) : ResponseEntity.badRequest().body(body);
     }
 
     @GetMapping("/{taskId}")

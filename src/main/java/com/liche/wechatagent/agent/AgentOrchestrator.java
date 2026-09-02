@@ -284,6 +284,22 @@ public class AgentOrchestrator {
         }
     }
 
+    /** Requeues a text-only task after an operator has verified its unknown outcome. */
+    public boolean retryTask(String taskId) {
+        if (taskStateStore == null) return false;
+        var state = taskStateStore.claimManualRetry(taskId);
+        if (state.isEmpty()) return false;
+        String userId = String.valueOf(state.get("userId"));
+        String channel = String.valueOf(state.getOrDefault("channel", ""));
+        String botId = String.valueOf(state.getOrDefault("botId", ""));
+        String content = String.valueOf(state.get("inputContent"));
+        String originalId = String.valueOf(state.getOrDefault("replyToMessageId", ""));
+        String retryId = "retry-" + taskId;
+        onInbound(InboundMessage.text(retryId, userId, content, botId, channel));
+        log.info("agent_task_manual_retry task={} retryId={} user={} originalMessage={}", taskId, retryId, userId, originalId);
+        return true;
+    }
+
     /** 通道支持流式回复时创建 sink（QQ），否则返回 null */
     private StreamReplySink createSinkFor(InboundMessageBatch batch) {
         WeChatChannel c = channelFor(batch.channel());
