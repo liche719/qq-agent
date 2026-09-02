@@ -128,6 +128,51 @@ public class ConversationMemoryService {
         }
     }
 
+    /** Builds the newest complete conversation window that fits the model-context budget. */
+    public List<ContextTurn> recentForContext(String userId, int maxTurns, int maxChars) {
+        if (!validUserId(userId)) {
+            return List.of();
+        }
+        int turnLimit = Math.max(2, Math.min(256, maxTurns));
+        int charLimit = Math.max(500, maxChars);
+        try {
+            List<ConversationMemory> newest = repository.findByUserIdOrderByCreatedAtDesc(userId,
+                    PageRequest.of(0, turnLimit));
+            if (newest == null || newest.isEmpty()) {
+                return List.of();
+            }
+            LocalDateTime now = LocalDateTime.now(zone);
+            List<ContextTurn> selected = new ArrayList<>();
+            int usedChars = 0;
+            for (ConversationMemory record : newest) {
+                if (record == null || !userId.equals(record.getUserId()) || !notExpired(record, now)
+                        || !("user".equalsIgnoreCase(record.getRole())
+                        || "assistant".equalsIgnoreCase(record.getRole()))) {
+                    continue;
+                }
+                String content = record.getContent();
+                if (content == null || content.isBlank()) {
+                    continue;
+                }
+                if (!selected.isEmpty() && usedChars + content.length() > charLimit) {
+                    break;
+                }
+                String boundedContent = content.length() > charLimit
+                        ? content.substring(0, Math.max(1, charLimit - 1)) + "…" : content;
+                selected.add(new ContextTurn(record.getRole(), boundedContent, record.sourceMessageIdList()));
+                usedChars += boundedContent.length();
+            }
+            Collections.reverse(selected);
+            while (!selected.isEmpty() && "assistant".equalsIgnoreCase(selected.getFirst().role())) {
+                selected.removeFirst();
+            }
+            return List.copyOf(selected);
+        } catch (Exception exception) {
+            log.warn("按预算读取近期对话失败 user={} reason={}", userId, exception.getClass().getSimpleName());
+            return List.of();
+        }
+    }
+
     public List<ConversationMemory> recentForRetrieval(String userId) {
         if (!validUserId(userId)) {
             return List.of();

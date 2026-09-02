@@ -8,6 +8,8 @@ import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
 import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
+import com.liche.wechatagent.memory.EpisodicMemory;
+import com.liche.wechatagent.memory.EpisodicMemoryRepository;
 import com.liche.wechatagent.memory.MemoryArchiveRepository;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
@@ -63,6 +65,7 @@ public class MemoryBackupJob {
     private final ReminderTaskRepository reminderRepository;
     private final StoredMediaRepository storedMediaRepository;
     private final ConversationMemoryRepository conversationMemoryRepository;
+    private final EpisodicMemoryRepository episodicMemoryRepository;
     private final ObjectMapper objectMapper;
     private final Path backupDir;
     private final Path mediaRoot;
@@ -80,6 +83,7 @@ public class MemoryBackupJob {
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
                            ConversationMemoryRepository conversationMemoryRepository,
+                           EpisodicMemoryRepository episodicMemoryRepository,
                            ObjectMapper objectMapper,
                            @Value("${backup.dir:backup}") String backupDir,
                            @Value("${backup.retention-days:30}") int retentionDays,
@@ -88,7 +92,8 @@ public class MemoryBackupJob {
                             @Value("${backup.change-log-limit:5000}") int changeLogLimit,
                             @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, conversationMemoryRepository, objectMapper, backupDir,
+                reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
+                objectMapper, backupDir,
                 retentionDays, conversationBackupLimit, mediaRoot, changeLogLimit, timeZoneId, true);
     }
 
@@ -105,7 +110,7 @@ public class MemoryBackupJob {
                            int retentionDays,
                            String mediaRoot) {
         this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, null, objectMapper, backupDir, retentionDays,
+                reminderRepository, storedMediaRepository, null, null, objectMapper, backupDir, retentionDays,
                 DEFAULT_CONVERSATION_BACKUP_LIMIT, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId());
     }
 
@@ -124,9 +129,30 @@ public class MemoryBackupJob {
                            int conversationBackupLimit,
                            String mediaRoot) {
         this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, conversationMemoryRepository, objectMapper,
+                reminderRepository, storedMediaRepository, conversationMemoryRepository, null, objectMapper,
                 backupDir, retentionDays, conversationBackupLimit, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT,
                 DEFAULT_ZONE.getId());
+    }
+
+    /** Compatibility constructor for callers that include conversation and episodic evidence. */
+    public MemoryBackupJob(UserProfileRepository userProfileRepository,
+                           UserCoreMemoryRepository coreRepository,
+                           UserWorkMemoryRepository workRepository,
+                           MemoryArchiveRepository archiveRepository,
+                           MemoryChangeLogRepository changeLogRepository,
+                           ReminderTaskRepository reminderRepository,
+                           StoredMediaRepository storedMediaRepository,
+                           ConversationMemoryRepository conversationMemoryRepository,
+                           EpisodicMemoryRepository episodicMemoryRepository,
+                           ObjectMapper objectMapper,
+                           String backupDir,
+                           int retentionDays,
+                           int conversationBackupLimit,
+                           String mediaRoot) {
+        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+                reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
+                objectMapper, backupDir, retentionDays, conversationBackupLimit, mediaRoot,
+                DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId(), true);
     }
 
     private MemoryBackupJob(UserProfileRepository userProfileRepository,
@@ -137,6 +163,7 @@ public class MemoryBackupJob {
                             ReminderTaskRepository reminderRepository,
                             StoredMediaRepository storedMediaRepository,
                             ConversationMemoryRepository conversationMemoryRepository,
+                            EpisodicMemoryRepository episodicMemoryRepository,
                             ObjectMapper objectMapper,
                             String backupDir,
                             int retentionDays,
@@ -153,6 +180,7 @@ public class MemoryBackupJob {
         this.reminderRepository = reminderRepository;
         this.storedMediaRepository = storedMediaRepository;
         this.conversationMemoryRepository = conversationMemoryRepository;
+        this.episodicMemoryRepository = episodicMemoryRepository;
         this.objectMapper = objectMapper;
         this.backupDir = Path.of(backupDir).toAbsolutePath().normalize();
         this.mediaRoot = Path.of(mediaRoot).toAbsolutePath().normalize();
@@ -281,6 +309,7 @@ public class MemoryBackupJob {
         node.set("changeLogs", objectMapper.valueToTree(
                 changeLogRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, changeLogLimit))));
         node.set("conversationMemories", objectMapper.valueToTree(conversations));
+        node.set("episodicMemories", objectMapper.valueToTree(episodicEvidenceForBackup(userId)));
         node.put("conversationMemoryBackupLimit", conversationBackupLimit);
         node.set("reminders", objectMapper.valueToTree(reminderRepository.findByUserIdAndStatus(userId, "PENDING")));
         node.set("storedMedia", objectMapper.valueToTree(media));
@@ -306,6 +335,22 @@ public class MemoryBackupJob {
                     .toList();
         } catch (Exception exception) {
             log.warn("备份持久化对话证据失败 userHash={} reason={}", shortHash(userId),
+                    exception.getClass().getSimpleName());
+            return List.of();
+        }
+    }
+
+    private List<EpisodicMemory> episodicEvidenceForBackup(String userId) {
+        if (episodicMemoryRepository == null || userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        try {
+            var records = episodicMemoryRepository.findByUserIdOrderByOccurredAtDesc(userId);
+            return records == null ? List.of() : records.stream()
+                    .filter(record -> record != null && userId.equals(record.getUserId()))
+                    .toList();
+        } catch (Exception exception) {
+            log.warn("备份情景记忆失败 userHash={} reason={}", shortHash(userId),
                     exception.getClass().getSimpleName());
             return List.of();
         }
@@ -367,7 +412,9 @@ public class MemoryBackupJob {
     private boolean redactConversationEvidence(Path stateFile, String userId, Set<String> sourceMessageIds,
                                                String rememberedContent) throws IOException {
         ObjectNode state = readOwnedState(stateFile, userId);
-        if (!removeConversationRecords(state, sourceMessageIds, rememberedContent)) {
+        boolean changed = removeConversationRecords(state, sourceMessageIds, rememberedContent);
+        changed |= removeEpisodicRecords(state, sourceMessageIds, rememberedContent);
+        if (!changed) {
             return false;
         }
         writeAtomically(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
@@ -454,6 +501,28 @@ public class MemoryBackupJob {
         }
         return rememberedContent != null && rememberedContent.length() >= 6
                 && contentContains(record.path("content").asText(""), rememberedContent);
+    }
+
+    private boolean removeEpisodicRecords(ObjectNode state, Set<String> sourceMessageIds,
+                                          String rememberedContent) {
+        ArrayNode records = array(state, "episodicMemories");
+        if (records == null) {
+            return false;
+        }
+        boolean changed = false;
+        for (int index = records.size() - 1; index >= 0; index--) {
+            JsonNode record = records.get(index);
+            boolean sourceMatch = sourceMessageIds != null && !sourceMessageIds.isEmpty()
+                    && backupSourceMessageIds(record).stream().anyMatch(sourceMessageIds::contains);
+            boolean contentMatch = (sourceMessageIds == null || sourceMessageIds.isEmpty())
+                    && rememberedContent != null && rememberedContent.length() >= 6
+                    && contentContains(record.path("summary").asText(""), rememberedContent);
+            if (sourceMatch || contentMatch) {
+                records.remove(index);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private Set<String> backupSourceMessageIds(JsonNode record) {

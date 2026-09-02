@@ -18,6 +18,7 @@ import com.liche.wechatagent.user.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -32,6 +33,9 @@ import java.util.UUID;
  */
 @Component
 public class AgentOrchestrator {
+
+    private static final int DEFAULT_CONTEXT_MAX_TURNS = 40;
+    private static final int DEFAULT_CONTEXT_MAX_CHARS = 12_000;
 
     private static final Logger log = LoggerFactory.getLogger(AgentOrchestrator.class);
 
@@ -54,6 +58,12 @@ public class AgentOrchestrator {
     private final List<WeChatChannel> channels;
     private final ConversationMemoryService conversationMemoryService;
     private final AgentTaskStateStore taskStateStore;
+
+    @Value("${memory.context-max-turns:40}")
+    private int contextMaxTurns = DEFAULT_CONTEXT_MAX_TURNS;
+
+    @Value("${memory.context-max-chars:12000}")
+    private int contextMaxChars = DEFAULT_CONTEXT_MAX_CHARS;
 
     @Autowired
     public AgentOrchestrator(MessageIdempotency idempotency,
@@ -335,7 +345,7 @@ public class AgentOrchestrator {
         // 2) 正常对话：加载记忆 → 大模型对话（含工具）
         UserProfile profile = userService.get(userId);
         MemoryLoader.LoadedMemory mem = memoryLoader.load(userId, content);
-        List<ContextTurn> history = contextStore.getRecent(userId);
+        List<ContextTurn> history = durableHistory(userId);
         try {
             DocumentBundle extracted = extractDocuments(batch);
             List<ExtractedDocument> documents = extracted.documents();
@@ -356,6 +366,18 @@ public class AgentOrchestrator {
         } catch (DocumentExtractionException exception) {
             return new HandledReply(exception.getMessage(), null);
         }
+    }
+
+    private List<ContextTurn> durableHistory(String userId) {
+        if (conversationMemoryService != null) {
+            List<ContextTurn> durable = conversationMemoryService.recentForContext(userId,
+                    contextMaxTurns > 0 ? contextMaxTurns : DEFAULT_CONTEXT_MAX_TURNS,
+                    contextMaxChars > 0 ? contextMaxChars : DEFAULT_CONTEXT_MAX_CHARS);
+            if (durable != null && !durable.isEmpty()) {
+                return durable;
+            }
+        }
+        return contextStore.getRecent(userId);
     }
 
     private record DocumentBundle(List<ExtractedDocument> documents,

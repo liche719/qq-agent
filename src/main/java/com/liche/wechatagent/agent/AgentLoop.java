@@ -8,6 +8,7 @@ import com.liche.wechatagent.document.ExtractedDocument;
 import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.config.AgentPolicyProperties;
+import com.liche.wechatagent.memory.ConversationMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import org.slf4j.Logger;
@@ -36,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -75,6 +77,7 @@ public class AgentLoop {
     private final String imageUserAgent;
     private final Pattern currentTimePattern;
     private final Map<String, String> toolDisplayNames;
+    private final ConversationMemoryService conversationMemoryService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentLoop(StreamingChatModel streamingChatModel,
@@ -91,7 +94,8 @@ public class AgentLoop {
                      @Value("${agent.stream-chunk-chars:24}") int streamChunkChars,
                      @Value("${agent.stream-chunk-delay-ms:120}") long streamChunkDelayMillis,
                      @Value("${media.storage.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String imageUserAgent,
-                     AgentPolicyProperties policyProperties) {
+                     AgentPolicyProperties policyProperties,
+                     ConversationMemoryService conversationMemoryService) {
         this.streamingChatModel = streamingChatModel;
         this.toolRegistry = toolRegistry;
         this.toolStatusService = toolStatusService;
@@ -111,6 +115,7 @@ public class AgentLoop {
         Map<String, String> configuredDisplayNames = policies.getToolDisplayNames();
         this.toolDisplayNames = configuredDisplayNames == null
                 ? AgentPolicyProperties.defaultToolDisplayNames() : Map.copyOf(configuredDisplayNames);
+        this.conversationMemoryService = conversationMemoryService;
         this.imageHttpClient = new okhttp3.OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(bounded(imageConnectTimeoutSeconds, 1, 120, 8)))
                 .readTimeout(Duration.ofSeconds(bounded(imageReadTimeoutSeconds, 1, 300, 20)))
@@ -130,7 +135,7 @@ public class AgentLoop {
         this(streamingChatModel, toolRegistry, toolStatusService, mediaToolContextService, urlValidator,
                 maxImageBytes, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
-                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties());
+                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties(), null);
     }
 
     AgentLoop(StreamingChatModel streamingChatModel,
@@ -150,7 +155,7 @@ public class AgentLoop {
         this(streamingChatModel, toolRegistry, toolStatusService, mediaToolContextService, urlValidator,
                 maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
-                streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties());
+                streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties(), null);
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -263,7 +268,7 @@ public class AgentLoop {
                         if (ai.hasToolExecutionRequests()) {
                             hasTools.set(true);
                             for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
-                                ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
+                                ToolExecutionOutcome outcome = executeTool(request, userId);
                                 ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
                                 log.debug("工具策略 name={} class={} user={}", request.name(), executionClass, userId);
                                 if (outcome.successful()) {
@@ -410,7 +415,7 @@ public class AgentLoop {
                 .name("getCurrentTime")
                 .arguments("{}")
                 .build();
-        ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
+        ToolExecutionOutcome outcome = executeTool(request, userId);
         messages.add(AiMessage.from(request));
         messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
         if (outcome.successful()) {
@@ -419,6 +424,29 @@ public class AgentLoop {
         } else {
             failedTools.put(request.name(), outcome);
         }
+    }
+
+    private ToolExecutionOutcome executeTool(ToolExecutionRequest request, String userId) {
+        String traceId = UUID.randomUUID().toString();
+        recordToolEvent(userId, traceId, "call", request.name(), request.arguments());
+        try {
+            ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
+            recordToolEvent(userId, traceId, "result", request.name(), outcome.content());
+            return outcome;
+        } catch (RuntimeException exception) {
+            recordToolEvent(userId, traceId, "result", request.name(),
+                    "工具执行抛出异常：" + exception.getClass().getSimpleName());
+            throw exception;
+        }
+    }
+
+    private void recordToolEvent(String userId, String traceId, String phase, String toolName, String payload) {
+        if (conversationMemoryService == null) {
+            return;
+        }
+        String content = "tool=" + toolName + " phase=" + phase + "\n" + (payload == null ? "" : payload);
+        conversationMemoryService.record(userId, "system", "tool:" + traceId + ":" + phase,
+                content, List.of(), null);
     }
 
     private void addReadableMedia(List<ChatMessage> messages) {

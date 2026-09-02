@@ -129,4 +129,22 @@ class ConversationMemoryServiceTest {
 
         verify(repository).deleteExpiredBefore(any(LocalDateTime.class));
     }
+
+    @Test
+    void buildsChronologicalContextWithinBudgetAndExcludesToolEvents() {
+        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
+        ConversationMemory newest = new ConversationMemory("u1", "assistant", "a2", "最终回复",
+                List.of("m2"), LocalDateTime.of(2026, 9, 2, 10, 3), null);
+        ConversationMemory tool = new ConversationMemory("u1", "system", "tool", "工具内部结果",
+                List.of(), LocalDateTime.of(2026, 9, 2, 10, 2), null);
+        ConversationMemory oldest = new ConversationMemory("u1", "user", "u1", "用户问题",
+                List.of("m1"), LocalDateTime.of(2026, 9, 2, 10, 1), null);
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class)))
+                .thenReturn(List.of(newest, tool, oldest));
+        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
+
+        var turns = service.recentForContext("u1", 20, 500);
+
+        assertEquals(List.of("用户问题", "最终回复"), turns.stream().map(turn -> turn.text()).toList());
+    }
 }

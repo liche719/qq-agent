@@ -10,7 +10,7 @@
 | 框架 | Spring Boot 3.5 / Java 21 / Maven | |
 | AI | LangChain4j 1.6 (core) + 自研 OpenAI 兼容 ChatModel | 任意兼容接口：DeepSeek / 通义 / 中转站 |
 | 存储 | MySQL 8 + Spring Data JPA | 用户/记忆/提醒/日志/归档 |
-| 缓存 | Redis | 即时对话上下文(10轮)、消息幂等去重 |
+| 缓存 | Redis | 即时对话上下文回退、消息幂等去重 |
 | 调度 | Quartz JDBC 持久化 | 提醒任务重启自动恢复 |
 | 搜索 | SearX-NG（自托管） | JSON 格式，15s 超时，重试一次；本地部署配置不纳入仓库 |
 | QQ | QQ 官方机器人 WebSocket | 默认私聊通道；每个 QQ 用户独立上下文、记忆与文件目录 |
@@ -57,7 +57,7 @@
    curl "http://127.0.0.1:8080/api/sim/replies?userId=test-user"
    ```
 
-6. **生产升级数据库**：本机 `local` profile 会自动补齐记忆表结构；如果使用 `production` profile，请先备份数据库并执行本地保存的数据库迁移脚本，再部署新 JAR。
+6. **生产升级数据库**：本机 `local` profile 会自动补齐记忆表结构；如果使用 `production` profile，请先备份数据库并执行 `deploy/mysql/V2__create_episodic_memory.sql`，再部署新 JAR。
 
 ## 功能对照
 
@@ -74,7 +74,10 @@
 | 默认提前 10 分钟预热 | 预热 Job 单独调度 |
 | 过去时间拒绝 / 模糊时间反问 | 解析器返回 missing 项 → 反问 |
 | Quartz JDBC 持久化，重启恢复 | `spring.quartz.job-store-type: jdbc` |
-| 四层记忆（Redis 上下文 / 持久化对话证据 / 中期 / 核心置顶） | `ContextStore` / `ConversationMemory` / `UserWorkMemory` / `UserCoreMemory` |
+| 五层记忆（近期原文 / 完整事件日志 / 情景经历 / 中期 / 核心置顶） | `ContextStore` / `ConversationMemory` / `EpisodicMemory` / `UserWorkMemory` / `UserCoreMemory` |
+| 动态近期上下文 | 优先从持久化事件日志按字符预算和轮数恢复；Redis 仅作故障回退，不再只依赖固定 10 轮 |
+| 工具事件追溯 | 工具调用与结果以同一追踪 ID 成对写入当前用户的事件日志，不进入普通对话角色窗口 |
+| 情景记忆 | 自动提取重要经历、里程碑、关系事件、决定和资料事件，保留发生时间、状态、来源及置信度 |
 | 3 秒静默窗口异步提取 | `MemoryExtractionScheduler` + `MemoryExtractor` |
 | LLM 语义判重（>80% 不新增） | 提取提示词内完成 |
 | 长期目标和稳定身份自动晋升核心记忆 | `MemoryExtractor` → `CoreMemoryService`，无需确认弹窗 |
@@ -88,7 +91,7 @@
 | 自然语言遗忘记忆 | `/memory forget 关键词`，多条命中时要求指定编号；唯一命中后会删除 Agent 可用记忆、关联短期上下文、持久化对话证据与本机备份副本 |
 | 超 20 条归档压缩（不删除、可回溯） | `MemoryArchiveService` + `memory_archive` |
 | 所有记忆变更留痕 | `memory_change_log`；用户主动遗忘时会保留无正文操作事件，并清除该记忆的历史审计正文 |
-| 每日记忆备份 | `MemoryBackupJob`（backup/ 目录，保留 30 天），包含核心/工作/归档/持久化对话证据和已保存资料；用户遗忘时同步清理已有本机备份快照 |
+| 每日记忆备份 | `MemoryBackupJob`（backup/ 目录，保留 30 天），包含核心/工作/情景/归档/持久化事件和已保存资料；用户遗忘时同步清理已有本机备份快照 |
 | 按用户范围日志隔离 | logback SiftingAppender → `logs/user/user-{hash}/`；不记录默认聊天正文 |
 | 全局异常友好化 | `GlobalExceptionHandler` + 编排器兜底 |
 | msg_id+user_id 幂等 | Redis SETNX 24h |
@@ -157,6 +160,7 @@ src/main/java/com/liche/wechatagent
 | MEMORY_EXTRACTION_MAX_KEYWORDS | 8 | 单条自动记忆最多保存的检索关键词数 |
 | MEMORY_EXTRACTION_DEFAULT_CONFIDENCE | 85 | 模型未提供置信度时采用的保守默认值 |
 | MEMORY_EXTRACTION_RECENT_TURNS / MEMORY_DEFAULT_WORK_PRIORITY | 20 / 3 | 自动提取读取的最近轮数、工作记忆默认优先级 |
+| MEMORY_CONTEXT_MAX_TURNS / MEMORY_CONTEXT_MAX_CHARS | 40 / 12000 | 从持久事件日志恢复近期原文时的最大记录数和总字符预算 |
 | MEMORY_DEFAULT_CORE_IMPORTANCE / MEMORY_DEFAULT_WORK_IMPORTANCE | 5 / 3 | 自动提取候选的核心/工作默认重要性 |
 | MEMORY_CORE_MAX_CONTENT_CHARS_LIMIT / MEMORY_WORK_MAX_CONTENT_CHARS_LIMIT | 4000 / 2000 | 单条核心/工作记忆正文上限（不会超过数据库列宽） |
 | MEMORY_LINKED_MEDIA_MAX_PER_MEMORY / MEMORY_LINKED_MEDIA_SUMMARY_MAX_CHARS | 3 / 80 | 注入上下文时每条记忆最多展示的关联资料数 / 摘要长度 |

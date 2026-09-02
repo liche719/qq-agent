@@ -28,6 +28,7 @@ public class MemoryRetrievalService {
     private final UserWorkMemoryRepository workRepository;
     private final MemoryArchiveRepository archiveRepository;
     private final ConversationMemoryService conversationMemoryService;
+    private final EpisodicMemoryService episodicMemoryService;
     private final StoredMediaRepository storedMediaRepository;
     private final int historicalLimit;
     private final int minimumHistoricalScore;
@@ -41,6 +42,7 @@ public class MemoryRetrievalService {
                                   UserWorkMemoryRepository workRepository,
                                   MemoryArchiveRepository archiveRepository,
                                   ConversationMemoryService conversationMemoryService,
+                                  EpisodicMemoryService episodicMemoryService,
                                   StoredMediaRepository storedMediaRepository,
                                   MemoryPolicyProperties policyProperties,
                                   @Value("${memory.historical-retrieval-limit:8}") int historicalLimit,
@@ -49,6 +51,7 @@ public class MemoryRetrievalService {
         this.workRepository = workRepository;
         this.archiveRepository = archiveRepository;
         this.conversationMemoryService = conversationMemoryService;
+        this.episodicMemoryService = episodicMemoryService;
         this.storedMediaRepository = storedMediaRepository;
         this.historicalLimit = Math.max(1, historicalLimit);
         this.minimumHistoricalScore = Math.max(1, minimumHistoricalScore);
@@ -68,7 +71,17 @@ public class MemoryRetrievalService {
                            ConversationMemoryService conversationMemoryService,
                            StoredMediaRepository storedMediaRepository) {
         this(coreRepository, workRepository, archiveRepository, conversationMemoryService,
-                storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
+                null, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
+    }
+
+    MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
+                           UserWorkMemoryRepository workRepository,
+                           MemoryArchiveRepository archiveRepository,
+                           ConversationMemoryService conversationMemoryService,
+                           EpisodicMemoryService episodicMemoryService,
+                           StoredMediaRepository storedMediaRepository) {
+        this(coreRepository, workRepository, archiveRepository, conversationMemoryService,
+                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
     }
 
     public RetrievedMemory retrieve(String userId, String query, int coreMaxLoad, int coreMaxChars,
@@ -91,23 +104,41 @@ public class MemoryRetrievalService {
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, coreMaxLoad), Math.max(1, coreMaxChars));
 
+        List<EpisodicMemory> episodeCandidates = activeEpisodeCandidates(userId, normalizedQuery);
+        int totalWorkBudget = Math.max(1, workMaxChars);
+        int episodeBudget = episodeCandidates.isEmpty() ? 0
+                : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
+        int activeWorkBudget = Math.max(1, totalWorkBudget - episodeBudget);
         List<UserWorkMemory> activeWork = activeWorkCandidates(userId, normalizedQuery, now);
         List<UserWorkMemory> selectedWork = select(activeWork, UserWorkMemory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
-                Math.max(1, workMaxLoad), Math.max(1, workMaxChars));
+                Math.max(1, workMaxLoad), activeWorkBudget);
         touchUsage(now, selectedCores, selectedWork, usageTouchIntervalMinutes);
+
+        List<EpisodicMemory> selectedEpisodes = select(episodeCandidates,
+                EpisodicMemory::getSummary, this::formatEpisode,
+                historicalLimit, episodeBudget);
+        if (episodicMemoryService != null && !selectedEpisodes.isEmpty()) {
+            episodicMemoryService.touch(selectedEpisodes, now, usageTouchIntervalMinutes);
+        }
 
         boolean hasRelevantActiveMemory = cores.stream()
                 .anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
                         >= minimumHistoricalScore)
                 || activeWork.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
-                >= minimumHistoricalScore);
+                >= minimumHistoricalScore)
+                || !episodeCandidates.isEmpty();
         List<HistoricalItem> historical = historicalItems(userId, normalizedQuery, historicalQuery,
                 hasRelevantActiveMemory, now);
         String coreSection = format(selectedCores, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
         String workSection = format(selectedWork, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
+        if (!selectedEpisodes.isEmpty()) {
+            String episodes = "【相关经历】\n" + format(selectedEpisodes, this::formatEpisode);
+            workSection = "（暂无）".equals(workSection) ? episodes : workSection + "\n\n" + episodes;
+            workSection = truncate(workSection, Math.max(1, workMaxChars));
+        }
         if (!historical.isEmpty()) {
             int usedChars = "（暂无）".equals(workSection) ? 0 : workSection.length();
             String historyText = formatHistorical(historical, Math.max(1, workMaxChars - usedChars));
@@ -116,6 +147,29 @@ public class MemoryRetrievalService {
             }
         }
         return new RetrievedMemory(coreSection, workSection);
+    }
+
+    private List<EpisodicMemory> activeEpisodeCandidates(String userId, String normalizedQuery) {
+        if (episodicMemoryService == null || normalizedQuery == null || normalizedQuery.isBlank()) {
+            return List.of();
+        }
+        return episodicMemoryService.listActive(userId).stream()
+                .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
+                .filter(memory -> score(memory.getTitle() + " " + memory.getSummary(), memory.getKeywords(),
+                        normalizedQuery) >= minimumHistoricalScore)
+                .sorted(Comparator
+                        .comparingInt((EpisodicMemory memory) -> score(memory.getTitle() + " " + memory.getSummary(),
+                                memory.getKeywords(), normalizedQuery)).reversed()
+                        .thenComparing(EpisodicMemory::getImportance,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(EpisodicMemory::getOccurredAt,
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+    }
+
+    private String formatEpisode(EpisodicMemory memory) {
+        String date = memory.getOccurredAt() == null ? "时间未知" : memory.getOccurredAt().toLocalDate().toString();
+        return "- [" + date + "] " + memory.getTitle() + "：" + memory.getSummary();
     }
 
     // Selects active, explicit core memories ordered by query relevance and recency.
@@ -200,7 +254,11 @@ public class MemoryRetrievalService {
                 }
                 int conversationScore = score(record.getContent(), "", query);
                 if (conversationScore >= minimumHistoricalScore) {
-                    String label = "assistant".equalsIgnoreCase(record.getRole()) ? "助手曾回复" : "用户曾说";
+                    String label = switch (record.getRole() == null ? "" : record.getRole().toLowerCase(Locale.ROOT)) {
+                        case "assistant" -> "助手曾回复";
+                        case "system" -> "工具执行记录";
+                        default -> "用户曾说";
+                    };
                     addHistorical(candidates, seen, label + "：" + record.getContent(), "CONVERSATION",
                             conversationScore, historicalQuery, record.getCreatedAt());
                 }

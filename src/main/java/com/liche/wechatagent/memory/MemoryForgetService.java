@@ -29,6 +29,7 @@ public class MemoryForgetService {
     private final MemoryMutationLock mutationLock;
     private final MemoryBackupJob backupJob;
     private final ConversationMemoryService conversationMemoryService;
+    private final EpisodicMemoryService episodicMemoryService;
 
     @Autowired
     public MemoryForgetService(CoreMemoryService coreMemoryService,
@@ -38,7 +39,8 @@ public class MemoryForgetService {
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob,
-                               ConversationMemoryService conversationMemoryService) {
+                               ConversationMemoryService conversationMemoryService,
+                               EpisodicMemoryService episodicMemoryService) {
         this.coreMemoryService = coreMemoryService;
         this.workMemoryService = workMemoryService;
         this.archiveService = archiveService;
@@ -47,6 +49,19 @@ public class MemoryForgetService {
         this.mutationLock = mutationLock;
         this.backupJob = backupJob;
         this.conversationMemoryService = conversationMemoryService;
+        this.episodicMemoryService = episodicMemoryService;
+    }
+
+    public MemoryForgetService(CoreMemoryService coreMemoryService,
+                               WorkMemoryService workMemoryService,
+                               MemoryArchiveService archiveService,
+                               MemoryExtractionScheduler extractionScheduler,
+                               ContextStore contextStore,
+                               MemoryMutationLock mutationLock,
+                               MemoryBackupJob backupJob,
+                               ConversationMemoryService conversationMemoryService) {
+        this(coreMemoryService, workMemoryService, archiveService, extractionScheduler, contextStore,
+                mutationLock, backupJob, conversationMemoryService, null);
     }
 
     public MemoryForgetService(CoreMemoryService coreMemoryService,
@@ -57,7 +72,7 @@ public class MemoryForgetService {
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob) {
         this(coreMemoryService, workMemoryService, archiveService, extractionScheduler, contextStore,
-                mutationLock, backupJob, null);
+                mutationLock, backupJob, null, null);
     }
 
     public ForgetOutcome forget(String userId, String layer, Long memoryId) {
@@ -101,6 +116,9 @@ public class MemoryForgetService {
         boolean contextCleared = false;
         boolean legacyContextReset = false;
         for (ForgottenMemory item : forgotten) {
+            if (episodicMemoryService != null) {
+                episodicMemoryService.forgetEvidence(userId, item.sourceMessageIds(), item.content());
+            }
             if (item.sourceMessageIds().isEmpty()) {
                 if (conversationMemoryService != null) {
                     conversationMemoryService.forgetContent(userId, item.content());

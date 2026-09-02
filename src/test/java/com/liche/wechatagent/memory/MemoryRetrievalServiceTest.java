@@ -128,4 +128,30 @@ class MemoryRetrievalServiceTest {
         assertTrue(result.coreSection().contains("南京理工大学研究生"));
         verify(conversationService, never()).relevantForRetrieval("u1", "南京理工考研目标");
     }
+
+    @Test
+    void retrievesRelevantEpisodeWithoutLeakingAnotherUsersExperience() {
+        UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
+        UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
+        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
+        ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
+        EpisodicMemoryService episodicService = mock(EpisodicMemoryService.class);
+        EpisodicMemory owned = new EpisodicMemory("u1", "申请表提醒失误",
+                "用户曾因打印申请表的提醒执行异常而着急，希望重要提醒可靠确认", "EXPERIENCE",
+                5, 90, LocalDateTime.of(2026, 9, 2, 9, 0), MemoryProvenance.userExplicit(List.of("m1"), List.of()));
+        EpisodicMemory foreign = new EpisodicMemory("u2", "其他人的申请表", "其他用户的私密经历",
+                "EXPERIENCE", 5, 90, LocalDateTime.now(), MemoryProvenance.userExplicit(List.of("m2"), List.of()));
+        when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
+        when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
+        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
+        when(episodicService.listActive("u1")).thenReturn(List.of(owned, foreign));
+        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
+                archiveRepository, conversationService, episodicService, null);
+
+        MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "上次打印申请表为什么着急",
+                4, 1000, 4, 1000);
+
+        assertTrue(result.workSection().contains("申请表提醒失误"));
+        assertFalse(result.workSection().contains("其他用户的私密经历"));
+    }
 }

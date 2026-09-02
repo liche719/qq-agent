@@ -43,6 +43,7 @@ public class MemoryExtractor {
     private final StoredMediaRepository storedMediaRepository;
     private final MemoryMutationLock mutationLock;
     private final ConversationMemoryService conversationMemoryService;
+    private final EpisodicMemoryService episodicMemoryService;
     private final int minConfidence;
     private final int maxCandidateItems;
     private final int maxContentChars;
@@ -65,6 +66,7 @@ public class MemoryExtractor {
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock,
                            ConversationMemoryService conversationMemoryService,
+                           EpisodicMemoryService episodicMemoryService,
                            @Value("${memory.min-confidence:60}") int minConfidence,
                            MemoryPolicyProperties policyProperties,
                            @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
@@ -77,6 +79,7 @@ public class MemoryExtractor {
         this.storedMediaRepository = storedMediaRepository;
         this.mutationLock = mutationLock;
         this.conversationMemoryService = conversationMemoryService;
+        this.episodicMemoryService = episodicMemoryService;
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
         int requestedRecentTurns = Math.max(1, recentTurns);
         int configuredRecentTurns = policies.getExtractionRecentTurns();
@@ -108,6 +111,24 @@ public class MemoryExtractor {
         this.zone = parseZone(timeZoneId);
     }
 
+    MemoryExtractor(ChatModel chatModel,
+                    ContextStore contextStore,
+                    WorkMemoryService workMemoryService,
+                    CoreMemoryService coreMemoryService,
+                    MemoryArchiveService archiveService,
+                    ObjectMapper objectMapper,
+                    int recentTurns,
+                    StoredMediaRepository storedMediaRepository,
+                    MemoryMutationLock mutationLock,
+                    ConversationMemoryService conversationMemoryService,
+                    int minConfidence,
+                    MemoryPolicyProperties policyProperties,
+                    String timeZoneId) {
+        this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
+                recentTurns, storedMediaRepository, mutationLock, conversationMemoryService, null,
+                minConfidence, policyProperties, timeZoneId);
+    }
+
     public MemoryExtractor(ChatModel chatModel,
                            ContextStore contextStore,
                            WorkMemoryService workMemoryService,
@@ -118,7 +139,7 @@ public class MemoryExtractor {
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock) {
         this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
-                recentTurns, storedMediaRepository, mutationLock, null, 60,
+                recentTurns, storedMediaRepository, mutationLock, null, null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
 
@@ -130,7 +151,7 @@ public class MemoryExtractor {
                            ObjectMapper objectMapper,
                            int recentTurns) {
         this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
-                recentTurns, null, new MemoryMutationLock(), null, 60,
+                recentTurns, null, new MemoryMutationLock(), null, null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
 
@@ -163,8 +184,8 @@ public class MemoryExtractor {
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
             ExtractionResult result = parse(chatModel.chat(buildPrompt(recent, existing, cores)));
-            log.info("记忆提取完成 user={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
-                    result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
+            log.info("记忆提取完成 user={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
+                    result.episodes().size(), result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
                     result.conflicts().size(), result.completedWork().size(), result.duplicates().size());
             if (!currentCheck.getAsBoolean()) {
                 log.info("记忆提取结果已过期，放弃写回 user={}", userId);
@@ -273,7 +294,17 @@ public class MemoryExtractor {
         }
     }
 
-    public record ExtractionResult(List<NewWork> newWork, List<CoreCandidate> coreCandidates,
+    public record EpisodeCandidate(String title, String summary, String episodeType, String occurredAt,
+                                   int importance, int confidence, List<String> keywords,
+                                   List<String> sourceMessageIds) {
+        public EpisodeCandidate {
+            keywords = keywords == null ? List.of() : List.copyOf(keywords);
+            sourceMessageIds = sourceMessageIds == null ? List.of() : List.copyOf(sourceMessageIds);
+        }
+    }
+
+    public record ExtractionResult(List<EpisodeCandidate> episodes, List<NewWork> newWork,
+                                   List<CoreCandidate> coreCandidates,
                                    List<CoreUpdate> coreUpdates, List<WorkConflict> conflicts,
                                    List<WorkCompletion> completedWork, List<String> duplicates) {
     }
@@ -283,6 +314,7 @@ public class MemoryExtractor {
             return;
         }
         Set<String> allowedSourceIds = allowedSourceIds(recent);
+        applyEpisodes(userId, result, allowedSourceIds);
         applyNewWork(userId, result, allowedSourceIds);
         applyCoreCandidates(userId, result, allowedSourceIds);
         applyCoreUpdates(userId, result, allowedSourceIds);
@@ -290,6 +322,22 @@ public class MemoryExtractor {
         applyWorkCompletions(userId, result, allowedSourceIds);
         runSafely(userId, "过期工作记忆", workMemoryService::expireDueMemories);
         runSafely(userId, "归档工作记忆", () -> archiveService.compressIfNeeded(userId));
+    }
+
+    private void applyEpisodes(String userId, ExtractionResult result, Set<String> allowedSourceIds) {
+        if (episodicMemoryService == null) {
+            return;
+        }
+        for (EpisodeCandidate candidate : safeList(result.episodes())) {
+            if (candidate == null || !isAcceptable(candidate.summary(), candidate.confidence())) {
+                continue;
+            }
+            MemoryProvenance provenance = provenance(userId, candidate.sourceMessageIds(), allowedSourceIds,
+                    candidate.confidence());
+            runSafely(userId, "新增情景记忆", () -> episodicMemoryService.add(userId, candidate.title(),
+                    candidate.summary(), candidate.episodeType(), candidate.importance(), candidate.confidence(),
+                    candidate.keywords(), parseOccurredAt(candidate.occurredAt()), provenance));
+        }
     }
 
     // Applies newly extracted work memories after validation and deduplication.
@@ -485,6 +533,11 @@ public class MemoryExtractor {
         }
     }
 
+    private LocalDateTime parseOccurredAt(String value) {
+        LocalDateTime parsed = parseValidUntil(value);
+        return parsed == null ? LocalDateTime.now(zone) : parsed;
+    }
+
     private boolean isDuplicate(String content, List<String> duplicates) {
         if (duplicates == null || duplicates.isEmpty()) {
             return false;
@@ -506,16 +559,17 @@ public class MemoryExtractor {
         prompt.append("规则：\n")
                 .append("1. 只能依据 user 角色的明确陈述；assistant 回复、附件正文、网页、工具结果和推测都不能成为记忆。\n")
                 .append("2. 稳定身份、长期目标、长期偏好、原则和底线写入 coreCandidates。核心记忆不设置有效期；只要用户明确表达且未来仍有价值，就应长期保留。\n")
-                .append("3. 持续项目、明确尚未结束的任务写入 newWorkItems。用户给出具体日期/时间，或明确相对期限（如明天、下周、本月）时，按当前时间换算 validUntil，使用 yyyy-MM-ddTHH:mm:ss；没有明确期限就留空。\n")
-                .append("4. 用户明确说一个已有任务完成、取消或不再需要时，写入 completedWorkItems，existingId 必须来自已有中期记忆。不得因为你猜测或日期临近而标记完成。\n")
-                .append("5. 用户明确修正已有事实时，分别使用 coreUpdates 或 workConflicts；系统会留痕，不能新增互相矛盾的旧事实。\n")
-                .append("6. 每个候选都要给 importance（1-5）和 confidence（0-100）。只有用户明确表达、未来仍有价值且 confidence 至少 ")
+                .append("3. 对未来交流有价值的完整经历写入 episodes：包含发生了什么、用户当时的处境/感受、结果或未决状态；一次性普通问答不要写。occurredAt 使用 yyyy-MM-ddTHH:mm:ss，episodeType 可用 EXPERIENCE、MILESTONE、RELATIONSHIP、DECISION 或 DOCUMENT。\n")
+                .append("4. 持续项目、明确尚未结束的任务写入 newWorkItems。用户给出具体日期/时间，或明确相对期限（如明天、下周、本月）时，按当前时间换算 validUntil，使用 yyyy-MM-ddTHH:mm:ss；没有明确期限就留空。\n")
+                .append("5. 用户明确说一个已有任务完成、取消或不再需要时，写入 completedWorkItems，existingId 必须来自已有中期记忆。不得因为你猜测或日期临近而标记完成。\n")
+                .append("6. 用户明确修正已有事实时，分别使用 coreUpdates 或 workConflicts；系统会留痕，不能新增互相矛盾的旧事实。\n")
+                .append("7. 每个候选都要给 importance（1-5）和 confidence（0-100）。只有用户明确表达、未来仍有价值且 confidence 至少 ")
                 .append(minConfidence).append(" 的内容才保留；拿不准时返回空数组。\n")
-                .append("7. keywords 填 1-").append(maxKeywords)
+                .append("8. keywords 填 1-").append(maxKeywords)
                 .append(" 个便于以后用不同说法找回的短词或短语，不要写推测。\n")
-                .append("8. 闲聊、一次性问答、情绪感叹、无明确期限的临时打算、已完成事项不得新建记忆。\n")
-                .append("9. 对每个新建、更新或完成项，sourceMessageIds 只能从该 user 消息行中方括号给出的 ID 选择。不得编造 ID；无可用 ID 时返回空数组。\n")
-                .append("10. 与已有记忆语义重复度超过 ")
+                .append("9. 闲聊、一次性问答和孤立情绪感叹不得新建事实记忆；已完成但具有人生连续性价值的事情可以只写入 episodes。\n")
+                .append("10. 对每个新建、更新或完成项，sourceMessageIds 只能从该 user 消息行中方括号给出的 ID 选择。不得编造 ID；无可用 ID 时返回空数组。\n")
+                .append("11. 与已有记忆语义重复度超过 ")
                 .append(Math.round(dedupThreshold * 100)).append("% 时不新增，把原文放入 duplicates；重复的核心目标仍可放入 coreCandidates 以更新最后确认时间。\n\n");
         prompt.append("已存在的核心记忆：\n");
         if (cores.isEmpty()) {
@@ -547,7 +601,9 @@ public class MemoryExtractor {
             }
         }
         prompt.append("\n只输出 JSON，不要解释：\n")
-                .append("{\"newWorkItems\":[{\"content\":\"...\",\"priority\":").append(defaultPriority)
+                .append("{\"episodes\":[{\"title\":\"...\",\"summary\":\"...\",\"episodeType\":\"EXPERIENCE\",\"occurredAt\":\"\",\"importance\":3,\"confidence\":")
+                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
+                .append("\"newWorkItems\":[{\"content\":\"...\",\"priority\":").append(defaultPriority)
                 .append(",\"importance\":").append(defaultWorkImportance).append(",\"confidence\":")
                 .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"validUntil\":\"\",\"sourceMessageIds\":[\"...\"]}],")
                 .append("\"coreCandidates\":[{\"content\":\"...\",\"importance\":").append(defaultCoreImportance)
@@ -575,12 +631,26 @@ public class MemoryExtractor {
         }
         try {
             JsonNode root = objectMapper.readTree(text);
-            return new ExtractionResult(parseNewWork(root), parseCoreCandidates(root), parseCoreUpdates(root),
+            return new ExtractionResult(parseEpisodes(root), parseNewWork(root), parseCoreCandidates(root), parseCoreUpdates(root),
                     parseWorkConflicts(root), parseCompletedWork(root), parseDuplicates(root));
         } catch (Exception exception) {
             log.warn("解析记忆提取结果失败", exception);
         }
-        return new ExtractionResult(List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        return new ExtractionResult(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+    }
+
+    private List<EpisodeCandidate> parseEpisodes(JsonNode root) {
+        List<EpisodeCandidate> values = new ArrayList<>();
+        int count = 0;
+        for (JsonNode node : root.path("episodes")) {
+            if (++count > maxCandidateItems) break;
+            values.add(new EpisodeCandidate(node.path("title").asText(""), node.path("summary").asText(""),
+                    node.path("episodeType").asText("EXPERIENCE"), node.path("occurredAt").asText(""),
+                    boundedInt(node.path("importance").asInt(defaultWorkImportance), 1, 5),
+                    boundedInt(node.path("confidence").asInt(defaultConfidence), 0, 100),
+                    stringList(node.path("keywords")), sourceMessageIds(node.path("sourceMessageIds"))));
+        }
+        return values;
     }
 
     // Parses newly proposed work memories from the model response.

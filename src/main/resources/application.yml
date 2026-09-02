@@ -198,6 +198,8 @@ memory:
   extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
   context-rounds: ${MEMORY_CONTEXT_ROUNDS:10}
   context-ttl-hours: ${MEMORY_CONTEXT_TTL_HOURS:720}
+  context-max-turns: ${MEMORY_CONTEXT_MAX_TURNS:40}
+  context-max-chars: ${MEMORY_CONTEXT_MAX_CHARS:12000}
   core-max-load: ${MEMORY_CORE_MAX_LOAD:16}
   core-max-chars: ${MEMORY_CORE_MAX_CHARS:2200}
   work-max-load: ${MEMORY_WORK_MAX_LOAD:15}
