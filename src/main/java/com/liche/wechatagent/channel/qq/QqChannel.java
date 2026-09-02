@@ -86,6 +86,8 @@ public class QqChannel implements WeChatChannel {
     private final AtomicBoolean commandPanelConfigured = new AtomicBoolean(false);
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
+    @Value("${media.storage.max-file-bytes:20971520}")
+    private long maxOutboundMediaBytes;
     private final QqWebSocketClient gatewayClient;
     private volatile ScheduledExecutorService heartbeatExecutor;
     private volatile ScheduledFuture<?> heartbeatTask;
@@ -755,6 +757,13 @@ public class QqChannel implements WeChatChannel {
             return false;
         }
         try {
+            long fileSize = Files.size(media.localFile());
+            long outboundLimit = maxOutboundMediaBytes > 0 ? maxOutboundMediaBytes : 20 * 1024 * 1024L;
+            if (fileSize <= 0 || fileSize > outboundLimit) {
+                log.warn("[qq] media send rejected user={} file={} size={} maxBytes={}",
+                        userId, media.fileName(), fileSize, outboundLimit);
+                return false;
+            }
             ensureToken();
             ObjectNode body = objectMapper.createObjectNode();
             body.put("file_type", qqFileType(media.contentType()));
