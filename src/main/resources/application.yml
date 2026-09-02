@@ -180,6 +180,7 @@ qq:
   token-refresh-lead-ms: ${QQ_TOKEN_REFRESH_LEAD_MS:60000}
   default-heartbeat-ms: ${QQ_DEFAULT_HEARTBEAT_MS:45000}
   input-notify-seconds: ${QQ_INPUT_NOTIFY_SECONDS:60}
+  max-message-chars: ${QQ_MAX_MESSAGE_CHARS:4000}
   markdown-max-chars: ${QQ_MARKDOWN_MAX_CHARS:4000}
   command-panel-enabled: ${QQ_COMMAND_PANEL_ENABLED:true}
 
