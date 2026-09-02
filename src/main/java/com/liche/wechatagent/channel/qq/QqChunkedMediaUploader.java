@@ -51,11 +51,7 @@ final class QqChunkedMediaUploader {
             int offset = index * part.path("block_size").asInt(node.path("block_size").asInt(5 * 1024 * 1024));
             int length = Math.min(part.path("block_size").asInt(5 * 1024 * 1024), bytes.length - offset);
             byte[] chunk = java.util.Arrays.copyOfRange(bytes, offset, offset + length);
-            Request request = new Request.Builder().url(part.path("presigned_url").asText())
-                    .put(RequestBody.create(chunk, MediaType.parse("application/octet-stream"))).build();
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) throw new IOException("QQ 分片上传失败: HTTP " + response.code());
-            }
+            uploadChunkWithRetry(part.path("presigned_url").asText(), chunk, index);
             api.post().uri("/v2/users/{userId}/upload_part_finish", userId)
                     .header("Authorization", "QQBot " + token)
                     .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -72,6 +68,29 @@ final class QqChunkedMediaUploader {
                         "upload_id", uploadId, "srv_send_msg", true)))
                 .retrieve().body(String.class);
         return merged == null ? "" : merged;
+    }
+
+    private void uploadChunkWithRetry(String url, byte[] chunk, int index) throws IOException {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            Request request = new Request.Builder().url(url)
+                    .put(RequestBody.create(chunk, MediaType.parse("application/octet-stream"))).build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful()) return;
+                lastFailure = new IOException("QQ 分片上传失败: HTTP " + response.code());
+            } catch (IOException exception) {
+                lastFailure = exception;
+            }
+            if (attempt < 2) {
+                try {
+                    Thread.sleep(500L * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("QQ 分片上传被中断", interrupted);
+                }
+            }
+        }
+        throw new IOException("QQ 分片 " + index + " 上传失败（已重试 1 次）", lastFailure);
     }
 
     private String digest(byte[] bytes, String algorithm) throws Exception {
