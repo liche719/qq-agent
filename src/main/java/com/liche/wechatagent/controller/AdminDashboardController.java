@@ -82,7 +82,10 @@ public class AdminDashboardController {
     @GetMapping("/tasks") public Map<String,Object> taskList(@RequestParam(defaultValue="") String status,
             @RequestParam(defaultValue="") String query,
             @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size) {
-        List<Map<Object,Object>> all = tasks.findTaskIds().stream().map(tasks::find).filter(m -> !m.isEmpty())
+        List<Map<Object,Object>> all = tasks.findTaskIds().stream().map(id -> {
+                    Map<Object,Object> state = new LinkedHashMap<>(tasks.find(id));
+                    state.put("taskId", id); return state;
+                }).filter(m -> !m.isEmpty())
                 .filter(m -> status.isBlank() || status.equals(String.valueOf(m.get("status"))))
                 .filter(m -> query.isBlank() || m.toString().toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
         int from=Math.min(Math.max(0,page)*Math.max(1,size),all.size()), to=Math.min(from+Math.max(1,size),all.size());
