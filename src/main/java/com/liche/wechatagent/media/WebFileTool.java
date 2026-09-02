@@ -130,6 +130,7 @@ public class WebFileTool {
         MediaStorageService.SendableMedia media = storageService.requireSendableMedia(requireCurrentUser(), mediaId);
         boolean sent = statusService.sendMedia(new OutboundMedia(media.localFile(), media.fileName(), media.contentType()));
         if (!sent) {
+            mediaContext.recordSendFailure(media.fileName());
             throw new IllegalStateException("当前通道不支持发送文件，或 QQ 文件上传失败");
         }
         mediaContext.recordSent(media.fileName());

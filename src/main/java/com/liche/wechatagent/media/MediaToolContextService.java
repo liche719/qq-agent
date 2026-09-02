@@ -49,7 +49,8 @@ public class MediaToolContextService {
                                 String mediaSourceMessageId, String userText,
                                 int attachmentCount, List<MediaCandidate> candidates, CandidateOrigin candidateOrigin,
                                 PendingMediaKey pendingKey, List<SavedNotice> savedNotices,
-                                List<ReadableMedia> readableMedia, List<String> sentNotices) {
+                                List<ReadableMedia> readableMedia, List<String> sentNotices,
+                                List<String> failedNotices) {
     }
 
     private record PendingMedia(String sourceMessageId, List<MediaCandidate> candidates,
@@ -107,7 +108,7 @@ public class MediaToolContextService {
         current.set(new CurrentMedia(userId, scope, taskId == null ? messageId : taskId, messageId,
                 mediaSourceMessageId, userText == null ? "" : userText,
                 sizeOf(attachments) + sizeOf(quotedAttachments), List.copyOf(candidates), origin, pendingKey,
-                new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
     }
 
     public void unbind() {
@@ -158,7 +159,7 @@ public class MediaToolContextService {
         CurrentMedia activated = new CurrentMedia(media.userId(), media.scope(), media.taskId(), media.messageId(),
                 pending.sourceMessageId(), media.userText(), media.attachmentCount(), pending.candidates(),
                 CandidateOrigin.PREVIOUS_UNSAVED_UPLOAD, key,
-                media.savedNotices(), media.readableMedia(), media.sentNotices());
+                media.savedNotices(), media.readableMedia(), media.sentNotices(), media.failedNotices());
         current.set(activated);
         for (MediaCandidate candidate : activated.candidates()) {
             if (candidate.image() && candidate.sourceUrl() != null && !candidate.sourceUrl().isBlank()) {
@@ -227,11 +228,25 @@ public class MediaToolContextService {
         }
     }
 
+    public void recordSendFailure(String fileName) {
+        CurrentMedia media = current.get();
+        if (media != null && fileName != null && !fileName.isBlank()) {
+            media.failedNotices().add(fileName.trim());
+        }
+    }
+
     public String completionNotice() {
         CurrentMedia media = current.get();
         if (media == null) return "";
         if (!media.sentNotices().isEmpty()) {
-            return "📤 已确认发送：" + String.join("、", media.sentNotices()) + "。";
+            String notice = "📤 已确认发送：" + String.join("、", media.sentNotices()) + "。";
+            if (!media.failedNotices().isEmpty()) {
+                notice += "以下文件发送失败：" + String.join("、", media.failedNotices()) + "。";
+            }
+            return notice;
+        }
+        if (!media.failedNotices().isEmpty()) {
+            return "📤 文件发送失败：" + String.join("、", media.failedNotices()) + "。";
         }
         if (!media.savedNotices().isEmpty()) {
             StringBuilder notice = new StringBuilder("📎 ");
