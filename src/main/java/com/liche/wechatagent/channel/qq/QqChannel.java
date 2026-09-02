@@ -98,6 +98,10 @@ public class QqChannel implements WeChatChannel {
     private final AtomicLong quoteLookupSuccessCount = new AtomicLong();
     private final AtomicLong quoteLookupFailureCount = new AtomicLong();
     private final AtomicLong chunkUploadFailureCount = new AtomicLong();
+    private final AtomicLong heartbeatFailureCount = new AtomicLong();
+    private final AtomicLong gatewayFrameParseFailureCount = new AtomicLong();
+    private final AtomicLong gatewayIdentifyFailureCount = new AtomicLong();
+    private final AtomicLong gatewayResumeFailureCount = new AtomicLong();
     private final ConcurrentMap<String, AtomicLong> apiErrorsByStatus = new ConcurrentHashMap<>();
     private volatile long connectedAtMillis;
     private volatile long lastGatewayEventAtMillis;
@@ -261,6 +265,10 @@ public class QqChannel implements WeChatChannel {
         metrics.put("quoteLookupSuccess", quoteLookupSuccessCount.get());
         metrics.put("quoteLookupFailure", quoteLookupFailureCount.get());
         metrics.put("chunkUploadFailure", chunkUploadFailureCount.get());
+        metrics.put("heartbeatFailure", heartbeatFailureCount.get());
+        metrics.put("gatewayFrameParseFailure", gatewayFrameParseFailureCount.get());
+        metrics.put("gatewayIdentifyFailure", gatewayIdentifyFailureCount.get());
+        metrics.put("gatewayResumeFailure", gatewayResumeFailureCount.get());
         metrics.put("apiErrorsByStatus", apiErrorsByStatus.entrySet().stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().get())));
         metrics.put("connectedAt", connectedAtMillis == 0 ? "" : java.time.Instant.ofEpochMilli(connectedAtMillis).toString());
@@ -401,6 +409,8 @@ public class QqChannel implements WeChatChannel {
             webSocket.send(identify.toString());
             log.info("QQ Identify sent (FULL_INTENTS)");
         } catch (Exception e) {
+            gatewayIdentifyFailureCount.incrementAndGet();
+            recordApiError(e);
             log.warn("QQ Identify failed: {}", e.getMessage());
         }
     }
@@ -417,6 +427,8 @@ public class QqChannel implements WeChatChannel {
             webSocket.send(resume.toString());
             log.info("QQ RESUME sent session={} seq={}", sessionId, lastSeq);
         } catch (Exception e) {
+            gatewayResumeFailureCount.incrementAndGet();
+            recordApiError(e);
             log.warn("QQ RESUME failed: {}", e.getMessage());
         }
     }
@@ -432,6 +444,7 @@ public class QqChannel implements WeChatChannel {
                 default -> { }
             }
         } catch (Exception e) {
+            gatewayFrameParseFailureCount.incrementAndGet();
             log.warn("QQ frame parse failed", e);
         }
     }
@@ -824,7 +837,10 @@ public class QqChannel implements WeChatChannel {
             WebSocket s = ws;
             if (s != null) {
                 try { ObjectNode hb = objectMapper.createObjectNode(); hb.put("op", 1); hb.putNull("d"); s.send(hb.toString()); }
-                catch (Exception ignored) { }
+                catch (Exception exception) {
+                    heartbeatFailureCount.incrementAndGet();
+                    recordApiError(exception);
+                }
             }
         }, intervalMs / 2, intervalMs / 2, TimeUnit.MILLISECONDS);
     }
