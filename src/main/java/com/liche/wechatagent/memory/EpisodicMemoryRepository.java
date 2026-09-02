@@ -7,6 +7,8 @@ import java.util.List;
 
 public interface EpisodicMemoryRepository extends JpaRepository<EpisodicMemory, Long> {
 
+    List<EpisodicMemory> findByUserIdOrderByCreatedAtDesc(String userId);
+
     List<EpisodicMemory> findByUserIdOrderByOccurredAtDesc(String userId);
 
     List<EpisodicMemory> findByUserIdAndStatusOrderByOccurredAtDesc(String userId, String status, Pageable pageable);

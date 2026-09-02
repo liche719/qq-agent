@@ -9,6 +9,8 @@ import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import com.liche.wechatagent.memory.EpisodicMemoryRepository;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
 import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import com.liche.wechatagent.media.StoredMedia;
+import com.liche.wechatagent.media.StoredMediaRepository;
 import com.liche.wechatagent.reminder.ReminderTaskRepository;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserProfileRepository;
@@ -43,15 +45,16 @@ public class AdminDashboardController {
     private final Deque<Map<String,Object>> history = new ConcurrentLinkedDeque<>();
     private final JdbcTemplate jdbc;
     private final StringRedisTemplate redis;
+    private final StoredMediaRepository media;
     private final Scheduler scheduler;
 
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
             UserWorkMemoryRepository work, ReminderTaskRepository reminders,
-            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler) {
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media) {
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
-        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler;
+        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler; this.media=media;
     }
 
     @GetMapping("/overview")
@@ -104,6 +107,10 @@ public class AdminDashboardController {
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("userId", userId); out.put("profile", users.findById(userId).orElse(null));
         out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0,50)));
+        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId));
+        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId));
+        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId));
+        out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, PageRequest.of(0,50)).stream().map(this::safeMedia).toList());
         out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId)); return out;
     }
 
@@ -117,7 +124,7 @@ public class AdminDashboardController {
         channel.requestReconnect(); audit(request,"QQ_RECONNECT","accepted"); return Map.of("accepted",true);
     }
     @PostMapping("/actions/tasks/{taskId}/retry") public Map<String,Object> retry(@PathVariable String taskId, HttpServletRequest request) {
-        Map<Object,Object> state=tasks.claimManualRetry(taskId); boolean accepted=!state.isEmpty() && orchestrator.retryTask(taskId);
+        boolean accepted=orchestrator.retryTask(taskId);
         audit(request,"TASK_RETRY",taskId+" accepted="+accepted); return Map.of("accepted",accepted,"taskId",taskId);
     }
     @PostMapping("/actions/cache/cleanup") public Map<String,Object> cleanup(HttpServletRequest request) {
@@ -129,4 +136,5 @@ public class AdminDashboardController {
     private void sample(Map<String,Object> overview) { Map<String,Object> s=new LinkedHashMap<>(); s.put("at", Instant.now().toString()); s.put("qq",overview.get("qq")); s.put("users",overview.get("users")); s.put("tasks",overview.get("tasks")); s.put("jvm",overview.get("jvm")); history.addLast(s); while(history.size()>360) history.pollFirst(); }
     private String mask(String value) { if(value==null||value.length()<5)return "***"; return value.substring(0,2)+"***"+value.substring(value.length()-2); }
     private void audit(HttpServletRequest request, String action, String detail) { try { logs.save(new OperationLog("admin", action, detail+" ip="+request.getRemoteAddr())); } catch (RuntimeException ignored) {} }
+    private Map<String,Object> safeMedia(StoredMedia value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",value.getId()); m.put("fileName",value.getFileName()); m.put("contentType",value.getContentType()); m.put("sizeBytes",value.getSizeBytes()); m.put("summary",value.getSummary()); m.put("createdAt",value.getCreatedAt()); return m; }
 }
