@@ -17,13 +17,20 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HexFormat;
+import java.util.function.Consumer;
 
 final class QqChunkedMediaUploader {
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
+    private final Consumer<Throwable> errorReporter;
 
     QqChunkedMediaUploader(ObjectMapper objectMapper, long timeoutSeconds) {
+        this(objectMapper, timeoutSeconds, ignored -> { });
+    }
+
+    QqChunkedMediaUploader(ObjectMapper objectMapper, long timeoutSeconds, Consumer<Throwable> errorReporter) {
         this.objectMapper = objectMapper;
+        this.errorReporter = errorReporter == null ? ignored -> { } : errorReporter;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(timeoutSeconds))
                 .readTimeout(Duration.ofMinutes(10))
@@ -32,6 +39,15 @@ final class QqChunkedMediaUploader {
     }
 
     String upload(RestClient api, String token, String userId, Path file, String fileName, int fileType) throws Exception {
+        try {
+            return uploadInternal(api, token, userId, file, fileName, fileType);
+        } catch (Exception exception) {
+            errorReporter.accept(exception);
+            throw exception;
+        }
+    }
+
+    private String uploadInternal(RestClient api, String token, String userId, Path file, String fileName, int fileType) throws Exception {
         long fileSize = Files.size(file);
         String md5 = digestFile(file, "MD5", Long.MAX_VALUE);
         String sha1 = digestFile(file, "SHA-1", Long.MAX_VALUE);

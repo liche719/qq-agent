@@ -202,7 +202,11 @@ public class QqChannel implements WeChatChannel {
         this.userAgent = policies.getUserAgent() == null || policies.getUserAgent().isBlank()
                 ? QqRuntimeProperties.DEFAULT_USER_AGENT : policies.getUserAgent().trim();
         this.gatewayClient = new QqWebSocketClient(this.websocketConnectTimeoutSeconds, this.userAgent);
-        this.chunkedMediaUploader = new QqChunkedMediaUploader(objectMapper, this.apiConnectTimeoutSeconds);
+        this.chunkedMediaUploader = new QqChunkedMediaUploader(objectMapper, this.apiConnectTimeoutSeconds, error -> {
+            chunkUploadFailureCount.incrementAndGet();
+            apiErrorCount.incrementAndGet();
+            recordApiError(error);
+        });
         this.orchestrator = orchestrator;
     }
 
@@ -500,8 +504,12 @@ public class QqChannel implements WeChatChannel {
                     .body(payloadJson).retrieve().body(String.class);
             log.info("QQ C2C command panel configured");
         } catch (RestClientResponseException exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             logPanelApiFailure(exception);
         } catch (Exception exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             commandPanelConfigured.set(false);
             log.warn("QQ C2C command panel configuration failed: {}", exception.getMessage());
         }
@@ -545,8 +553,12 @@ public class QqChannel implements WeChatChannel {
                     .retrieve().body(String.class);
             log.info("QQ C2C custom menu configured");
         } catch (RestClientResponseException exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             logPanelApiFailure(exception);
         } catch (Exception exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             log.warn("QQ C2C custom menu configuration failed: {}", exception.getMessage());
         }
     }
@@ -794,8 +806,10 @@ public class QqChannel implements WeChatChannel {
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body.toString())
                     .retrieve().body(String.class);
-        } catch (Exception ignored) {
-            // 输入状态失败可忽略
+        } catch (Exception exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
+            // 输入状态失败不影响主回复，但会进入监控
         }
     }
 
