@@ -13,6 +13,7 @@ final class QqWebSocketClient {
     private final long connectTimeoutSeconds;
     private final String userAgent;
     private volatile OkHttpClient client;
+    private volatile WebSocket webSocket;
 
     // Creates a gateway client with bounded connection settings.
     QqWebSocketClient(long connectTimeoutSeconds, String userAgent) {
@@ -32,11 +33,20 @@ final class QqWebSocketClient {
                 .header("Authorization", "QQBot " + accessToken)
                 .header("User-Agent", userAgent)
                 .build();
-        return client.newWebSocket(request, listener);
+        webSocket = client.newWebSocket(request, listener);
+        return webSocket;
     }
 
     // Releases the underlying OkHttp resources and connection pool.
     synchronized void close() {
+        WebSocket currentWebSocket = webSocket;
+        webSocket = null;
+        if (currentWebSocket != null) {
+            try {
+                currentWebSocket.close(1000, "client shutdown");
+            } catch (Exception ignored) {
+            }
+        }
         OkHttpClient current = client;
         client = null;
         if (current == null) {
