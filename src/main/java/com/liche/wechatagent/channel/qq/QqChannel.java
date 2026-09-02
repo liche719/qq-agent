@@ -40,6 +40,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @ConditionalOnProperty(name = "qq.enabled", havingValue = "true")
@@ -84,6 +85,10 @@ public class QqChannel implements WeChatChannel {
     private volatile int lastSeq = 0;    // 最后收到的消息序列号（RESUME 用）
     private volatile WebSocket ws;
     private final AtomicBoolean commandPanelConfigured = new AtomicBoolean(false);
+    private final AtomicLong textSendSuccessCount = new AtomicLong();
+    private final AtomicLong textSendFailureCount = new AtomicLong();
+    private final AtomicLong mediaSendSuccessCount = new AtomicLong();
+    private final AtomicLong mediaSendFailureCount = new AtomicLong();
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
     @Value("${media.storage.max-file-bytes:20971520}")
@@ -215,6 +220,14 @@ public class QqChannel implements WeChatChannel {
     public boolean isGatewayConnected() {
         WebSocket current = ws;
         return current != null && running.get();
+    }
+
+    public Map<String, Object> healthSnapshot() {
+        return Map.of("connected", isGatewayConnected(),
+                "textSendSuccess", textSendSuccessCount.get(),
+                "textSendFailure", textSendFailureCount.get(),
+                "mediaSendSuccess", mediaSendSuccessCount.get(),
+                "mediaSendFailure", mediaSendFailureCount.get());
     }
 
     private void reconnect() {
@@ -750,7 +763,9 @@ public class QqChannel implements WeChatChannel {
     @Override
     public boolean sendTextReplyResultFrom(String botId, String userId, String replyToMsgId, String text) {
         try {
-            return sendWithPassiveFirst(userId, replyToMsgId, text);
+            boolean sent = sendWithPassiveFirst(userId, replyToMsgId, text);
+            if (sent) textSendSuccessCount.incrementAndGet(); else textSendFailureCount.incrementAndGet();
+            return sent;
         } finally {
             if (!isGroupConversation(userId)) {
                 stopTyping(userId);
@@ -786,8 +801,10 @@ public class QqChannel implements WeChatChannel {
                     .body(body.toString())
                     .retrieve().body(String.class);
             log.info("[qq] uploaded local media user={} file={}", userId, media.fileName());
+            mediaSendSuccessCount.incrementAndGet();
             return true;
         } catch (Exception exception) {
+            mediaSendFailureCount.incrementAndGet();
             log.warn("[qq] media send failed user={}: {}", userId, exception.getMessage());
             return false;
         }

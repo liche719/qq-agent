@@ -46,6 +46,7 @@ public class HealthController {
         if (qqChannelProvider != null) {
             QqChannel qq = qqChannelProvider.getIfAvailable();
             map.put("qq", qq == null ? "DISABLED" : (qq.isGatewayConnected() ? "UP" : "DOWN"));
+            if (qq != null) map.put("qqMetrics", qq.healthSnapshot());
         }
         return map;
     }
