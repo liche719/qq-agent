@@ -33,12 +33,15 @@ public class AgentTaskStateStore {
         if (batch == null || taskId == null || taskId.isBlank()) return;
         String content = batch.historyContent();
         if (content.length() > 8000) content = content.substring(0, 8000) + "…";
+        boolean hasQuote = !batch.quotedContent().isBlank() || !batch.quotedImages().isEmpty()
+                || !batch.quotedAttachments().isEmpty();
         save(taskId, Map.of(
                 "inputContent", safe(content),
                 "inputMessageIds", safe(String.join(",", batch.messageIds())),
                 "inputMediaCount", String.valueOf(batch.images().size() + batch.attachments().size()),
                 "inputQuotedMediaCount", String.valueOf(batch.quotedImages().size() + batch.quotedAttachments().size()),
-                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty()),
+                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty() && !hasQuote),
+                "recoverySchema", "2",
                 "channel", safe(batch.channel()), "botId", safe(batch.botId())
         ));
     }
@@ -62,6 +65,11 @@ public class AgentTaskStateStore {
         if (taskId == null || taskId.isBlank()) return;
         save(taskId, Map.of("status", "REPLY_SENT", "replySentAt", Instant.now().toString(),
                 "currentStep", "REPLY_SENT"));
+    }
+
+    public void markUnsafeToReplay(String taskId, String reason) {
+        if (taskId == null || taskId.isBlank()) return;
+        save(taskId, Map.of("replaySafe", "false", "replayBlockedReason", safe(reason)));
     }
 
     private void save(String taskId, Map<String, String> values) {
@@ -104,6 +112,7 @@ public class AgentTaskStateStore {
         Map<Object, Object> state = find(taskId);
         if (!"UNKNOWN_RESULT".equals(String.valueOf(state.get("status")))
                 || !"true".equals(String.valueOf(state.get("replaySafe")))
+                || !"2".equals(String.valueOf(state.get("recoverySchema")))
                 || String.valueOf(state.get("inputContent")).isBlank()) return Map.of();
         try {
             String claimKey = "agent:task:" + taskId + ":retry-claimed";

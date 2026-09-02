@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
@@ -35,6 +36,7 @@ public class ToolRegistry {
     private final Map<String, ToolEntry> entries = new LinkedHashMap<>();
     private final int retryAttempts;
     private final ToolInvocationService invocationService;
+    private final com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore;
 
     @Autowired
     public ToolRegistry(com.liche.wechatagent.search.SearchTool searchTool,
@@ -44,24 +46,27 @@ public class ToolRegistry {
                          com.liche.wechatagent.media.MediaMemoryTool mediaMemoryTool,
                          com.liche.wechatagent.media.WebFileTool webFileTool,
                          ToolInvocationService invocationService,
+                         com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore,
                          @Value("${agent.tool-retry-attempts:1}") int retryAttempts,
                          @Value("${agent.tool-max-result-chars:8000}") int maxToolResultChars) {
         this(List.of(searchTool, webPageTool, reminderTool, timeTool, mediaMemoryTool, webFileTool),
-                retryAttempts, maxToolResultChars, invocationService);
+                retryAttempts, maxToolResultChars, invocationService, taskStateStore);
     }
 
     ToolRegistry(List<?> tools, int retryAttempts) {
-        this(tools, retryAttempts, DEFAULT_MAX_TOOL_RESULT_CHARS, new ToolInvocationService(retryAttempts, DEFAULT_MAX_TOOL_RESULT_CHARS));
+        this(tools, retryAttempts, DEFAULT_MAX_TOOL_RESULT_CHARS, new ToolInvocationService(retryAttempts, DEFAULT_MAX_TOOL_RESULT_CHARS), null);
     }
 
     ToolRegistry(List<?> tools, int retryAttempts, int maxToolResultChars) {
-        this(tools, retryAttempts, maxToolResultChars, new ToolInvocationService(retryAttempts, maxToolResultChars));
+        this(tools, retryAttempts, maxToolResultChars, new ToolInvocationService(retryAttempts, maxToolResultChars), null);
     }
 
     private ToolRegistry(List<?> tools, int retryAttempts, int maxToolResultChars,
-                         ToolInvocationService invocationService) {
+                         ToolInvocationService invocationService,
+                         com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore) {
         this.retryAttempts = Math.max(0, Math.min(3, retryAttempts));
         this.invocationService = invocationService;
+        this.taskStateStore = taskStateStore;
         if (tools != null) {
             tools.forEach(this::register);
         }
@@ -119,6 +124,11 @@ public class ToolRegistry {
         ToolEntry entry = entries.get(request.name());
         if (entry == null) {
             return ToolExecutionOutcome.failure("未知工具 " + request.name(), 0);
+        }
+        ToolPolicySnapshot policy = ToolPolicySnapshot.from(entry.policy());
+        if (taskStateStore != null && (policy.hasSideEffect() || policy.destructive()
+                || entry.method().isAnnotationPresent(NonIdempotentTool.class))) {
+            taskStateStore.markUnsafeToReplay(MDC.get("taskId"), "已开始执行有副作用工具：" + request.name());
         }
         return invocationService.invoke(entry.method(), entry.tool(), request, memoryId, entry.policy());
     }
