@@ -91,6 +91,7 @@ public class QqChannel implements WeChatChannel {
     private final AtomicLong mediaSendFailureCount = new AtomicLong();
     private final AtomicLong textSendDurationMillis = new AtomicLong();
     private final AtomicLong mediaSendDurationMillis = new AtomicLong();
+    private final AtomicLong apiErrorCount = new AtomicLong();
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
     @Value("${media.storage.max-file-bytes:20971520}")
@@ -236,6 +237,7 @@ public class QqChannel implements WeChatChannel {
                 "textSendFailure", textSendFailureCount.get(),
                 "mediaSendSuccess", mediaSendSuccessCount.get(),
                 "mediaSendFailure", mediaSendFailureCount.get(),
+                "apiErrors", apiErrorCount.get(),
                 "textSendAverageMs", averageMillis(textSendDurationMillis, textSendSuccessCount.get() + textSendFailureCount.get()),
                 "mediaSendAverageMs", averageMillis(mediaSendDurationMillis, mediaSendSuccessCount.get() + mediaSendFailureCount.get()));
     }
@@ -1000,6 +1002,11 @@ public class QqChannel implements WeChatChannel {
             return true;
         } catch (Exception e) {
             // 被动失败（msg_id 失效/限频等）→ 降级主动消息重试一次
+            apiErrorCount.incrementAndGet();
+            String orphanMessageId = extractMessageId(e);
+            if (orphanMessageId != null && !orphanMessageId.isBlank()) {
+                deleteMessage(null, userId, orphanMessageId);
+            }
             log.warn("[qq] passive send failed userId={}: {} → 降级主动消息", userId, e.getMessage());
             try {
                 ensureToken();
@@ -1007,10 +1014,34 @@ public class QqChannel implements WeChatChannel {
                 log.info("[qq] send(proactive-retry) -> {} ({} chars)", userId, text == null ? 0 : text.length());
                 return true;
             } catch (Exception e2) {
+                apiErrorCount.incrementAndGet();
                 log.warn("[qq] proactive retry failed userId={}: {}", userId, e2.getMessage());
                 return false;
             }
         }
+    }
+
+    private String extractMessageId(Exception exception) {
+        if (!(exception instanceof RestClientResponseException response)) return "";
+        String body = response.getResponseBodyAsString();
+        if (body == null || body.isBlank()) return "";
+        try {
+            JsonNode node = objectMapper.readTree(body);
+            for (String field : List.of("id", "message_id", "messageId")) {
+                String value = node.path(field).asText("");
+                if (!value.isBlank()) return value;
+            }
+            JsonNode data = node.path("data");
+            if (data.isObject()) {
+                for (String field : List.of("id", "message_id", "messageId")) {
+                    String value = data.path(field).asText("");
+                    if (!value.isBlank()) return value;
+                }
+            }
+        } catch (Exception ignored) {
+            // Error bodies are not guaranteed to be JSON.
+        }
+        return "";
     }
 
     // Sends a QQ message and optionally attaches the passive reply target.
