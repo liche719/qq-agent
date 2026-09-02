@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.quartz.Scheduler;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.lang.management.ManagementFactory;
@@ -42,14 +43,15 @@ public class AdminDashboardController {
     private final Deque<Map<String,Object>> history = new ConcurrentLinkedDeque<>();
     private final JdbcTemplate jdbc;
     private final StringRedisTemplate redis;
+    private final Scheduler scheduler;
 
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
             UserWorkMemoryRepository work, ReminderTaskRepository reminders,
-            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis) {
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler) {
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
-        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis;
+        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler;
     }
 
     @GetMapping("/overview")
@@ -60,6 +62,8 @@ public class AdminDashboardController {
         jvm.put("heapUsed", rt.totalMemory()-rt.freeMemory()); jvm.put("heapMax", rt.maxMemory());
         jvm.put("processors", rt.availableProcessors());
         jvm.put("threads", ManagementFactory.getThreadMXBean().getThreadCount());
+        jvm.put("systemCpuLoad", ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage());
+        java.io.File root = java.io.File.listRoots()[0]; jvm.put("diskFree", root.getFreeSpace()); jvm.put("diskTotal", root.getTotalSpace());
         out.put("jvm", jvm); out.put("users", users.count()); out.put("conversations", conversations.count());
         out.put("episodes", episodes.count()); out.put("coreMemories", core.count()); out.put("workMemories", work.count());
         out.put("reminders", reminders.count()); out.put("tasks", taskSummary());
