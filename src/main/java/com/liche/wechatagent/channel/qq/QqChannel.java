@@ -105,6 +105,7 @@ public class QqChannel implements WeChatChannel {
     private final ConcurrentMap<String, Long> lastRecvAt = new ConcurrentHashMap<>();
     /** userId -> 最近消息 id（被动回复用） */
     private final ConcurrentMap<String, String> lastMsgIds = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> lastBotMsgIds = new ConcurrentHashMap<>();
     /** conversationId + msgId -> 接收时间，用于指定消息的被动回复窗口判断。 */
     private final ConcurrentMap<String, Long> receivedAtByMessage = new ConcurrentHashMap<>();
     /** userId -> 输入状态续期任务 */
@@ -943,7 +944,7 @@ public class QqChannel implements WeChatChannel {
             boolean withinWindow = targetMsgId != null
                     && recvAt != null
                     && (System.currentTimeMillis() - recvAt) < passiveWindowMillis;
-            postMessage(userId, text, markdown, withinWindow ? targetMsgId : null);
+            rememberBotMessageId(userId, postMessage(userId, text, markdown, withinWindow ? targetMsgId : null));
             log.info("[qq] send{} -> {} ({} chars)", withinWindow ? "(passive)" : "(proactive)", userId,
                     text == null ? 0 : text.length());
             return true;
@@ -952,7 +953,7 @@ public class QqChannel implements WeChatChannel {
             log.warn("[qq] passive send failed userId={}: {} → 降级主动消息", userId, e.getMessage());
             try {
                 ensureToken();
-                postMessage(userId, text, markdown, null);
+                rememberBotMessageId(userId, postMessage(userId, text, markdown, null));
                 log.info("[qq] send(proactive-retry) -> {} ({} chars)", userId, text == null ? 0 : text.length());
                 return true;
             } catch (Exception e2) {
@@ -963,14 +964,23 @@ public class QqChannel implements WeChatChannel {
     }
 
     // Sends a QQ message and optionally attaches the passive reply target.
-    private void postMessage(String conversationId, String text, boolean markdown, String replyToMsgId) {
+    private String postMessage(String conversationId, String text, boolean markdown, String replyToMsgId) {
         RestClient client = buildRestClient(apiBase);
         ObjectNode body = buildMessageBody(text, markdown, replyToMsgId);
-        client.post().uri(messagePath(conversationId), targetOpenid(conversationId))
+        return client.post().uri(messagePath(conversationId), targetOpenid(conversationId))
                 .header("Authorization", "QQBot " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body.toString())
                 .retrieve().body(String.class);
+    }
+
+    private void rememberBotMessageId(String userId, String response) {
+        if (response == null || response.isBlank()) return;
+        try {
+            String messageId = objectMapper.readTree(response).path("id").asText("");
+            if (!messageId.isBlank()) lastBotMsgIds.put(userId, messageId);
+        } catch (Exception ignored) {
+        }
     }
 
     // Builds the request payload shared by passive and proactive QQ sends.
