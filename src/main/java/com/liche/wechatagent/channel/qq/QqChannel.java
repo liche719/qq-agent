@@ -959,7 +959,11 @@ public class QqChannel implements WeChatChannel {
         for (int index = 0; index < parts.size(); index++) {
             labeledPages.add("[" + (index + 1) + "/" + parts.size() + "]\n" + parts.get(index));
         }
-        if (!sendPassive(userId, replyToMsgId, labeledPages.getFirst(), looksLikeMarkdown(labeledPages.getFirst()))) {
+        String firstPage = labeledPages.getFirst();
+        if (labeledPages.size() > 1) {
+            firstPage += "\n\n发送“继续”查看下一页。";
+        }
+        if (!sendPassive(userId, replyToMsgId, firstPage, looksLikeMarkdown(firstPage))) {
             log.warn("[qq] long message delivery failed user={} part=1 total={}", userId, parts.size());
             return false;
         }

@@ -27,4 +27,20 @@ class QqAttachmentParserTest {
         assertTrue(payload.attachments().stream().anyMatch(item -> "video/mp4".equals(item.contentType())));
         assertTrue(payload.attachments().stream().anyMatch(item -> "audio/silk".equals(item.contentType())));
     }
+
+    @Test
+    void parsesNestedElementsButDoesNotLeakQuotedMedia() throws Exception {
+        var data = objectMapper.readTree("""
+                {"msg_elements":[
+                  {"element_type":1,"attachments":[{"url":"https://example.test/a.pdf","content_type":"application/pdf","filename":"a.pdf"}]},
+                  {"message_type":103,"attachments":[{"url":"https://example.test/old.png","content_type":"image/png"}]}
+                ]}
+                """);
+
+        QqAttachmentParser.Payload payload = QqAttachmentParser.parse(data);
+
+        assertEquals(1, payload.attachments().size());
+        assertEquals("a.pdf", payload.attachments().getFirst().name());
+        assertTrue(payload.images().isEmpty());
+    }
 }
