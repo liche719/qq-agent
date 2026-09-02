@@ -277,6 +277,7 @@ public class QqChannel implements WeChatChannel {
 
         @Override
         public void onClosed(WebSocket webSocket, int code, String reason) {
+            if (QqChannel.this.ws == webSocket) QqChannel.this.ws = null;
             log.warn("QQ WebSocket closed: code={} reason={}", code, reason);
             if (code == 4004) {
                 log.error("QQ 鉴权失败：请检查 QQ 开放平台 IP 白名单（当前出口 IP）与 AppID/AppSecret");
@@ -288,6 +289,7 @@ public class QqChannel implements WeChatChannel {
 
         @Override
         public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+            if (QqChannel.this.ws == webSocket) QqChannel.this.ws = null;
             closeResponse(response);
             log.warn("QQ WebSocket failure: {}", t.getMessage());
             reconnect();
