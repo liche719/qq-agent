@@ -98,6 +98,10 @@ public class QqChannel implements WeChatChannel {
     private final AtomicLong quoteLookupSuccessCount = new AtomicLong();
     private final AtomicLong quoteLookupFailureCount = new AtomicLong();
     private final AtomicLong chunkUploadFailureCount = new AtomicLong();
+    private final ConcurrentMap<String, AtomicLong> apiErrorsByStatus = new ConcurrentHashMap<>();
+    private volatile long connectedAtMillis;
+    private volatile long lastGatewayEventAtMillis;
+    private volatile String lastApiError;
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
     @Value("${media.storage.max-file-bytes:20971520}")
@@ -221,7 +225,6 @@ public class QqChannel implements WeChatChannel {
                 return;
             } catch (Exception e) {
                 reconnectFailureCount.incrementAndGet();
-                apiErrorCount.incrementAndGet();
                 log.warn("QQ bot connect failed: {}", e.getMessage());
                 long delay = reconnectBackoffMillis[Math.min(attempt, reconnectBackoffMillis.length - 1)];
                 attempt++;
@@ -254,6 +257,11 @@ public class QqChannel implements WeChatChannel {
         metrics.put("quoteLookupSuccess", quoteLookupSuccessCount.get());
         metrics.put("quoteLookupFailure", quoteLookupFailureCount.get());
         metrics.put("chunkUploadFailure", chunkUploadFailureCount.get());
+        metrics.put("apiErrorsByStatus", apiErrorsByStatus.entrySet().stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().get())));
+        metrics.put("connectedAt", connectedAtMillis == 0 ? "" : java.time.Instant.ofEpochMilli(connectedAtMillis).toString());
+        metrics.put("lastGatewayEventAt", lastGatewayEventAtMillis == 0 ? "" : java.time.Instant.ofEpochMilli(lastGatewayEventAtMillis).toString());
+        metrics.put("lastApiError", lastApiError == null ? "" : lastApiError);
         metrics.put("textSendAverageMs", averageMillis(textSendDurationMillis, textSendSuccessCount.get() + textSendFailureCount.get()));
         metrics.put("mediaSendAverageMs", averageMillis(mediaSendDurationMillis, mediaSendSuccessCount.get() + mediaSendFailureCount.get()));
         return Map.copyOf(metrics);
@@ -261,6 +269,16 @@ public class QqChannel implements WeChatChannel {
 
     private long averageMillis(AtomicLong total, long count) {
         return count == 0 ? 0 : total.get() / count;
+    }
+
+    private void recordApiError(Throwable error) {
+        String status = "exception";
+        if (error instanceof RestClientResponseException response) {
+            status = String.valueOf(response.getStatusCode().value());
+        }
+        apiErrorsByStatus.computeIfAbsent(status, ignored -> new AtomicLong()).incrementAndGet();
+        String message = error == null ? "unknown" : error.getClass().getSimpleName();
+        lastApiError = message.length() > 120 ? message.substring(0, 120) : message;
     }
 
     private void reconnect() {
@@ -287,19 +305,22 @@ public class QqChannel implements WeChatChannel {
         } catch (Exception e) {
             tokenRefreshFailureCount.incrementAndGet();
             apiErrorCount.incrementAndGet();
+            recordApiError(e);
             throw new RuntimeException("QQ access_token failed: " + e.getMessage(), e);
         }
     }
 
     private String fetchGatewayUrl() {
-        RestClient client = buildRestClient(apiBase);
-        String resp = client.get().uri("/gateway")
-                .header("Authorization", "QQBot " + accessToken)
-                .retrieve().body(String.class);
         try {
+            RestClient client = buildRestClient(apiBase);
+            String resp = client.get().uri("/gateway")
+                    .header("Authorization", "QQBot " + accessToken)
+                    .retrieve().body(String.class);
             JsonNode node = objectMapper.readTree(resp);
             return node.path("url").asText("");
         } catch (Exception e) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(e);
             throw new RuntimeException("QQ gateway 解析失败", e);
         }
     }
@@ -315,16 +336,20 @@ public class QqChannel implements WeChatChannel {
         @Override
         public void onOpen(WebSocket webSocket, Response response) {
             closeResponse(response);
+            connectedAtMillis = System.currentTimeMillis();
+            lastGatewayEventAtMillis = connectedAtMillis;
             log.info("QQ WebSocket onOpen");
         }
 
         @Override
         public void onMessage(WebSocket webSocket, String text) {
+            lastGatewayEventAtMillis = System.currentTimeMillis();
             handleFrame(text, webSocket);
         }
 
         @Override
         public void onClosed(WebSocket webSocket, int code, String reason) {
+            lastGatewayEventAtMillis = System.currentTimeMillis();
             if (QqChannel.this.ws == webSocket) QqChannel.this.ws = null;
             log.warn("QQ WebSocket closed: code={} reason={}", code, reason);
             if (code == 4004) {
@@ -337,6 +362,9 @@ public class QqChannel implements WeChatChannel {
 
         @Override
         public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+            lastGatewayEventAtMillis = System.currentTimeMillis();
+            apiErrorCount.incrementAndGet();
+            recordApiError(t);
             if (QqChannel.this.ws == webSocket) QqChannel.this.ws = null;
             closeResponse(response);
             log.warn("QQ WebSocket failure: {}", t.getMessage());
@@ -634,6 +662,7 @@ public class QqChannel implements WeChatChannel {
         } catch (Exception exception) {
             quoteLookupFailureCount.incrementAndGet();
             apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             log.info("[qq] quote lookup unavailable user={} msg={}: {}", userId, embedded.messageId(), exception.getMessage());
         }
         return embedded;
@@ -890,6 +919,7 @@ public class QqChannel implements WeChatChannel {
             mediaSendFailureCount.incrementAndGet();
             if (chunkedAttempt) chunkUploadFailureCount.incrementAndGet();
             apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             log.warn("[qq] media send failed user={}: {}", userId, exception.getMessage());
             return false;
         } finally {
@@ -910,6 +940,7 @@ public class QqChannel implements WeChatChannel {
             return true;
         } catch (Exception exception) {
             apiErrorCount.incrementAndGet();
+            recordApiError(exception);
             log.warn("[qq] delete message failed user={} messageId={} reason={}", userId, messageId, exception.getMessage());
             return false;
         }
@@ -1035,6 +1066,7 @@ public class QqChannel implements WeChatChannel {
         } catch (Exception e) {
             // 被动失败（msg_id 失效/限频等）→ 降级主动消息重试一次
             apiErrorCount.incrementAndGet();
+            recordApiError(e);
             String orphanMessageId = extractMessageId(e);
             if (orphanMessageId != null && !orphanMessageId.isBlank()) {
                 deleteMessage(null, userId, orphanMessageId);
@@ -1047,6 +1079,7 @@ public class QqChannel implements WeChatChannel {
                 return true;
             } catch (Exception e2) {
                 apiErrorCount.incrementAndGet();
+                recordApiError(e2);
                 log.warn("[qq] proactive retry failed userId={}: {}", userId, e2.getMessage());
                 return false;
             }
@@ -1243,6 +1276,7 @@ public class QqChannel implements WeChatChannel {
         } catch (Exception e) {
             state.failed = true;
             apiErrorCount.incrementAndGet();
+            recordApiError(e);
             log.warn("[qq] stream frame failed user={}: {}", userId, e.getMessage());
             return false;
         }
