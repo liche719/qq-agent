@@ -88,6 +88,8 @@ public class QqChannel implements WeChatChannel {
     private boolean commandPanelEnabled;
     @Value("${media.storage.max-file-bytes:20971520}")
     private long maxOutboundMediaBytes;
+    @Value("${qq.max-message-chars:4000}")
+    private int maxMessageChars;
     private final QqWebSocketClient gatewayClient;
     private volatile ScheduledExecutorService heartbeatExecutor;
     private volatile ScheduledFuture<?> heartbeatTask;
@@ -829,8 +831,33 @@ public class QqChannel implements WeChatChannel {
      * 被动消息每用户每天 1000 条上限且未认证频控 5/qp、30/qpm —— 主动仅作兜底。
      */
     private boolean sendWithPassiveFirst(String userId, String replyToMsgId, String text) {
+        int effectiveLimit = Math.max(256, maxMessageChars);
+        if (text != null && text.length() > effectiveLimit) {
+            return sendLongMessage(userId, replyToMsgId, text);
+        }
         boolean useMarkdown = looksLikeMarkdown(text);
         return sendPassive(userId, replyToMsgId, text, useMarkdown);
+    }
+
+    private boolean sendLongMessage(String userId, String replyToMsgId, String text) {
+        int limit = Math.max(256, maxMessageChars);
+        int offset = 0;
+        boolean first = true;
+        while (offset < text.length()) {
+            int end = Math.min(text.length(), offset + limit);
+            if (end < text.length()) {
+                int breakAt = Math.max(offset + 1, text.lastIndexOf('\n', end));
+                if (breakAt > offset + limit / 2) end = breakAt;
+            }
+            String part = text.substring(offset, end).trim();
+            if (!part.isBlank() && !sendPassive(userId, first ? replyToMsgId : null, part, looksLikeMarkdown(part))) {
+                log.warn("[qq] long message delivery failed user={} offset={} length={}", userId, offset, part.length());
+                return false;
+            }
+            offset = end;
+            first = false;
+        }
+        return true;
     }
 
     /** 粗略判断文本是否含 Markdown 语法（标题/加粗/列表/引用/代码/分隔线） */
