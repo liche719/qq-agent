@@ -36,12 +36,31 @@ public class AdminAccessFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        if (hasValidKey(request) || canUseLoopbackWithoutKey(request)) {
+        response.setContentType("application/json;charset=UTF-8");
+        boolean dashboard = request.getRequestURI().startsWith("/api/admin");
+        if (dashboard && !isAllowedIp(request.getRemoteAddr())) {
+            response.setStatus(HttpStatus.FORBIDDEN.value());
+            response.getWriter().write("{\"message\":\"来源 IP 不允许访问管理后台\"}");
+            return;
+        }
+        FailureWindow existing = failures.get(request.getRemoteAddr());
+        if (existing != null && !existing.expired() && existing.count >= 5) {
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            response.getWriter().write("{\"message\":\"管理接口暂时封禁，请稍后再试\"}");
+            return;
+        }
+        if (hasValidKey(request) || (!dashboard && canUseLoopbackWithoutKey(request))) {
             failures.remove(request.getRemoteAddr());
             filterChain.doFilter(request, response);
             return;
         }
-        FailureWindow window = failures.compute(request.getRemoteAddr(), (k,v) -> v == null || v.expired() ? new FailureWindow() : v.next());
+        failures.entrySet().removeIf(entry -> entry.getValue().expired());
+        if (failures.size() >= 1024 && !failures.containsKey(request.getRemoteAddr())) {
+            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            response.getWriter().write("{\"message\":\"管理接口请求过多，请稍后再试\"}");
+            return;
+        }
+        FailureWindow window = failures.compute(request.getRemoteAddr(), (address, previous) -> previous == null || previous.expired() ? new FailureWindow() : previous.next());
         if (window.count >= 5) { response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value()); response.getWriter().write("{\"message\":\"管理接口暂时封禁，请稍后再试\"}"); return; }
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setContentType("application/json;charset=UTF-8");
@@ -60,15 +79,28 @@ public class AdminAccessFilter extends OncePerRequestFilter {
 
     private boolean canUseLoopbackWithoutKey(HttpServletRequest request) {
         return !properties.isRequireKey() && properties.isAllowLoopbackWithoutKey()
-                && isAllowedIp(request.getRemoteAddr());
+                && isLoopback(request.getRemoteAddr());
     }
 
     private boolean isAllowedIp(String address) {
         return Arrays.stream(properties.getAllowedIps().split(","))
-                .map(String::trim).anyMatch(address::equals);
+                .map(String::trim).anyMatch(allowed -> allowed.equals(address)
+                        || ("::1".equals(allowed) && "0:0:0:0:0:0:0:1".equals(address)));
     }
 
-    private record FailureWindow(int count, long blockedUntil) { FailureWindow() { this(1, System.currentTimeMillis()+600_000); } FailureWindow next(){ return new FailureWindow(count+1, blockedUntil); } boolean expired(){ return System.currentTimeMillis()>blockedUntil; } }
+    private record FailureWindow(int count, long blockedUntil) {
+        FailureWindow() {
+            this(1, System.currentTimeMillis() + 600_000);
+        }
+
+        FailureWindow next() {
+            return new FailureWindow(count + 1, count == 4 ? System.currentTimeMillis() + 600_000 : blockedUntil);
+        }
+
+        boolean expired() {
+            return System.currentTimeMillis() >= blockedUntil;
+        }
+    }
 
     private boolean isLoopback(String remoteAddress) {
         return "127.0.0.1".equals(remoteAddress) || "::1".equals(remoteAddress)

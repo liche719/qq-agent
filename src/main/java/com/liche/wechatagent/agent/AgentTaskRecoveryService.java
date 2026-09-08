@@ -16,7 +16,7 @@ public class AgentTaskRecoveryService {
     private final boolean enabled;
 
     public AgentTaskRecoveryService(AgentTaskStateStore store, AgentOrchestrator orchestrator,
-                                    @Value("${agent.task-auto-recovery-enabled:true}") boolean enabled) {
+                                    @Value("${agent.task-auto-recovery-enabled:false}") boolean enabled) {
         this.store = store;
         this.orchestrator = orchestrator;
         this.enabled = enabled;

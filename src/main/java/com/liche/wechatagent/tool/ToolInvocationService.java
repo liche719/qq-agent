@@ -73,6 +73,9 @@ public class ToolInvocationService {
         int totalAttempts = repeatable ? retryAttempts + 1 : 1;
         long startedAt = System.nanoTime();
         for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            if (Thread.currentThread().isInterrupted()) {
+                return ToolExecutionOutcome.failure("工具执行已中断", attempt - 1);
+            }
             log.info("工具开始 name={} user={} attempt={}/{}", name, memoryId, attempt, totalAttempts);
             try {
                 Object result = method.invoke(target, parameters);
@@ -94,6 +97,10 @@ public class ToolInvocationService {
                 }
             } catch (InvocationTargetException exception) {
                 lastFailure = exception.getCause() == null ? exception : exception.getCause();
+                if (lastFailure instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                    return ToolExecutionOutcome.unknown("工具执行已中断，结果未确认", attempt);
+                }
             } catch (Exception exception) {
                 lastFailure = exception;
             }
@@ -101,6 +108,9 @@ public class ToolInvocationService {
                 log.warn("工具执行失败，将自动重试 name={} user={} attempt={}/{} reason={}", name, memoryId,
                         attempt, totalAttempts, safeMessage(lastFailure));
                 waitBeforeRetry(attempt);
+                if (Thread.currentThread().isInterrupted()) {
+                    return ToolExecutionOutcome.failure("工具重试已中断", attempt);
+                }
             }
         }
         return ToolExecutionOutcome.failure(safeMessage(lastFailure), totalAttempts);

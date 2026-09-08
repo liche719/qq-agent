@@ -742,6 +742,7 @@ public class QqChannel implements WeChatChannel {
     }
 
     private void pruneEphemeralCaches(long now) {
+        pendingPages.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
         lastRecvAt.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
         lastMsgIds.keySet().removeIf(conversationId -> !lastRecvAt.containsKey(conversationId));
         receivedAtByMessage.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
@@ -1092,6 +1093,10 @@ public class QqChannel implements WeChatChannel {
         if (labeledPages.size() > 1) {
             long expiresAt = System.currentTimeMillis() + ephemeralCacheTtlMillis;
             pendingPages.put(userId, new PendingPages(List.copyOf(labeledPages.subList(1, labeledPages.size())), expiresAt));
+            pendingPages.entrySet().stream()
+                    .sorted(Comparator.comparingLong(entry -> entry.getValue().expiresAt()))
+                    .limit(Math.max(0, pendingPages.size() - maxConversationCacheEntries))
+                    .forEach(entry -> pendingPages.remove(entry.getKey(), entry.getValue()));
             log.info("[qq] long message paged user={} remainingPages={}", userId, labeledPages.size() - 1);
         }
         return true;

@@ -9,11 +9,28 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
+import java.util.List;
+import java.util.LinkedHashMap;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import java.util.stream.Collectors;
 
 /** Durable, user-scoped lifecycle state for asynchronous agent executions. */
 @Component
 public class AgentTaskStateStore {
+    static final DefaultRedisScript<List> CLAIM_RETRY = new DefaultRedisScript<>("""
+            local state = KEYS[1]
+            if redis.call('HGET', state, 'status') ~= 'UNKNOWN_RESULT'
+                or redis.call('HGET', state, 'replaySafe') ~= 'true'
+                or redis.call('HGET', state, 'recoverySchema') ~= '2' then
+                return {}
+            end
+            local content = redis.call('HGET', state, 'inputContent')
+            if not content or not string.find(content, '%S') then return {} end
+            if not redis.call('SET', KEYS[2], '1', 'NX', 'PX', ARGV[2]) then return {} end
+            redis.call('HSET', state, 'status', 'RETRY_REQUESTED', 'retryRequestedAt', ARGV[1], 'updatedAt', ARGV[1])
+            redis.call('PEXPIRE', state, ARGV[2])
+            return redis.call('HGETALL', state)
+            """, List.class);
     private final StringRedisTemplate redis;
     private final Duration ttl;
 
@@ -32,7 +49,8 @@ public class AgentTaskStateStore {
     public void captureInput(String taskId, InboundMessageBatch batch) {
         if (batch == null || taskId == null || taskId.isBlank()) return;
         String content = batch.historyContent();
-        if (content.length() > 8000) content = content.substring(0, 8000) + "…";
+        boolean truncated = content.length() > 8000;
+        if (truncated) content = content.substring(0, 8000) + "…";
         boolean hasQuote = !batch.quotedContent().isBlank() || !batch.quotedImages().isEmpty()
                 || !batch.quotedAttachments().isEmpty();
         save(taskId, Map.of(
@@ -40,7 +58,7 @@ public class AgentTaskStateStore {
                 "inputMessageIds", safe(String.join(",", batch.messageIds())),
                 "inputMediaCount", String.valueOf(batch.images().size() + batch.attachments().size()),
                 "inputQuotedMediaCount", String.valueOf(batch.quotedImages().size() + batch.quotedAttachments().size()),
-                "replaySafe", String.valueOf(batch.attachments().isEmpty() && batch.images().isEmpty() && !hasQuote),
+                "replaySafe", String.valueOf(!truncated && batch.attachments().isEmpty() && batch.images().isEmpty() && !hasQuote),
                 "recoverySchema", "2",
                 "channel", safe(batch.channel()), "botId", safe(batch.botId())
         ));
@@ -116,17 +134,22 @@ public class AgentTaskStateStore {
 
     /** Atomically claims a single manual retry and returns its immutable task envelope. */
     public Map<Object, Object> claimManualRetry(String taskId) {
+        if (taskId == null || taskId.isBlank()) return Map.of();
         Map<Object, Object> state = find(taskId);
         if (!"UNKNOWN_RESULT".equals(String.valueOf(state.get("status")))
                 || !"true".equals(String.valueOf(state.get("replaySafe")))
                 || !"2".equals(String.valueOf(state.get("recoverySchema")))
-                || String.valueOf(state.get("inputContent")).isBlank()) return Map.of();
+                || state.get("inputContent") == null || String.valueOf(state.get("inputContent")).isBlank()) return Map.of();
         try {
-            String claimKey = "agent:task:" + taskId + ":retry-claimed";
-            Boolean claimed = redis.opsForValue().setIfAbsent(claimKey, "1", ttl);
-            if (!Boolean.TRUE.equals(claimed)) return Map.of();
-            save(taskId, Map.of("status", "RETRY_REQUESTED", "retryRequestedAt", Instant.now().toString()));
-            return find(taskId);
+            String taskKey = "agent:task:" + taskId;
+            List<?> claimed = redis.execute(CLAIM_RETRY, List.of(taskKey, taskKey + ":retry-claimed"),
+                    Instant.now().toString(), String.valueOf(ttl.toMillis()));
+            if (claimed == null || claimed.isEmpty()) return Map.of();
+            Map<Object, Object> envelope = new LinkedHashMap<>();
+            for (int index = 0; index + 1 < claimed.size(); index += 2) {
+                envelope.put(claimed.get(index), claimed.get(index + 1));
+            }
+            return java.util.Collections.unmodifiableMap(envelope);
         } catch (RuntimeException ignored) {
             return Map.of();
         }

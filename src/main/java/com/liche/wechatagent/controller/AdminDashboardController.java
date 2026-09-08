@@ -26,7 +26,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedDeque;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -42,7 +41,7 @@ public class AdminDashboardController {
     private final ReminderTaskRepository reminders;
     private final OperationLogRepository logs;
     private final ObjectProvider<QqChannel> qq;
-    private final Deque<Map<String,Object>> history = new ConcurrentLinkedDeque<>();
+    private final DashboardMetricHistory history;
     private final JdbcTemplate jdbc;
     private final StringRedisTemplate redis;
     private final StoredMediaRepository media;
@@ -52,7 +51,8 @@ public class AdminDashboardController {
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
             UserWorkMemoryRepository work, ReminderTaskRepository reminders,
-            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media) {
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history) {
+        this.history = history;
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
         this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler; this.media=media;
     }
@@ -65,33 +65,51 @@ public class AdminDashboardController {
         jvm.put("heapUsed", rt.totalMemory()-rt.freeMemory()); jvm.put("heapMax", rt.maxMemory());
         jvm.put("processors", rt.availableProcessors());
         jvm.put("threads", ManagementFactory.getThreadMXBean().getThreadCount());
-        jvm.put("systemCpuLoad", ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage());
-        java.io.File root = java.io.File.listRoots()[0]; jvm.put("diskFree", root.getFreeSpace()); jvm.put("diskTotal", root.getTotalSpace());
-        out.put("jvm", jvm); out.put("users", users.count()); out.put("conversations", conversations.count());
-        out.put("episodes", episodes.count()); out.put("coreMemories", core.count()); out.put("workMemories", work.count());
-        out.put("reminders", reminders.count()); out.put("tasks", taskSummary());
-        out.put("dependencies", dependencyHealth());
+        var operatingSystem = ManagementFactory.getOperatingSystemMXBean();
+        jvm.put("systemCpuLoad", operatingSystem instanceof com.sun.management.OperatingSystemMXBean extended
+                ? extended.getCpuLoad() : -1);
+        java.io.File root = new java.io.File(".").getAbsoluteFile();
+        jvm.put("diskFree", root.getUsableSpace()); jvm.put("diskTotal", root.getTotalSpace());
+        out.put("jvm", jvm);
+        Map<String, String> moduleErrors = new LinkedHashMap<>();
+        collect(out, moduleErrors, "users", users::count);
+        collect(out, moduleErrors, "conversations", conversations::count);
+        collect(out, moduleErrors, "episodes", episodes::count);
+        collect(out, moduleErrors, "coreMemories", core::count);
+        collect(out, moduleErrors, "workMemories", work::count);
+        collect(out, moduleErrors, "reminders", reminders::count);
+        collect(out, moduleErrors, "tasks", this::taskSummary);
+        Map<String, String> dependencies = dependencyHealth();
+        out.put("dependencies", dependencies);
+        out.put("moduleErrors", moduleErrors);
         List<String> alerts = new ArrayList<>();
         if ("DOWN".equals(out.get("qq"))) alerts.add("QQ 网关已离线");
         if (!tasks.findByStatus("UNKNOWN_RESULT").isEmpty()) alerts.add("存在 UNKNOWN_RESULT 任务");
-        out.put("alerts", alerts); sample(out); return out;
+        dependencies.forEach((name, state) -> {
+            if (!"UP".equals(state)) alerts.add(name + " 状态异常：" + state);
+        });
+        if (!moduleErrors.isEmpty()) alerts.add("部分业务数据暂不可用");
+        out.put("status", alerts.isEmpty() ? "UP" : "DEGRADED");
+        out.put("alerts", alerts); return out;
     }
 
     @Scheduled(fixedDelayString="${management.dashboard.metrics-sample-ms:10000}")
-    public void scheduledSample() { overview(); }
+    public void scheduledSample() { history.record(overview()); }
 
-    @GetMapping("/metrics/history") public List<Map<String,Object>> history() { return List.copyOf(history); }
+    @GetMapping("/metrics/history") public List<Map<String,Object>> history() { return history.snapshot(); }
 
     @GetMapping("/tasks") public Map<String,Object> taskList(@RequestParam(defaultValue="") String status,
             @RequestParam(defaultValue="") String query,
             @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size) {
         List<Map<Object,Object>> all = tasks.findTaskIds().stream().map(id -> {
                     Map<Object,Object> state = new LinkedHashMap<>(tasks.find(id));
-                    state.put("taskId", id); return state;
+                    if (!state.isEmpty()) state.put("taskId", id); return state;
                 }).filter(m -> !m.isEmpty())
                 .filter(m -> status.isBlank() || status.equals(String.valueOf(m.get("status"))))
                 .filter(m -> query.isBlank() || m.toString().toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
-        int from=Math.min(Math.max(0,page)*Math.max(1,size),all.size()), to=Math.min(from+Math.max(1,size),all.size());
+        int boundedSize = Math.max(1, Math.min(100, size));
+        int from = (int) Math.min((long) Math.max(0, page) * boundedSize, all.size());
+        int to = (int) Math.min((long) from + boundedSize, all.size());
         return Map.of("total",all.size(),"items",all.subList(from,to));
     }
 
@@ -132,8 +150,35 @@ public class AdminDashboardController {
     }
 
     private Map<String,Object> taskSummary() { Map<String,Object> m=new LinkedHashMap<>(); for(String s:List.of("RUNNING","FAILED","UNKNOWN_RESULT","REPLY_SENT")) m.put(s,tasks.findByStatus(s).size()); return m; }
-    private Map<String,String> dependencyHealth() { Map<String,String> m=new LinkedHashMap<>(); try { jdbc.queryForObject("SELECT 1", Integer.class); m.put("mysql","UP"); } catch(Exception e){m.put("mysql","DOWN");} try { redis.getConnectionFactory().getConnection().ping(); m.put("redis","UP"); } catch(Exception e){m.put("redis","DOWN");} return m; }
-    private void sample(Map<String,Object> overview) { Map<String,Object> s=new LinkedHashMap<>(); s.put("at", Instant.now().toString()); s.put("qq",overview.get("qq")); s.put("users",overview.get("users")); s.put("tasks",overview.get("tasks")); s.put("jvm",overview.get("jvm")); history.addLast(s); while(history.size()>360) history.pollFirst(); }
+    private void collect(Map<String, Object> output, Map<String, String> errors,
+                         String name, java.util.function.Supplier<?> source) {
+        try {
+            output.put(name, source.get());
+        } catch (RuntimeException exception) {
+            output.put(name, null);
+            errors.put(name, "数据源暂不可用");
+        }
+    }
+    private Map<String,String> dependencyHealth() {
+        Map<String,String> result = new LinkedHashMap<>();
+        try {
+            jdbc.queryForObject("SELECT 1", Integer.class);
+            result.put("mysql", "UP");
+        } catch (Exception exception) {
+            result.put("mysql", "DOWN");
+        }
+        try (var connection = redis.getConnectionFactory().getConnection()) {
+            result.put("redis", "PONG".equalsIgnoreCase(connection.ping()) ? "UP" : "DOWN");
+        } catch (Exception exception) {
+            result.put("redis", "DOWN");
+        }
+        try {
+            result.put("quartz", scheduler.isShutdown() ? "DOWN" : scheduler.isInStandbyMode() ? "STANDBY" : scheduler.isStarted() ? "UP" : "DOWN");
+        } catch (Exception exception) {
+            result.put("quartz", "DOWN");
+        }
+        return result;
+    }
     private String mask(String value) { if(value==null||value.length()<5)return "***"; return value.substring(0,2)+"***"+value.substring(value.length()-2); }
     private void audit(HttpServletRequest request, String action, String detail) { try { logs.save(new OperationLog("admin", action, detail+" ip="+request.getRemoteAddr())); } catch (RuntimeException ignored) {} }
     private Map<String,Object> safeMedia(StoredMedia value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",value.getId()); m.put("fileName",value.getFileName()); m.put("contentType",value.getContentType()); m.put("sizeBytes",value.getSizeBytes()); m.put("summary",value.getSummary()); m.put("createdAt",value.getCreatedAt()); return m; }
