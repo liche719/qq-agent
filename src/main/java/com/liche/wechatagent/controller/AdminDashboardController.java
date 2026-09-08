@@ -122,14 +122,18 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/users/{userId}") public Map<String,Object> user(@PathVariable String userId) {
+        PageRequest detailPage = PageRequest.of(0, 50);
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("userId", userId); out.put("profile", users.findById(userId).orElse(null));
-        out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0,50)));
-        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId));
-        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId));
-        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId));
-        out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, PageRequest.of(0,50)).stream().map(this::safeMedia).toList());
-        out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId)); return out;
+        out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
+        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
+        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
+        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
+        out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, detailPage).stream().map(this::safeMedia).toList());
+        out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
+        out.put("pageSize", detailPage.getPageSize());
+        out.put("truncated", true);
+        return out;
     }
 
     @GetMapping("/logs") public List<OperationLog> logs(@RequestParam(defaultValue="") String level, @RequestParam(defaultValue="") String query) {

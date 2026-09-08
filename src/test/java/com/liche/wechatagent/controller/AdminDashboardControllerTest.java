@@ -81,4 +81,12 @@ class AdminDashboardControllerTest {
         assertTrue(((List<?>) result.get("items")).isEmpty());
         assertEquals(1, ((List<?>) controller().taskList("FAILED", "", -1, -1).get("items")).size());
     }
+
+    @Test
+    void userDetailUsesBoundedPages() {
+        when(users.findById("u")).thenReturn(java.util.Optional.empty());
+        Map<String, Object> result = controller().user("u");
+        assertEquals(50, result.get("pageSize"));
+        assertEquals(Boolean.TRUE, result.get("truncated"));
+    }
 }

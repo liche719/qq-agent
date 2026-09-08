@@ -10,6 +10,7 @@ public interface UserWorkMemoryRepository extends JpaRepository<UserWorkMemory, 
     List<UserWorkMemory> findByUserIdAndArchivedFalse(String userId);
 
     List<UserWorkMemory> findByUserIdOrderByUpdatedAtDesc(String userId);
+    List<UserWorkMemory> findByUserIdOrderByUpdatedAtDesc(String userId, Pageable pageable);
 
     long countByUserIdAndArchivedFalse(String userId);
 
