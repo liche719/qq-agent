@@ -3,6 +3,8 @@ let activeTab = 'overview';
 let refreshing = false;
 let timer;
 let lastSuccess = '';
+let selectedUserId = '';
+let selectedUserPage = 0;
 
 async function api(path, method = 'GET') {
     const response = await fetch('/api/admin' + path, {
@@ -54,11 +56,19 @@ function showError(error) {
 }
 
 async function detail(userId) {
+    selectedUserId = userId;
+    selectedUserPage = 0;
+    return loadDetailPage();
+}
+
+async function loadDetailPage() {
+    const userId = selectedUserId;
+    const page = selectedUserPage;
     element('userDetailTitle').textContent = '正在加载用户详情…';
     element('userDetailTitle').scrollIntoView({block: 'center'});
     try {
-        const data = await api('/users/' + encodeURIComponent(userId));
-        element('userDetailTitle').textContent = '用户详情 · ' + userId;
+        const data = await api('/users/' + encodeURIComponent(userId) + '?page=' + page + '&size=50');
+        element('userDetailTitle').textContent = '用户详情 · ' + userId + ' · 第 ' + (page + 1) + ' 页';
         const sections = [];
         for (const [key, value] of Object.entries(data)) {
             const section = document.createElement('details');
@@ -67,10 +77,32 @@ async function detail(userId) {
             sections.push(section);
         }
         element('userDetail').replaceChildren(...sections);
+        const pager = element('userDetailPager');
+        pager.replaceChildren();
+        if (page > 0) button(pager, '上一页', async () => { selectedUserPage--; await loadDetailPage(); });
+        if (['conversations', 'coreMemories', 'workMemories', 'episodicMemories', 'media', 'reminders'].some(key => Array.isArray(data[key]) && data[key].length === 50)) {
+            button(pager, '下一页', async () => { selectedUserPage++; await loadDetailPage(); });
+        }
     } catch (error) {
         element('userDetailTitle').textContent = '详情加载失败：' + error.message;
         throw error;
     }
+}
+
+function renderOverviewCards(overview) {
+    const jvm = overview.jvm || {};
+    const dependencies = overview.dependencies || {};
+    const heap = Number(jvm.heapUsed) && Number(jvm.heapMax) ? Math.round(Number(jvm.heapUsed) / Number(jvm.heapMax) * 100) + '%' : '—';
+    const cards = [
+        ['运行状态', overview.status || '—', overview.status === 'UP' ? 'ok' : 'warn'],
+        ['JVM 堆内存', heap, heap !== '—' && Number(heap.slice(0, -1)) > 85 ? 'bad' : 'ok'],
+        ['线程数', jvm.threads, ''],
+        ['MySQL / Redis / Quartz', ['mysql', 'redis', 'quartz'].map(key => key + ':' + (dependencies[key] || '—')).join('  '), Object.values(dependencies).every(value => value === 'UP') ? 'ok' : 'bad']
+    ];
+    element('overviewCards').replaceChildren(...cards.map(([label, value, cls]) => {
+        const card = document.createElement('div'); card.className = 'card';
+        card.append(textNode('div', label)); const content = textNode('div', value); content.className = 'value ' + cls; card.append(content); return card;
+    }));
 }
 
 async function loadActive() {
@@ -102,6 +134,7 @@ async function refresh() {
     refreshing = true;
     try {
         const overview = await api('/overview');
+        renderOverviewCards(overview);
         element('app').textContent = overview.status;
         element('qq').textContent = overview.qq;
         element('users').textContent = overview.users ?? '—';
