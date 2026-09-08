@@ -224,8 +224,8 @@ function loadBots(showError) {
     renderBots(list || []);
   }).catch(function (e) {
     if (showError) {
-      el('modeTip').textContent = '未检测到微信通道：请确认应用以微信模式启动（默认即是）';
-      el('modeTip').className = 'mode-tip error';
+      el('modeTip').textContent = '微信通道未启用；当前使用 QQ 通道时无需扫码登录，请前往大运维监控查看 QQ 状态';
+      el('modeTip').className = 'mode-tip';
     }
   });
 }
