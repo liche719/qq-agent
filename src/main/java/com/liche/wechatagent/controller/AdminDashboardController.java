@@ -22,6 +22,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.quartz.Scheduler;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
@@ -46,15 +49,26 @@ public class AdminDashboardController {
     private final StringRedisTemplate redis;
     private final StoredMediaRepository media;
     private final Scheduler scheduler;
+    private final Path logDirectory;
 
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
             UserWorkMemoryRepository work, ReminderTaskRepository reminders,
-            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history) {
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history,
+            @Value("${logging.file.path:logs}") String logDirectory) {
         this.history = history;
+        this.logDirectory = Path.of(logDirectory).toAbsolutePath().normalize();
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
         this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler; this.media=media;
+    }
+
+    public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
+            UserProfileRepository users, ConversationMemoryRepository conversations, EpisodicMemoryRepository episodes,
+            UserCoreMemoryRepository core, UserWorkMemoryRepository work, ReminderTaskRepository reminders,
+            OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis,
+            Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history) {
+        this(health, tasks, orchestrator, users, conversations, episodes, core, work, reminders, logs, qq, jdbc, redis, scheduler, media, history, "logs");
     }
 
     @GetMapping("/overview")
@@ -99,13 +113,16 @@ public class AdminDashboardController {
     @GetMapping("/metrics/history") public List<Map<String,Object>> history() { return history.snapshot(); }
 
     @GetMapping("/tasks") public Map<String,Object> taskList(@RequestParam(defaultValue="") String status,
-            @RequestParam(defaultValue="") String query,
+            @RequestParam(defaultValue="") String query, @RequestParam(defaultValue="") String taskType,
+            @RequestParam(defaultValue="") String failureReason,
             @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="20") int size) {
         List<Map<Object,Object>> all = tasks.findTaskIds().stream().map(id -> {
                     Map<Object,Object> state = new LinkedHashMap<>(tasks.find(id));
                     if (!state.isEmpty()) state.put("taskId", id); return state;
                 }).filter(m -> !m.isEmpty())
                 .filter(m -> status.isBlank() || status.equals(String.valueOf(m.get("status"))))
+                .filter(m -> taskType.isBlank() || taskType.equals(String.valueOf(m.get("taskType"))))
+                .filter(m -> failureReason.isBlank() || String.valueOf(m.get("failureReason")).toLowerCase(Locale.ROOT).contains(failureReason.toLowerCase(Locale.ROOT)))
                 .filter(m -> query.isBlank() || m.toString().toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
         int boundedSize = Math.max(1, Math.min(100, size));
         int from = (int) Math.min((long) Math.max(0, page) * boundedSize, all.size());
@@ -113,16 +130,26 @@ public class AdminDashboardController {
         return Map.of("total",all.size(),"items",all.subList(from,to));
     }
 
+    public Map<String,Object> taskList(String status, String query, int page, int size) {
+        return taskList(status, query, "", "", page, size);
+    }
+
     @GetMapping("/users") public List<Map<String,Object>> userList() {
         return users.findAll().stream().map(u -> {
             Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", u.getUserId());
             out.put("lastSeenAt", String.valueOf(u.getLastSeenAt())); out.put("channel", String.valueOf(u.getLastChannel()));
-            out.put("createdAt", String.valueOf(u.getCreatedAt())); return out;
+            out.put("createdAt", String.valueOf(u.getCreatedAt()));
+            out.put("messageCount", conversations.countByUserId(u.getUserId()));
+            out.put("taskCount", tasks.findTaskIds().stream().map(tasks::find).filter(state -> u.getUserId().equals(String.valueOf(state.get("userId")))).count());
+            out.put("memoryCount", core.countByUserId(u.getUserId()) + work.countByUserIdAndArchivedFalse(u.getUserId()) + episodes.countByUserId(u.getUserId()));
+            out.put("reminderCount", reminders.countByUserId(u.getUserId())); return out;
         }).toList();
     }
 
-    @GetMapping("/users/{userId}") public Map<String,Object> user(@PathVariable String userId) {
-        PageRequest detailPage = PageRequest.of(0, 50);
+    @GetMapping("/users/{userId}") public Map<String,Object> user(@PathVariable String userId,
+            @RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="50") int size) {
+        int boundedPage = Math.max(0, page), boundedSize = Math.max(1, Math.min(50, size));
+        PageRequest detailPage = PageRequest.of(boundedPage, boundedSize);
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("userId", userId); out.put("profile", users.findById(userId).orElse(null));
         out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
@@ -131,14 +158,28 @@ public class AdminDashboardController {
         out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
         out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, detailPage).stream().map(this::safeMedia).toList());
         out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
-        out.put("pageSize", detailPage.getPageSize());
-        out.put("truncated", true);
+        out.put("page", boundedPage); out.put("pageSize", detailPage.getPageSize());
+        out.put("truncated", boundedPage > 0 || boundedSize == 50);
         return out;
     }
 
-    @GetMapping("/logs") public List<OperationLog> logs(@RequestParam(defaultValue="") String level, @RequestParam(defaultValue="") String query) {
-        return logs.findTop100ByOrderByCreatedAtDesc().stream().filter(x -> level.isBlank() || x.getAction().toUpperCase(Locale.ROOT).contains(level.toUpperCase(Locale.ROOT)))
-                .filter(x -> query.isBlank() || (String.valueOf(x.getDetail())+x.getAction()).toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT))).toList();
+    @GetMapping("/logs") public List<Map<String,Object>> logs(@RequestParam(defaultValue="") String level, @RequestParam(defaultValue="") String query) {
+        String wantedLevel = level.toUpperCase(Locale.ROOT), wantedQuery = query.toLowerCase(Locale.ROOT);
+        List<Map<String,Object>> result = new ArrayList<>();
+        logs.findTop100ByOrderByCreatedAtDesc().forEach(entry -> {
+            Map<String,Object> item = new LinkedHashMap<>(); item.put("createdAt", entry.getCreatedAt()); item.put("userId", entry.getUserId()); item.put("action", entry.getAction()); item.put("detail", entry.getDetail()); item.put("source", "operation");
+            if ((wantedLevel.isBlank() || entry.getAction().toUpperCase(Locale.ROOT).contains(wantedLevel)) && (wantedQuery.isBlank() || item.toString().toLowerCase(Locale.ROOT).contains(wantedQuery))) result.add(item);
+        });
+        try {
+            Path file = logDirectory.resolve("spring.log").normalize();
+            if (file.startsWith(logDirectory) && Files.isRegularFile(file)) {
+                List<String> lines = Files.readAllLines(file); for (String line : lines.subList(Math.max(0, lines.size() - 200), lines.size())) {
+                    String detected = line.contains(" ERROR ") ? "ERROR" : line.contains(" WARN ") ? "WARN" : "INFO";
+                    if ((wantedLevel.isBlank() || wantedLevel.equals(detected)) && (wantedQuery.isBlank() || line.toLowerCase(Locale.ROOT).contains(wantedQuery))) result.add(Map.of("level", detected, "message", line, "source", "application"));
+                }
+            }
+        } catch (Exception ignored) { }
+        return result.stream().limit(300).toList();
     }
 
     @PostMapping("/actions/qq/reconnect") public Map<String,Object> reconnect(HttpServletRequest request) {

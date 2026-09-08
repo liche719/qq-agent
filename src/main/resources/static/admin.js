@@ -79,7 +79,7 @@ async function loadActive() {
         table('userTable', [['用户', 'userId'], ['最近活动', 'lastSeenAt'], ['通道', 'channel']], users,
             (cell, user) => button(cell, '查看记忆与详情', () => detail(user.userId)));
     } else if (activeTab === 'tasks') {
-        const data = await api('/tasks?status=' + encodeURIComponent(element('taskStatus').value));
+        const data = await api('/tasks?status=' + encodeURIComponent(element('taskStatus').value) + '&taskType=' + encodeURIComponent(element('taskType').value) + '&failureReason=' + encodeURIComponent(element('taskFailure').value));
         table('taskTable', [['任务', 'taskId'], ['状态', 'status'], ['用户', 'userId'], ['错误', 'failureReason']], data.items,
             (cell, task) => {
                 if (task.status === 'UNKNOWN_RESULT' && String(task.replaySafe) === 'true') {

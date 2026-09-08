@@ -21,6 +21,7 @@ public interface ConversationMemoryRepository extends JpaRepository<Conversation
                                                                                 LocalDateTime createdAt);
 
     boolean existsByUserIdAndEventKey(String userId, String eventKey);
+    long countByUserId(String userId);
 
     List<ConversationMemory> findByUserIdAndIdGreaterThanOrderByIdAsc(String userId, Long id, Pageable pageable);
 

@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import java.util.List;
 
 public interface EpisodicMemoryRepository extends JpaRepository<EpisodicMemory, Long> {
+    long countByUserId(String userId);
 
     List<EpisodicMemory> findByUserIdOrderByCreatedAtDesc(String userId);
     List<EpisodicMemory> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
