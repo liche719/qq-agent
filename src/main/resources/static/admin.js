@@ -7,11 +7,20 @@ let selectedUserId = '';
 let selectedUserPage = 0;
 
 async function api(path, method = 'GET') {
+    const key = element('key').value.trim();
+    if ([...key].some(character => character.codePointAt(0) > 255)) {
+        throw new Error('管理密钥只能使用 ASCII 字符');
+    }
+    const headers = key ? {'X-Agent-Admin-Key': key} : {};
     const response = await fetch('/api/admin' + path, {
-        method, headers: {'X-Agent-Admin-Key': element('key').value},
+        method, headers,
         cache: 'no-store', signal: AbortSignal.timeout(15000)
     });
-    if (!response.ok) throw new Error('请求失败 HTTP ' + response.status);
+    if (!response.ok) {
+        const error = new Error(response.status === 401 ? '管理密钥不正确' : response.status === 403 ? '当前来源不允许访问管理后台' : response.status === 429 ? '管理接口暂时封禁，请等待后再试' : '请求失败 HTTP ' + response.status);
+        error.status = response.status;
+        throw error;
+    }
     return response.json();
 }
 
@@ -51,6 +60,10 @@ function button(parent, label, handler) {
 }
 
 function showError(error) {
+    if ([401, 403, 429].includes(error.status)) {
+        clearInterval(timer);
+        element('interval').value = '0';
+    }
     element('status').textContent = '数据已过期：' + error.message + (lastSuccess ? ' · 最后成功：' + lastSuccess : '');
     element('status').className = 'stale';
 }
