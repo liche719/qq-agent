@@ -43,6 +43,10 @@ public class AdminAccessFilter extends OncePerRequestFilter {
             response.getWriter().write("{\"message\":\"来源 IP 不允许访问管理后台\"}");
             return;
         }
+        if (dashboard) {
+            filterChain.doFilter(request, response);
+            return;
+        }
         FailureWindow existing = failures.get(request.getRemoteAddr());
         if (existing != null && !existing.expired() && existing.count >= 5) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());

@@ -7,17 +7,12 @@ let selectedUserId = '';
 let selectedUserPage = 0;
 
 async function api(path, method = 'GET') {
-    const key = element('key').value.trim();
-    if ([...key].some(character => character.codePointAt(0) > 255)) {
-        throw new Error('管理密钥只能使用 ASCII 字符');
-    }
-    const headers = key ? {'X-Agent-Admin-Key': key} : {};
     const response = await fetch('/api/admin' + path, {
-        method, headers,
+        method,
         cache: 'no-store', signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) {
-        const error = new Error(response.status === 401 ? '管理密钥不正确' : response.status === 403 ? '当前来源不允许访问管理后台' : response.status === 429 ? '管理接口暂时封禁，请等待后再试' : '请求失败 HTTP ' + response.status);
+        const error = new Error(response.status === 403 ? '当前来源不允许访问管理后台' : '请求失败 HTTP ' + response.status);
         error.status = response.status;
         throw error;
     }
@@ -60,7 +55,7 @@ function button(parent, label, handler) {
 }
 
 function showError(error) {
-    if ([401, 403, 429].includes(error.status)) {
+    if (error.status === 403) {
         clearInterval(timer);
         element('interval').value = '0';
     }
@@ -143,7 +138,7 @@ async function loadActive() {
 }
 
 async function refresh() {
-    if (refreshing || !element('key').value) return;
+    if (refreshing) return;
     refreshing = true;
     try {
         const overview = await api('/overview');
@@ -183,7 +178,6 @@ document.querySelectorAll('.tab').forEach(tab => {
     };
 });
 element('refresh').onclick = refresh;
-element('key').onchange = refresh;
 for (const id of ['taskLoad', 'logLoad']) element(id).onclick = async () => {
     try { await loadActive(); } catch (error) { showError(error); }
 };
@@ -203,7 +197,5 @@ element('interval').onchange = () => {
     if (interval > 0) timer = setInterval(refresh, interval);
 };
 element('interval').onchange();
-element('key').setAttribute('autocomplete', 'off');
-element('key').setAttribute('aria-label', '管理密钥');
 element('status').setAttribute('role', 'status');
-element('status').textContent = '请输入管理密钥后刷新；密钥仅保留在当前页面内存中。';
+element('status').textContent = '等待首次刷新。';
