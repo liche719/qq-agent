@@ -23,6 +23,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.quartz.Scheduler;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.RandomAccessFile;
@@ -52,6 +53,7 @@ public class AdminDashboardController {
     private final Scheduler scheduler;
     private final Path logDirectory;
 
+    @Autowired
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
             EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
