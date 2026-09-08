@@ -163,6 +163,10 @@ public class AdminDashboardController {
         return out;
     }
 
+    public Map<String,Object> user(String userId) {
+        return user(userId, 0, 50);
+    }
+
     @GetMapping("/logs") public List<Map<String,Object>> logs(@RequestParam(defaultValue="") String level, @RequestParam(defaultValue="") String query) {
         String wantedLevel = level.toUpperCase(Locale.ROOT), wantedQuery = query.toLowerCase(Locale.ROOT);
         List<Map<String,Object>> result = new ArrayList<>();
