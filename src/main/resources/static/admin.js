@@ -76,7 +76,7 @@ async function detail(userId) {
 async function loadActive() {
     if (activeTab === 'usersTab') {
         const users = await api('/users');
-        table('userTable', [['用户', 'userId'], ['最近活动', 'lastSeenAt'], ['通道', 'channel']], users,
+        table('userTable', [['用户', 'displayUserId'], ['最近活动', 'lastSeenAt'], ['通道', 'channel']], users,
             (cell, user) => button(cell, '查看记忆与详情', () => detail(user.userId)));
     } else if (activeTab === 'tasks') {
         const data = await api('/tasks?status=' + encodeURIComponent(element('taskStatus').value) + '&taskType=' + encodeURIComponent(element('taskType').value) + '&failureReason=' + encodeURIComponent(element('taskFailure').value));

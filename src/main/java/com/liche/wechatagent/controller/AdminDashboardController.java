@@ -25,6 +25,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.RandomAccessFile;
 
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
@@ -136,7 +137,7 @@ public class AdminDashboardController {
 
     @GetMapping("/users") public List<Map<String,Object>> userList() {
         return users.findAll().stream().map(u -> {
-            Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", u.getUserId());
+            Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", u.getUserId()); out.put("displayUserId", mask(u.getUserId()));
             out.put("lastSeenAt", String.valueOf(u.getLastSeenAt())); out.put("channel", String.valueOf(u.getLastChannel()));
             out.put("createdAt", String.valueOf(u.getCreatedAt()));
             out.put("messageCount", conversations.countByUserId(u.getUserId()));
@@ -151,13 +152,13 @@ public class AdminDashboardController {
         int boundedPage = Math.max(0, page), boundedSize = Math.max(1, Math.min(50, size));
         PageRequest detailPage = PageRequest.of(boundedPage, boundedSize);
         Map<String,Object> out = new LinkedHashMap<>();
-        out.put("userId", userId); out.put("profile", users.findById(userId).orElse(null));
-        out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
-        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
-        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
-        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId, detailPage));
+        out.put("userId", mask(userId)); out.put("profile", users.findById(userId).map(this::safeUser).orElse(null));
+        out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, detailPage).stream().map(this::safeConversation).toList());
+        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeCore).toList());
+        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeWork).toList());
+        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId, detailPage).stream().map(this::safeEpisode).toList());
         out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, detailPage).stream().map(this::safeMedia).toList());
-        out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId, detailPage));
+        out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeReminder).toList());
         out.put("page", boundedPage); out.put("pageSize", detailPage.getPageSize());
         out.put("truncated", boundedPage > 0 || boundedSize == 50);
         return out;
@@ -177,7 +178,7 @@ public class AdminDashboardController {
         try {
             Path file = logDirectory.resolve("spring.log").normalize();
             if (file.startsWith(logDirectory) && Files.isRegularFile(file)) {
-                List<String> lines = Files.readAllLines(file); for (String line : lines.subList(Math.max(0, lines.size() - 200), lines.size())) {
+                for (String line : readTail(file, 200)) {
                     String detected = line.contains(" ERROR ") ? "ERROR" : line.contains(" WARN ") ? "WARN" : "INFO";
                     if ((wantedLevel.isBlank() || wantedLevel.equals(detected)) && (wantedQuery.isBlank() || line.toLowerCase(Locale.ROOT).contains(wantedQuery))) result.add(Map.of("level", detected, "message", line, "source", "application"));
                 }
@@ -231,4 +232,20 @@ public class AdminDashboardController {
     private String mask(String value) { if(value==null||value.length()<5)return "***"; return value.substring(0,2)+"***"+value.substring(value.length()-2); }
     private void audit(HttpServletRequest request, String action, String detail) { try { logs.save(new OperationLog("admin", action, detail+" ip="+request.getRemoteAddr())); } catch (RuntimeException ignored) {} }
     private Map<String,Object> safeMedia(StoredMedia value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",value.getId()); m.put("fileName",value.getFileName()); m.put("contentType",value.getContentType()); m.put("sizeBytes",value.getSizeBytes()); m.put("summary",value.getSummary()); m.put("createdAt",value.getCreatedAt()); return m; }
+    private Map<String,Object> safeUser(UserProfile value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("userId", mask(value.getUserId())); m.put("memoryEnabled", value.getMemoryEnabled()); m.put("lastChannel", value.getLastChannel()); m.put("lastSeenAt", value.getLastSeenAt()); m.put("createdAt", value.getCreatedAt()); m.put("updatedAt", value.getUpdatedAt()); m.put("persona", limit(value.getPersona(), 2000)); return m; }
+    private Map<String,Object> safeConversation(com.liche.wechatagent.memory.ConversationMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("role", value.getRole()); m.put("content", limit(value.getContent(), 4000)); m.put("createdAt", value.getCreatedAt()); m.put("expiresAt", value.getExpiresAt()); return m; }
+    private Map<String,Object> safeCore(com.liche.wechatagent.memory.UserCoreMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 4000)); m.put("status", value.getStatus()); m.put("importance", value.getImportance()); m.put("updatedAt", value.getUpdatedAt()); return m; }
+    private Map<String,Object> safeWork(com.liche.wechatagent.memory.UserWorkMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("status", value.getStatus()); m.put("priority", value.getPriority()); m.put("archived", value.getArchived()); m.put("updatedAt", value.getUpdatedAt()); return m; }
+    private Map<String,Object> safeEpisode(com.liche.wechatagent.memory.EpisodicMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("title", limit(value.getTitle(), 200)); m.put("summary", limit(value.getSummary(), 4000)); m.put("status", value.getStatus()); m.put("occurredAt", value.getOccurredAt()); return m; }
+    private Map<String,Object> safeReminder(com.liche.wechatagent.reminder.ReminderTask value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("triggerAt", value.getTriggerAt()); m.put("cron", value.getCron()); m.put("status", value.getStatus()); return m; }
+    private String limit(String value, int max) { if (value == null) return null; return value.length() <= max ? value : value.substring(0, max) + "…"; }
+    private List<String> readTail(Path file, int maxLines) throws java.io.IOException {
+        ArrayDeque<String> lines = new ArrayDeque<>();
+        try (RandomAccessFile input = new RandomAccessFile(file.toFile(), "r")) {
+            long position = input.length() - 1; StringBuilder line = new StringBuilder();
+            while (position >= 0 && lines.size() < maxLines) { input.seek(position--); int value = input.read(); if (value == '\n') { lines.addFirst(line.reverse().toString()); line.setLength(0); } else if (value != '\r') line.append((char) value); }
+            if (line.length() > 0 && lines.size() < maxLines) lines.addFirst(line.reverse().toString());
+        }
+        return List.copyOf(lines);
+    }
 }
