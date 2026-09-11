@@ -8,6 +8,7 @@ import StatCard from '../components/StatCard.vue'
 import StatusPill from '../components/StatusPill.vue'
 import OverviewPanel from '../panels/OverviewPanel.vue'
 import QqPanel from '../panels/QqPanel.vue'
+import LlmPanel from '../panels/LlmPanel.vue'
 import TasksPanel from '../panels/TasksPanel.vue'
 import UsersPanel from '../panels/UsersPanel.vue'
 import LogsPanel from '../panels/LogsPanel.vue'
@@ -15,6 +16,7 @@ import LogsPanel from '../panels/LogsPanel.vue'
 const TABS = [
   { key: 'overview', label: '总览' },
   { key: 'qq', label: 'QQ 通道' },
+  { key: 'llm', label: '模型与搜索' },
   { key: 'tasks', label: '任务' },
   { key: 'users', label: '用户与记忆' },
   { key: 'logs', label: '日志' }
@@ -202,6 +204,7 @@ onBeforeUnmount(() => {
 
     <OverviewPanel v-if="tab === 'overview'" :overview="overview" :history="history"></OverviewPanel>
     <QqPanel v-else-if="tab === 'qq'" :overview="overview" @refresh="refresh(true)"></QqPanel>
+    <LlmPanel v-else-if="tab === 'llm'" :tick="tick"></LlmPanel>
     <TasksPanel v-else-if="tab === 'tasks'" :tick="tick"></TasksPanel>
     <UsersPanel v-else-if="tab === 'users'" :tick="tick"></UsersPanel>
     <LogsPanel v-else :tick="tick"></LogsPanel>

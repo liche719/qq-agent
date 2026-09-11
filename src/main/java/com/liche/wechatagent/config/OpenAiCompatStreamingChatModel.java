@@ -2,6 +2,7 @@ package com.liche.wechatagent.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.metrics.RuntimeMetrics;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -34,18 +35,26 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private final String model;
     private final double temperature;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 指标采集，可为 null（单元测试直接构造时不需要） */
+    private final RuntimeMetrics metrics;
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
                                           double temperature, int timeoutSeconds) {
-        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS);
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS, null);
     }
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
                                           double temperature, int timeoutSeconds, int connectTimeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, connectTimeoutSeconds, null);
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model, double temperature,
+                                          int timeoutSeconds, int connectTimeoutSeconds, RuntimeMetrics metrics) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
         this.model = model;
         this.temperature = temperature;
+        this.metrics = metrics;
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(Math.max(1, Math.min(300, connectTimeoutSeconds)), TimeUnit.SECONDS)
                 .readTimeout(Math.max(1, Math.min(600, timeoutSeconds)), TimeUnit.SECONDS)
@@ -54,6 +63,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
 
     @Override
     public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
+        long started = System.nanoTime();
         try {
             Request req = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
@@ -65,6 +75,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .build();
             try (Response response = client.newCall(req).execute()) {
                 if (!response.isSuccessful() || response.body() == null) {
+                    record(false, started, "HTTP " + response.code());
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
                     return;
                 }
@@ -138,9 +149,17 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                         ? AiMessage.from(fullText)
                         : (fullText.isEmpty() ? AiMessage.from(toolRequests) : AiMessage.from(fullText, toolRequests));
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage).build());
+                record(true, started, null);
             }
         } catch (Exception e) {
+            record(false, started, e.getMessage());
             handler.onError(e);
+        }
+    }
+
+    private void record(boolean ok, long startedNanos, String error) {
+        if (metrics != null) {
+            metrics.recordLlm(true, ok, Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L), error);
         }
     }
 }

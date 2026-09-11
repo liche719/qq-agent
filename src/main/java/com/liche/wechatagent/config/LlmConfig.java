@@ -1,5 +1,6 @@
 package com.liche.wechatagent.config;
 
+import com.liche.wechatagent.metrics.RuntimeMetrics;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,9 +17,10 @@ public class LlmConfig {
                                @Value("${llm.model}") String model,
                                @Value("${llm.temperature:0.7}") double temperature,
                                @Value("${llm.timeout-seconds:60}") int timeoutSeconds,
-                               @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds) {
+                               @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds,
+                               RuntimeMetrics metrics) {
         return new OpenAiCompatChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds,
-                connectTimeoutSeconds);
+                connectTimeoutSeconds, metrics);
     }
 
     /** 流式模型：对话回复（打字机效果） */
@@ -28,8 +30,9 @@ public class LlmConfig {
                                                  @Value("${llm.model}") String model,
                                                  @Value("${llm.temperature:0.7}") double temperature,
                                                  @Value("${llm.timeout-seconds:60}") int timeoutSeconds,
-                                                 @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds) {
+                                                 @Value("${llm.connect-timeout-seconds:5}") int connectTimeoutSeconds,
+                                                 RuntimeMetrics metrics) {
         return new OpenAiCompatStreamingChatModel(baseUrl, apiKey, model, temperature, timeoutSeconds,
-                connectTimeoutSeconds);
+                connectTimeoutSeconds, metrics);
     }
 }

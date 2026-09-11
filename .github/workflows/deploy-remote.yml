@@ -61,3 +61,36 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "set -eu; mkdir -p /opt/wechat-agent-infra/docker/searxng; docker load < /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; cd /opt/wechat-agent-infra; AGENT_IMAGE=wechat-agent:${GITHUB_SHA} docker compose -f docker-compose.remote.yml up -d --no-build agent; docker image prune -f; docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' | sort -r | tail -n +3 | cut -d'|' -f2 | xargs -r docker rmi -f 2>/dev/null || true; rm -f /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; docker compose -f docker-compose.remote.yml ps agent; docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'"
+
+      # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
+      - name: Smoke check deployed panel
+        run: |
+          BASE="https://${{ secrets.DEPLOY_HOST }}:8443"
+          KEY="${{ secrets.ADMIN_API_KEY }}"
+          code() { curl -sk -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
+          problems=""
+          check() { if [ "$2" != "$3" ]; then problems="$problems $1(期望$2得到$3)"; fi; }
+
+          for i in $(seq 1 24); do
+            [ "$(code "$BASE/index.html")" = "200" ] && break
+            echo "等待应用就绪 ($i)…"
+            sleep 5
+          done
+
+          asset=$(curl -sk --max-time 25 "$BASE/index.html" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
+          check "首页" 200 "$(code "$BASE/")"
+          check "前端资源${asset:-（缺失）}" 200 "$(code "$BASE${asset}")"
+          check "无口令应被拒" 401 "$(code "$BASE/api/admin/overview")"
+          check "带口令接口" 200 "$(code -H "X-Agent-Admin-Key: $KEY" "$BASE/api/admin/overview")"
+          check "账号密码登录" 200 "$(code -X POST -H 'Content-Type: application/json' \
+            -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' "$BASE/api/admin/session")"
+
+          if [ -n "$problems" ]; then
+            echo "❌ 部署后自检失败:$problems"
+            curl -sk -o /dev/null --max-time 20 -X POST -H "X-Agent-Admin-Key: $KEY" \
+              -H 'Content-Type: application/json' \
+              -d "{\"message\":\"部署后自检失败：$problems\"}" \
+              "$BASE/api/admin/actions/alerts/notify" || true
+            exit 1
+          fi
+          echo "✅ 部署后自检通过：页面可访问、鉴权生效、登录与面板接口正常"

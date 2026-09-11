@@ -111,6 +111,21 @@ public class AlertNotifier {
         return deliver("【运维告警】测试消息：收到这条说明告警推送已生效。\n时间：" + now());
     }
 
+    /** 供外部（例如 CI 部署后自检）推送一条自定义告警，只发给配置里的那个人 */
+    public boolean sendMessage(String message) {
+        if (!usable()) {
+            return false;
+        }
+        String text = message == null ? "" : message.replace('\r', ' ').trim();
+        if (text.isEmpty()) {
+            return false;
+        }
+        if (text.length() > 300) {
+            text = text.substring(0, 300) + "…";
+        }
+        return deliver("【运维告警】" + text + "\n时间：" + now());
+    }
+
     public boolean ready() {
         return usable();
     }

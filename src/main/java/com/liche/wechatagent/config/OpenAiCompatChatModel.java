@@ -2,6 +2,7 @@ package com.liche.wechatagent.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.metrics.RuntimeMetrics;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -25,15 +26,23 @@ public class OpenAiCompatChatModel implements ChatModel {
     private final String model;
     private final double temperature;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 指标采集，可为 null（单元测试直接构造时不需要） */
+    private final RuntimeMetrics metrics;
 
     public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature, int timeoutSeconds) {
-        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS);
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS, null);
     }
 
     public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature,
                                  int timeoutSeconds, int connectTimeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, connectTimeoutSeconds, null);
+    }
+
+    public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature,
+                                 int timeoutSeconds, int connectTimeoutSeconds, RuntimeMetrics metrics) {
         this.model = model;
         this.temperature = temperature;
+        this.metrics = metrics;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(Math.max(1, Math.min(300, connectTimeoutSeconds))));
         factory.setReadTimeout(Duration.ofSeconds(Math.max(1, Math.min(600, timeoutSeconds))));
@@ -46,6 +55,7 @@ public class OpenAiCompatChatModel implements ChatModel {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
+        long started = System.nanoTime();
         try {
             String resp = restClient.post()
                     .uri("/chat/completions")
@@ -53,9 +63,18 @@ public class OpenAiCompatChatModel implements ChatModel {
                     .body(OpenAiRequestFactory.buildPayload(model, temperature, request, false).toString())
                     .retrieve()
                     .body(String.class);
-            return parseResponse(objectMapper.readTree(resp));
+            ChatResponse response = parseResponse(objectMapper.readTree(resp));
+            record(true, started, null);
+            return response;
         } catch (Exception e) {
+            record(false, started, e.getMessage());
             throw new RuntimeException("调用 LLM 接口失败: " + e.getMessage(), e);
+        }
+    }
+
+    private void record(boolean ok, long startedNanos, String error) {
+        if (metrics != null) {
+            metrics.recordLlm(false, ok, Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L), error);
         }
     }
 

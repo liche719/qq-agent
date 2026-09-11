@@ -6,6 +6,12 @@ services:
     # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机。
     # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外只监听 8443。
     network_mode: host
+    # 日志上限：json-file 默认不轮转，容器 stdout 会无限增长（应用日志同时写控制台）
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       SERVER_ADDRESS: ${SERVER_ADDRESS:-0.0.0.0}
       SERVER_PORT: ${SERVER_PORT:-8443}
@@ -51,6 +57,11 @@ services:
     image: mysql:8.0.46
     container_name: wechat-agent-mysql
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-root}
       MYSQL_DATABASE: ${MYSQL_DB:-wechat_agent}
@@ -68,6 +79,11 @@ services:
     image: redis:7-alpine
     container_name: wechat-agent-redis
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports: ["127.0.0.1:6379:6379"]
     volumes: ["redis-data:/data"]
     command: redis-server --appendonly yes
@@ -76,6 +92,11 @@ services:
     image: searxng/searxng:latest
     container_name: wechat-agent-searxng
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       SEARXNG_BASE_URL: http://localhost:8888
       TZ: Asia/Shanghai
