@@ -43,10 +43,6 @@ public class AdminAccessFilter extends OncePerRequestFilter {
             response.getWriter().write("{\"message\":\"来源 IP 不允许访问管理后台\"}");
             return;
         }
-        if (dashboard) {
-            filterChain.doFilter(request, response);
-            return;
-        }
         String client = clientKey(request);
         FailureWindow existing = failures.get(client);
         if (existing != null && !existing.expired() && existing.count >= 5) {
@@ -54,7 +50,9 @@ public class AdminAccessFilter extends OncePerRequestFilter {
             response.getWriter().write("{\"message\":\"管理接口暂时封禁，请稍后再试\"}");
             return;
         }
-        if (hasValidKey(request) || (!dashboard && canUseLoopbackWithoutKey(request))) {
+        // 带正确密钥，或本机模式下回环地址免密钥（require-key=true 时回环不再免密钥，
+        // 面板改由登录页拿到的口令通过 X-Agent-Admin-Key 头校验）。
+        if (hasValidKey(request) || canUseLoopbackWithoutKey(request)) {
             failures.remove(client);
             filterChain.doFilter(request, response);
             return;
