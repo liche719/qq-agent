@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { login } from '../api'
 import { auth, lastUsername, saveAuth } from '../auth'
+import { theme, themeLabel, toggleTheme } from '../theme'
 
 const DEFAULT_USERNAME = 'rootlcw'
 
@@ -47,6 +48,11 @@ async function submit() {
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"></div>
         <h1>运维监控</h1>
+        <button class="btn btn-sm theme-toggle" type="button"
+                :title="theme.mode === 'dark' ? '切回白色主题' : '切换到黑色主题'"
+                @click="toggleTheme">
+          {{ themeLabel() }}主题
+        </button>
       </div>
       <p class="lead">登录后可查看 QQ 陪伴机器人的运行状态、任务与用户记忆。</p>
 

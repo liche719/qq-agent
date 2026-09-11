@@ -3,10 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f9fd">
   <meta name="robots" content="noindex,nofollow">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%234d6bfe'/%3E%3Cpath d='M9 20.5V11.5h3.4l3.6 5.2 3.6-5.2H23v9h-2.6v-5l-3 4.3h-1.6l-3-4.3v5z' fill='%23fff'/%3E%3C/svg%3E">
   <title>运维监控 · QQ 陪伴机器人</title>
+  <script>
+    // 首屏前定主题，避免深色下先闪一下白
+    (function () {
+      try {
+        var saved = localStorage.getItem('admin.theme')
+        var mode = saved === 'dark' || saved === 'light' ? saved
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        document.documentElement.dataset.theme = mode
+      } catch (e) {
+        document.documentElement.dataset.theme = 'light'
+      }
+    })()
+  </script>
 </head>
 <body>
   <div id="app"></div>

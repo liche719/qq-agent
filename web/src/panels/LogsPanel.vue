@@ -53,7 +53,7 @@ onMounted(() => load())
       <button class="btn" :disabled="busy" @click="load">筛选</button>
     </div>
 
-    <p v-if="error" class="hint" style="color: #ffb0bc">{{ error }}</p>
+    <p v-if="error" class="hint" style="color: var(--bad-ink)">{{ error }}</p>
     <DataTable :columns="columns" :rows="entries"></DataTable>
   </section>
 </template>

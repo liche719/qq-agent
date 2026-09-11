@@ -89,7 +89,7 @@ onMounted(() => load())
 
     <section class="glass panel">
       <div class="panel-head"><h2>原始指标</h2><span class="hint">进程内累计，重启后归零</span></div>
-      <p v-if="error" class="hint" style="color: #a8382e">{{ error }}</p>
+      <p v-if="error" class="hint" style="color: var(--bad-ink)">{{ error }}</p>
       <JsonBlock title="展开运行期指标" :data="data"></JsonBlock>
     </section>
   </div>

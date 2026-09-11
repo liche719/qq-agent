@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { api } from '../api'
 import { clearAuth } from '../auth'
 import { fmtNum, toneOf, zh } from '../labels'
+import { theme, themeLabel, toggleTheme } from '../theme'
 import StatCard from '../components/StatCard.vue'
 import StatusPill from '../components/StatusPill.vue'
 import OverviewPanel from '../panels/OverviewPanel.vue'
@@ -172,6 +173,10 @@ onBeforeUnmount(() => {
           </select>
           <button class="btn btn-primary" :disabled="busy" @click="refresh(true)">
             {{ busy ? '刷新中…' : '立即刷新' }}
+          </button>
+          <button class="btn theme-toggle" :title="theme.mode === 'dark' ? '切回白色主题' : '切换到黑色主题'"
+                  @click="toggleTheme">
+            {{ themeLabel() }}主题
           </button>
           <button class="btn" @click="logout">退出登录</button>
         </div>

@@ -136,7 +136,7 @@ onMounted(() => loadUsers())
         <h2>用户</h2>
         <span class="hint">共 {{ users.length }} 个用户，每个用户一个入口；点开可查看全部聊天记录</span>
       </div>
-      <p v-if="error" class="hint" style="color: #a8382e">{{ error }}</p>
+      <p v-if="error" class="hint" style="color: var(--bad-ink)">{{ error }}</p>
       <DataTable :columns="columns" :rows="sortedUsers">
         <template #actions="{ row }">
           <button class="btn-link" @click="openUser(row)">查看记录</button>
