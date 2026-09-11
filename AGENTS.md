@@ -94,6 +94,16 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   3. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s，实测连续 40 次请求后出现 429），防公网爆破。
   4. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
 
+### 运维面板界面（2026-09-11 重做，commit `59a7831`）
+
+- 仍然是**两个静态文件**：`static/admin.html`（结构 + 内联 CSS，17 KB）与 `static/admin.js`（原生 JS，22 KB）。**没有任何框架与构建步骤**，`mvn package` 直接打进 jar。
+- **必须保持"只有这两个文件"**：网关只放行 `/admin.html`、`/admin.js`、`/api/admin/*`，所以**不能引入外部 CDN、字体、图标库或额外 CSS/JS 文件**（新界面已完全自包含，可用 `Select-String -Pattern 'https?://'` 自查）。
+- 界面结构：顶栏（应用/QQ 状态药丸 + 刷新间隔 + 立即刷新 + 进度条）、4 张概览卡、5 个标签页（总览 / QQ 通道 / 任务 / 用户与记忆 / 日志）、底部状态行；标签页与刷新间隔记在 `localStorage`。
+- 手机适配（关键改动）：`≤720px` 时概览卡 2 列、表格**转卡片列表**（每格用 `data-label` 显示列名、`thead` 隐藏）、按钮 32px 触控高度、无横向滚动；`≤900px` 时总览两栏变单栏。
+- 交互细节：401 会**停止自动刷新**并提示重新登录（避免被限流）、429 提示被限流、任务/用户详情支持翻页、JSON 用 `<details>` 折叠。
+- 安全约定：所有来自接口的文本一律用 `textContent`/`createElement` 渲染，**不许用 innerHTML**（日志、用户记忆都是用户数据）。
+- 验证方式（本次用过，可复用）：`node --check admin.js` 校语法；本地用 Python 起一个把 `/api/admin/*` 反代到网关的静态服务器，再用 Playwright（Chromium 已装）对**公网真实地址**做布局与交互断言（横向溢出、网格列数、表格卡片化、控制台报错）。脚本留在 `C:\Users\33721\Desktop\wechat-agent\.ui-test\`。
+
 ## 4. CI/CD
 
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
@@ -119,17 +129,22 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 - `apply_patch` 的 `.bat` 包装器会丢换行，多行补丁不可靠：可改为用 `[IO.File]::WriteAllText` + `String.Replace` 直接改写，或直接调用 `codex.exe --codex-run-as-apply-patch $patch`（路径见 `Get-Command apply_patch` 指向的 .bat）。
 - 写文件统一用 LF 换行，避免 git 警告与补丁解析失败。
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
+- **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里装了 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）。后果与绕法：
+  - `schannel` 后端在本 harness 里会报 `SEC_E_NO_CREDENTIALS (0x8009030e)`（curl.exe 与 git 都一样）；`OpenSSL` 后端又不认 SteamTools 根证书（`unable to get local issuer certificate`）。
+  - 已在**仓库本地**（`.git/config`，未入库、未改全局）设置：`http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（该文件由 Windows 证书库导出，150 张根证书）。删掉它会再次无法 push。
+  - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
+- **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-11 19:45）
+## 7. 当前状态（2026-09-11 20:40）
 
-- 远程 `wechat-agent-java` 运行中，镜像 `wechat-agent:0b7a25f…`；本次所有操作**从未重启过 agent**；`/api/admin/overview` 返回 200、QQ 通道 `UP`。
+- 远程 `wechat-agent-java` 运行中，镜像 **`wechat-agent:59a7831…`**（已含"删扫码页 + 网关 + 新界面"三次提交）；`/api/admin/overview` 返回 200、`status=UP`、QQ 通道 `UP`。
 - 远程数据完好：`user_profile` 21 条、`reminder_task` 23 条、`QRTZ_TRIGGERS` 2 条。
-- 面板两条访问通道都已就绪（都不改 agent，agent 仍只绑 `127.0.0.1`）：
-  - **公网网关（用户当前选择）**：`wechat-agent-gateway`（nginx，8443/TLS，Basic Auth 用户 `admin`）；服务器侧已验证 401/200/404/429、`overview` 正常。**只差阿里云安全组放行 TCP 8443**，放行后即可用 `https://120.25.170.92:8443/admin.html` 访问。
-  - **WireGuard（备用）**：`wechat-agent-wireguard` + `wechat-agent-admin-forward` 运行中，客户端 `phone(10.8.0.2)`、`pc(10.8.0.3)` 已创建；需放行 UDP 51820 才可用（用户当时下载不了客户端 App，故搁置）。
-- 本机侧实测公网暴露面：**8080 / 51821 / 8443 均关闭，仅 22 开着**（8443 等安全组放行）。
-- 本地代码改动（**未 commit、未 push、未部署**）：删除 `static/index.html` 与 `static/js/qrcode.min.js`（`/api/clawbot/*` 接口保留）、404 文案改中性、`docker-compose.remote.yml` 新增 wireguard/admin-forward/gateway 三个服务、新增 `docker/gateway/nginx.conf`。
-- 用户表示运维监控界面不满意、**后续会重做**（`admin.html`/`admin.js` 保持原样没动）；重做时建议一并加登录页（现在用的是浏览器原生 Basic Auth 弹窗）。
+- 面板两条访问通道都在跑，agent 始终只绑 `127.0.0.1`：
+  - **公网网关（当前主用，已可用）**：`wechat-agent-gateway`（nginx，8443/TLS，Basic Auth 用户 `admin`）；公网实测 401/200/404、桌面与手机端 Playwright 断言全通过。地址 `https://120.25.170.92:8443/admin.html`。
+  - **WireGuard（备用，未启用）**：`wechat-agent-wireguard` + `wechat-agent-admin-forward` 运行中，客户端 `phone(10.8.0.2)`、`pc(10.8.0.3)` 已建好；需在安全组放行 UDP 51820 才可用（用户当时下载不了客户端 App，故搁置）。
+- 公网暴露面：**22（SSH）、8443（面板，需密码）**；8080 / 51821 / 51820 均未开。
+- 本地仓库已与 `origin/main` 同步，工作区干净；三次部署 commit：`c9d48d6`（删扫码页 + 网关/VPN 服务）、`59a7831`（重做界面），CI 均成功。
+- 遗留可选项：把自签证书换成受信任证书（**需要域名**，8443 不需要备案）；界面重做后可再加正式登录页（现在用浏览器原生 Basic Auth 弹窗）；`/api/clawbot/*` 保留但已无页面入口。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
