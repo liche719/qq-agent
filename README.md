@@ -59,6 +59,30 @@
 
 6. **生产升级数据库**：本机 `local` profile 会自动补齐记忆表结构；如果使用 `production` profile，请先备份数据库并执行 `deploy/mysql/V2__create_episodic_memory.sql`，再部署新 JAR。
 
+## 远程部署（GitHub Actions）
+
+推送 `main` 会自动触发 `.github/workflows/deploy-remote.yml`：在 GitHub runner 上构建 Java 镜像，
+通过 SSH 传到远程服务器 `/opt/wechat-agent-infra`，加载镜像并只重启 `agent` 容器；
+MySQL / Redis / SearXNG 三个容器及其数据卷不会被删除或重建。
+
+首次需要在仓库 Settings → Secrets and variables → Actions 配置三个 Secret：
+
+| Secret | 值 |
+|---|---|
+| `DEPLOY_HOST` | 服务器地址 |
+| `DEPLOY_USER` | SSH 用户（需能执行 docker，通常为 root） |
+| `DEPLOY_SSH_KEY` | 专用部署私钥全文（对应公钥写入服务器 `~/.ssh/authorized_keys`） |
+
+服务器侧只需一次性准备 `/opt/wechat-agent-infra/.env`（权限 600，不入库），提供 `LLM_API_KEY`、
+`QQ_APP_ID`、`QQ_CLIENT_SECRET` 等凭据；`docker-compose.remote.yml` 会读取它注入容器。
+
+`agent` 容器使用 host 网络，只监听服务器本机 `127.0.0.1:8080`。在本机建立隧道后访问管理后台：
+
+```bash
+ssh -L 8080:127.0.0.1:8080 <DEPLOY_USER>@<DEPLOY_HOST>
+# 然后浏览器打开 http://127.0.0.1:8080/admin.html
+```
+
 ## 功能对照
 
 | 需求 | 实现 |

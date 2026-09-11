@@ -3,17 +3,21 @@ services:
     image: ${AGENT_IMAGE:-wechat-agent:latest}
     container_name: wechat-agent-java
     restart: unless-stopped
+    # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机，
+    # 服务只监听本机回环地址，管理后台的来源 IP 校验也能按本机放行。
+    network_mode: host
     environment:
+      SERVER_ADDRESS: ${SERVER_ADDRESS:-127.0.0.1}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
-      MYSQL_HOST: mysql
+      MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
       MYSQL_DB: ${MYSQL_DB:-wechat_agent}
       MYSQL_USER: ${MYSQL_USER:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root}
-      REDIS_HOST: redis
+      REDIS_HOST: 127.0.0.1
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      SEARXNG_BASE_URL: http://searxng:8080
+      SEARXNG_BASE_URL: http://127.0.0.1:8888
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -22,8 +26,6 @@ services:
       QQ_CLIENT_SECRET: ${QQ_CLIENT_SECRET:-}
       ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
       ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:-true}
-    ports:
-      - "${AGENT_BIND_ADDRESS:-127.0.0.1}:8080:8080"
     depends_on:
       mysql:
         condition: service_healthy
