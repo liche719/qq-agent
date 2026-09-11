@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class ManagementAccessProperties {
 
     private String adminApiKey = "";
+    private String adminUsername = "admin";
     private boolean requireKey;
     private boolean allowLoopbackWithoutKey = true;
     private String allowedIps = "127.0.0.1,::1";
@@ -16,6 +17,14 @@ public class ManagementAccessProperties {
 
     public void setAdminApiKey(String adminApiKey) {
         this.adminApiKey = adminApiKey == null ? "" : adminApiKey.trim();
+    }
+
+    public String getAdminUsername() {
+        return adminUsername;
+    }
+
+    public void setAdminUsername(String adminUsername) {
+        this.adminUsername = adminUsername == null || adminUsername.isBlank() ? "admin" : adminUsername.trim();
     }
 
     public boolean isRequireKey() {

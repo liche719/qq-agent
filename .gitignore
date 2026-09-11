@@ -23,3 +23,9 @@ application-local.yml
 /tmp/
 /docker/searxng/
 /docs/
+
+# 前端工程（Vue 3 + Vite）
+/web/node_modules/
+/web/dist/
+# 前端构建产物：由 `cd web && npm run build`（或 Dockerfile 的 node 阶段）生成，不入库
+/src/main/resources/static/
