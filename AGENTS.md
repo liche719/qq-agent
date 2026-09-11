@@ -83,7 +83,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 - **文案**：界面不出现英文状态词，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。`labels.js` 是唯一的状态词典，新增状态值改那里。
 - **登录**：账号默认 `rootlcw` + 密码 → `POST /api/admin/session`；勾「记住账号密码」时凭据写 `localStorage`（不勾只写 `sessionStorage`，关标签页即退出），退出登录会清凭据但保留账号名。路由守卫拦截 `/#/dashboard`，接口 401 自动清登录态并回登录页。
 - **用户与记忆页**：用户列表按最近活动倒序（**每个用户一条**，空时间的排最后），点「查看记录」进入聊天式视图——用户/机器人左右气泡、可上下滚动、`加载更早的消息` 分页往前翻、可选显示工具调用（`system` 消息）；同一页内还可用分段控件切到「长期记忆」「提醒任务」。
-- **告警**：QQ 通道页有「发送测试告警」按钮，调 `POST /api/admin/actions/alerts/test`。
+- **告警**：QQ 通道页有「发送测试告警」按钮，调 `POST /api/admin/actions/alerts/test`；另有 `POST /api/admin/actions/alerts/notify`（body `{"message":"…"}`）供 CI 等自动化推送自定义告警，同样只发给配置里的那一个人。
+- **模型与搜索**（2026-09-12 新增页签）：展示 LLM 一次性调用（记忆提取/提醒解析）、对话流式调用、SearX-NG 搜索的**次数/失败/成功率/平均耗时/最近错误**，数据来自 `GET /api/admin/metrics/runtime`，由 `metrics` 包里的 `RuntimeMetrics` 在 `OpenAiCompatChatModel`、`OpenAiCompatStreamingChatModel`、`SearxngClient` 三处打点累计（进程内计数，重启归零）。出问题时先看这个页签，能立刻区分"模型慢/模型报错/搜索挂了"。
 - **手机适配**：`≤720px` 概览卡 2 列、表格**转卡片列表**（靠每格 `data-label` 显示列名、`thead` 隐藏）、工具栏换行、无横向滚动。
 - **安全约定**：接口文本一律用 Vue 插值（自动转义），**不要用 `v-html`**（日志、用户记忆都是用户数据）。
 - **验证方式**（可复用）：`tools\ui-verify\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/聊天视图/手机端与视觉断言（详细跑法见该目录 README）：
@@ -107,7 +108,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
 - 构建步骤用 `docker/build-push-action@v6` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（实测纯后端改动约 192 秒、含前端全量约 240 秒）。
 - 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f`。MySQL/Redis/SearXNG 及其卷不受影响。
-- 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥文件已删除，需要轮换时重新生成并更新 Secret）。
+- 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥文件已删除，需要轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）。
+- **部署后自检**（2026-09-12 新增）：部署完等应用就绪，然后检查「首页 200 / 前端 JS 资源 200 / 无口令 401 / 带口令 200 / 账号密码登录 200」；任一项不符即调用告警接口推一条 QQ 消息并把流水线置红。也就是说**改坏了会被系统自己发现并通知你**，不用等你打开面板才发现。
+- **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
 - 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
 
 ## 5. 已知坑与约定（都踩过）
@@ -131,6 +134,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 17. **服务器旧镜像会累积**（2026-09-12 已根治）：Docker 镜像不可变，CI 每次部署 load 一个新 tag 的镜像，旧的**不会自动消失**；原来的 `docker image prune -f` 只删悬空镜像（无 tag 的中间层），带 tag 的 `wechat-agent:<sha>` 永远不算悬空，于是攒了 11 个 × 431MB。现在部署步骤里加了一句「按创建时间只保留最新两个 tag」，`workflow_dispatch` 手动跑同样生效。回滚方式：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
 18. **数据卷 ≠ 备份**：`wechat-agent-infra_mysql-data` 和数据库在同一台机器、同一块云盘上（`/var/lib/docker/volumes/`）。卷只能扛「容器重装」，扛不住误删（例如我们删 17 个微信用户那种操作）、扛不住误迁移、也扛不住机器/云盘故障。`mysqldump` 出来的 dump 才是备份，**不要因为「有卷」就删掉备份**；更强的做法是定期导出后加密传到异地。
 19. 服务器上的旧 `.env.bak-*` 会带着历史口令，只留最近 2 个即可。
+20. **容器 json-file 日志默认不轮转**：docker 的 json-file 驱动如果没有 `max-size`，容器 stdout 会无限增长（Spring Boot 的 root appender 同时挂控制台，所以每条日志都会落一份）。4 个服务已统一配 `logging.options: {max-size: 10m, max-file: 3}`（每个容器最多 30MB）。应用自身的文件日志由 logback 按 30 天轮转，但它写在**容器内**（没有挂卷），容器重建就没了 —— 面板「日志」页读的就是它。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -145,16 +149,16 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 02:15）
+## 7. 当前状态（2026-09-12 03:20）
 
-- 远程 `wechat-agent-java` 运行中（commit `acd67e1`），**应用自带 HTTPS 监听 `0.0.0.0:8443`**；`status=UP`、QQ 通道 `UP`。
-- 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上，服务器 `.env` 的 `ADMIN_API_KEY`）。勾「记住账号密码」后凭据存浏览器本地，不再重复输入。
-- 远程**只有 4 个容器**：`wechat-agent-java` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`（nginx 网关与 VPN 全部拆除）；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
-- 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。移除 nginx 后内存 used 从 983MB 降到 **937MB**（available 933MB）。
-- 数据（已清空微信与模拟器遗留）：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` 332（本人 304）、`reminder_task` **14**（全部属于本人）、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。
-- 告警已上线：`ALERT_ENABLED=true`，推送给 `9C81741E2EFD75552F7FB3EB4B0D821C`（本人），已实测手动测试告警发送成功。
-- 部署：push `main` 触发 CI（`docker/build-push-action` + gha 层缓存），只重建 agent 容器（QQ 断约 40 秒后自动重连）。
-- 遗留可选项：换成受信任证书（**需要域名**，8443 不需备案）；`/api/clawbot/*` 代码保留但已无页面入口；模拟器测试账号 `sim-user-qq` 若也要清掉，用同一条 SQL 条件即可。
+- 远程 `wechat-agent-java` 运行中（commit `bc5d004`），**应用自带 HTTPS 监听 `0.0.0.0:8443`**；`status=UP`、QQ 通道 `UP`。
+- 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用，6 个页签：总览 / QQ 通道 / 模型与搜索 / 任务 / 用户与记忆 / 日志）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。
+- 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
+- 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。内存 used 约 940MB / available 930MB。
+- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` 332（本人 304）、`reminder_task` **14**、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。微信与模拟器残留已清空。
+- CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
+- 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
+- 遗留可选项：换成受信任证书（**需要域名**，8443 不需备案）；`/api/clawbot/*` 代码保留但已无页面入口；`.trash\research-20260912.zip` 待用户确认后删除。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
