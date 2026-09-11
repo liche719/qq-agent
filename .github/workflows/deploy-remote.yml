@@ -19,8 +19,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image
-        run: docker build --tag wechat-agent:${GITHUB_SHA} .
+      - name: Build image (with layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: wechat-agent:${{ github.sha }}
+          # 复用上一次构建的层（前端 npm 依赖、Maven 依赖、基础镜像），显著缩短部署时间
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Export image
         run: docker save wechat-agent:${GITHUB_SHA} | gzip > wechat-agent-${GITHUB_SHA}.tar.gz

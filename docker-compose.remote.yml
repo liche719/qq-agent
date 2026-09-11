@@ -3,11 +3,15 @@ services:
     image: ${AGENT_IMAGE:-wechat-agent:latest}
     container_name: wechat-agent-java
     restart: unless-stopped
-    # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机，
-    # 服务只监听本机回环地址，管理后台的来源 IP 校验也能按本机放行。
+    # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机。
+    # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外只监听 8443。
     network_mode: host
     environment:
-      SERVER_ADDRESS: ${SERVER_ADDRESS:-127.0.0.1}
+      SERVER_ADDRESS: ${SERVER_ADDRESS:-0.0.0.0}
+      SERVER_PORT: ${SERVER_PORT:-8443}
+      SERVER_SSL_ENABLED: "true"
+      SERVER_SSL_CERTIFICATE: /app/certs/server.crt
+      SERVER_SSL_CERTIFICATE_PRIVATE_KEY: /app/certs/server.key
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
@@ -28,6 +32,13 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:-true}
+      # 运维告警：只推给 ALERT_QQ_OPENID 指定的用户
+      ALERT_ENABLED: ${ALERT_ENABLED:-false}
+      ALERT_QQ_OPENID: ${ALERT_QQ_OPENID:-}
+      ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-30}
+    volumes:
+      # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
+      - ./docker/tls:/app/certs:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -72,17 +83,6 @@ services:
     volumes:
       - searxng-data:/etc/searxng
       - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
-
-  # 面板的公网入口：TLS 终止 + 账号密码（Basic Auth）+ 请求限流。
-  # 上游 agent 仍只监听回环，暴露面完全由这里控制；证书与凭据在服务器侧生成，不入库。
-  gateway:
-    image: nginx:stable-alpine
-    container_name: wechat-agent-gateway
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ./docker/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/gateway/certs:/etc/nginx/certs:ro
 
 volumes:
   mysql-data:

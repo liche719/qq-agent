@@ -2,11 +2,14 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { login } from '../api'
-import { auth, saveAuth } from '../auth'
+import { auth, lastUsername, saveAuth } from '../auth'
+
+const DEFAULT_USERNAME = 'rootlcw'
 
 const router = useRouter()
-const username = ref('admin')
+const username = ref(lastUsername() || DEFAULT_USERNAME)
 const password = ref('')
+const remember = ref(true)
 const message = ref('')
 const busy = ref(false)
 const passwordInput = ref(null)
@@ -26,7 +29,7 @@ async function submit() {
   message.value = ''
   try {
     await login(account, password.value)
-    saveAuth(account, password.value)
+    saveAuth(account, password.value, remember.value)
     router.replace({ name: 'dashboard' })
   } catch (error) {
     message.value = error.message || '登录失败，请稍后再试。'
@@ -60,11 +63,16 @@ async function submit() {
         <div class="error" role="alert">{{ message }}</div>
       </div>
 
+      <div class="check">
+        <input id="remember" v-model="remember" type="checkbox">
+        <label for="remember">记住账号密码（下次自动登录，共用电脑请勿勾选）</label>
+      </div>
+
       <button class="btn btn-primary submit" type="submit" :disabled="busy">
         {{ busy ? '正在登录…' : '登录' }}
       </button>
 
-      <p class="login-foot">连续输错 5 次会暂时禁止访问，请稍后再试。登录状态只保存在当前标签页，关闭浏览器即退出。</p>
+      <p class="login-foot">连续输错 5 次会暂时禁止访问（按来源 IP 计算，不影响其它设备）。</p>
     </form>
   </div>
 </template>

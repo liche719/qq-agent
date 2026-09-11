@@ -282,6 +282,15 @@ conversation:
     enabled: ${CONVERSATION_TRACE_ENABLED:false}
     max-chars: ${CONVERSATION_TRACE_MAX_CHARS:8000}
 
+alert:
+  # 运维告警推送：只发给下方 openid 指定的用户（默认关闭）
+  enabled: ${ALERT_ENABLED:false}
+  qq-openid: ${ALERT_QQ_OPENID:}
+  repeat-minutes: ${ALERT_REPEAT_MINUTES:30}
+  check-interval-ms: ${ALERT_CHECK_INTERVAL_MS:60000}
+  disk-free-min-bytes: ${ALERT_DISK_FREE_MIN_BYTES:2147483648}
+  heap-used-max-percent: ${ALERT_HEAP_USED_MAX_PERCENT:85}
+
 management:
   access:
     # 本机模式可只允许回环地址；production 强制要求设置 ADMIN_API_KEY。

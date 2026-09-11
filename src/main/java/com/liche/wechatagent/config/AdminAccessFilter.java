@@ -38,7 +38,9 @@ public class AdminAccessFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         response.setContentType("application/json;charset=UTF-8");
         boolean dashboard = request.getRequestURI().startsWith("/api/admin");
-        if (dashboard && !isAllowedIp(request.getRemoteAddr())) {
+        // 需要密钥时（生产/公网直连），密钥就是唯一凭据，不再要求来源 IP 在白名单内；
+        // 本机模式（require-key=false）仍然只允许白名单来源，避免误暴露。
+        if (dashboard && !properties.isRequireKey() && !isAllowedIp(request.getRemoteAddr())) {
             response.setStatus(HttpStatus.FORBIDDEN.value());
             response.getWriter().write("{\"message\":\"来源 IP 不允许访问管理后台\"}");
             return;
@@ -71,9 +73,11 @@ public class AdminAccessFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 失败封禁的计数键。直连来源是本机回环时（面板经 nginx 反代就是这种情形），
-     * 用 X-Forwarded-For 的首个地址区分真实客户端，避免所有人的失败次数互相牵连、
-     * 让攻击者靠故意输错把正常用户一起封禁。
+     * 失败封禁的计数键（按真实来源 IP 分开计数，别人乱输不会连累你）。
+     *
+     * <p>直连来源是回环时说明前面有本机反向代理，取 X-Forwarded-For 的**最后一段**：
+     * 代理会把自己看到的真实地址追加在末尾，前面几段是客户端可以随意伪造的，
+     * 取第一段会让攻击者用假 IP 绕过封禁、甚至伪造他人 IP 去封禁别人。
      */
     private String clientKey(HttpServletRequest request) {
         String remote = request.getRemoteAddr();
@@ -84,8 +88,9 @@ public class AdminAccessFilter extends OncePerRequestFilter {
         if (forwarded == null || forwarded.isBlank()) {
             return remote;
         }
-        String first = forwarded.split(",")[0].trim();
-        return first.isEmpty() ? remote : first;
+        String[] parts = forwarded.split(",");
+        String last = parts[parts.length - 1].trim();
+        return last.isEmpty() ? remote : last;
     }
 
     private boolean hasValidKey(HttpServletRequest request) {

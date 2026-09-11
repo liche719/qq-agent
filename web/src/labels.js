@@ -55,6 +55,8 @@ export function fmtMs(value) {
 export function fmtTime(value) {
   if (value === undefined || value === null || value === '') return '—'
   const text = String(value)
+  // 后端用 String.valueOf(null) 会产出字符串 "null"，这里统一当空值处理
+  if (text === 'null' || text === 'undefined' || text === 'NaN') return '—'
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) return text
   const parsed = new Date(text)
   if (Number.isNaN(parsed.getTime())) return text

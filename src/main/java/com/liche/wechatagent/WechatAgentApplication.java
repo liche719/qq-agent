@@ -1,5 +1,6 @@
 package com.liche.wechatagent;
 
+import com.liche.wechatagent.config.AlertProperties;
 import com.liche.wechatagent.config.ManagementAccessProperties;
 import com.liche.wechatagent.config.AgentPolicyProperties;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
@@ -13,7 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
 @EnableScheduling
 @EnableConfigurationProperties({ManagementAccessProperties.class, AgentPolicyProperties.class,
-        MemoryPolicyProperties.class, QqRuntimeProperties.class})
+        MemoryPolicyProperties.class, QqRuntimeProperties.class, AlertProperties.class})
 public class WechatAgentApplication {
 
     public static void main(String[] args) {

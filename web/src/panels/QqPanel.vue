@@ -46,13 +46,13 @@ const rows = computed(() => {
 })
 
 async function run(action, path, confirmText) {
-  if (!window.confirm(confirmText)) return
+  if (confirmText && !window.confirm(confirmText)) return
   busy.value = action
   message.value = ''
   try {
     const result = await api(path, { method: 'POST' })
     if (result.accepted === false) throw new Error(result.message || '操作未被接受')
-    message.value = '操作已执行'
+    message.value = result.message || '操作已执行'
     emit('refresh')
   } catch (error) {
     message.value = '操作失败：' + error.message
@@ -72,6 +72,8 @@ async function run(action, path, confirmText) {
               @click="run('reconnect', '/actions/qq/reconnect', '确认触发 QQ 重连？')">触发 QQ 重连</button>
       <button class="btn btn-sm" :disabled="busy === 'cleanup'"
               @click="run('cleanup', '/actions/cache/cleanup', '确认清理过期缓存？')">清理过期缓存</button>
+      <button class="btn btn-sm" :disabled="busy === 'alert'"
+              @click="run('alert', '/actions/alerts/test')">发送测试告警</button>
       <span v-if="message" class="hint">{{ message }}</span>
     </div>
 
