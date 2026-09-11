@@ -1,11 +1,332 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大运维监控面板</title><style>
-:root{--bg:#0b1220;--panel:#121d30;--line:#243550;--ink:#e5edf8;--muted:#91a3bd;--ok:#36d399;--bad:#fb7185;--warn:#fbbf24;--accent:#60a5fa}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0%,#182b4a,var(--bg) 45%);color:var(--ink);font:14px system-ui,"Microsoft YaHei",sans-serif}main{max-width:1400px;margin:auto;padding:28px 22px 60px}header{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}h1{margin:0;font-size:28px}h2{font-size:17px;margin:0}.muted{color:var(--muted)}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}input,select,button{height:36px;border:1px solid var(--line);border-radius:9px;background:#0e192b;color:var(--ink);padding:0 12px}button{cursor:pointer}button:hover{border-color:var(--accent)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:20px}.card{background:rgba(18,29,48,.9);border:1px solid var(--line);border-radius:15px;padding:17px;min-width:0}.value{font-size:25px;font-weight:700;margin-top:8px}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.layout{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;margin-top:14px}.wide{grid-column:1/-1}.alerts{margin-top:14px}.alert{border:1px solid #713344;background:#2c1625;color:#fecdd3;padding:11px;border-radius:9px;margin-top:7px}.tabs{display:flex;gap:7px;margin:20px 0 10px;overflow:auto}.tab.active{background:#214a7c;border-color:#60a5fa}.section{display:none}.section.active{display:block}.table-wrap{overflow:auto;margin-top:12px}table{width:100%;border-collapse:collapse;min-width:620px}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:500}.mono{font:12px ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}.chart{height:180px;display:flex;align-items:end;gap:3px;padding:15px 4px 4px;border-top:1px solid var(--line)}.bar{flex:1;min-width:2px;background:linear-gradient(#60a5fa,#2563eb);border-radius:3px 3px 0 0}.small{font-size:12px}.stale{color:var(--warn)}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}@media(max-width:520px){.grid{grid-template-columns:1fr}main{padding:20px 12px}}
-</style></head><body><main><header><div><h1>大运维监控面板</h1><div class="muted">本机管理 · 运行状态、业务指标与故障排查</div></div><div class="toolbar"><select id="interval"><option value="5000">5 秒</option><option value="10000" selected>10 秒</option><option value="30000">30 秒</option><option value="60000">60 秒</option><option value="0">暂停</option></select><button id="refresh">立即刷新</button><a href="/" style="color:#93c5fd">返回微信管理</a></div></header><div id="status" class="muted" style="margin-top:10px">等待加载…</div><div id="alerts" class="alerts"></div>
-<div class="grid"><div class="card"><div class="muted">应用</div><div id="app" class="value">—</div></div><div class="card"><div class="muted">QQ 网关</div><div id="qq" class="value">—</div></div><div class="card"><div class="muted">用户</div><div id="users" class="value">—</div></div><div class="card"><div class="muted">UNKNOWN_RESULT</div><div id="unknown" class="value warn">—</div></div></div>
-<div class="tabs"><button class="tab active" data-tab="overview">总览</button><button class="tab" data-tab="qqtab">QQ 监控</button><button class="tab" data-tab="tasks">任务</button><button class="tab" data-tab="usersTab">用户与记忆</button><button class="tab" data-tab="logs">日志</button></div>
-<section id="overview" class="section active"><div id="overviewCards" class="grid"></div><div class="layout"><div class="card"><h2>完整状态</h2><pre id="overviewJson" class="mono"></pre></div><div class="card"><h2>最近指标趋势</h2><div id="chart" class="chart"></div><div class="small muted">服务端内存环形缓冲，重启后重新采样</div></div></div></section>
-<section id="qqtab" class="section"><div class="card"><h2>QQ 通道指标</h2><pre id="qqJson" class="mono"></pre><button id="reconnect">触发 QQ 重连</button><button id="cleanup">清理过期缓存</button></div></section>
-<section id="tasks" class="section"><div class="card"><h2>任务列表</h2><div class="toolbar" style="margin-top:10px"><select id="taskStatus"><option value="">全部状态</option><option>RUNNING</option><option>FAILED</option><option>UNKNOWN_RESULT</option><option>REPLY_SENT</option></select><input id="taskType" placeholder="任务类型"><input id="taskFailure" placeholder="失败原因"><button id="taskLoad">加载</button></div><div id="taskTable" class="table-wrap"></div></div></section>
-<section id="usersTab" class="section"><div class="card"><h2>用户与记忆</h2><div id="userTable" class="table-wrap"></div><div id="userDetailTitle" class="muted" style="margin-top:18px"></div><div id="userDetailPager" class="toolbar" style="margin-top:8px"></div><pre id="userDetail" class="mono"></pre></div></section>
-<section id="logs" class="section"><div class="card"><h2>近期操作日志</h2><div class="toolbar" style="margin-top:10px"><select id="logLevel"><option value="">全部级别</option><option>INFO</option><option>WARN</option><option>ERROR</option></select><input id="logQuery" placeholder="关键词过滤"><button id="logLoad">加载日志</button></div><div id="logTable" class="table-wrap"></div></div></section>
-</main><script src="/admin.js" defer></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex,nofollow">
+<title>运维监控 · wechat-agent</title>
+<style>
+:root{
+  --bg:#080e1a; --panel:rgba(17,28,46,.82); --line:rgba(97,133,190,.18); --line-strong:rgba(97,133,190,.32);
+  --ink:#e8eefb; --ink-2:#a9bcd8; --muted:#7e93b4;
+  --accent:#4d8dfd; --accent-soft:rgba(77,141,253,.14);
+  --ok:#34d399; --ok-soft:rgba(52,211,153,.13);
+  --warn:#fbbf24; --warn-soft:rgba(251,191,36,.13);
+  --bad:#f87171; --bad-soft:rgba(248,113,113,.13);
+  --r:16px; --r-sm:11px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 600px at 12% -8%,rgba(45,92,168,.30),transparent 60%),
+    radial-gradient(900px 500px at 100% 0%,rgba(28,72,120,.20),transparent 55%),
+    var(--bg);
+  color:var(--ink); min-height:100vh;
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;
+}
+a{color:var(--accent);text-decoration:none}
+.wrap{max-width:1240px;margin:0 auto;padding:20px 16px calc(56px + env(safe-area-inset-bottom))}
+.mono{font-family:var(--mono)}
+
+/* ---------- 顶栏 ---------- */
+header.top{
+  position:sticky; top:0; z-index:30; margin:-20px -16px 18px; padding:14px 16px 12px;
+  background:linear-gradient(180deg,rgba(8,14,26,.94),rgba(8,14,26,.78));
+  backdrop-filter:blur(14px); border-bottom:1px solid var(--line);
+}
+.top-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand .mark{
+  width:30px;height:30px;flex:0 0 30px;border-radius:9px;
+  background:linear-gradient(150deg,var(--accent),#2f6bd6);
+  box-shadow:0 6px 18px rgba(77,141,253,.35);
+}
+.brand h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.2px;white-space:nowrap}
+.brand .sub{font-size:12px;color:var(--muted);margin-top:1px}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tick{height:2px;margin-top:10px;background:var(--line);border-radius:2px;overflow:hidden}
+.tick i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#7db1ff);transition:width .95s linear}
+
+/* ---------- 通用控件 ---------- */
+select,input,button{font:inherit;color:var(--ink);background:#0d1728;border:1px solid var(--line-strong);
+  border-radius:var(--r-sm);height:38px;padding:0 11px;outline:none}
+select:focus,input:focus,button:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+input::placeholder{color:#5f7396}
+button{cursor:pointer;transition:border-color .15s,background .15s,transform .06s}
+button:hover:not(:disabled){border-color:var(--accent);background:#12213a}
+button:active:not(:disabled){transform:translateY(1px)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:linear-gradient(180deg,#3f7ff0,#2f68d4);border-color:#3f7ff0;font-weight:500}
+button.primary:hover:not(:disabled){background:linear-gradient(180deg,#4b8af7,#3a74e0)}
+button.ghost{background:transparent}
+button.danger{border-color:rgba(248,113,113,.5);color:#ffc9c9}
+button.danger:hover:not(:disabled){background:rgba(248,113,113,.12)}
+button.sm{height:32px;padding:0 10px;font-size:13px;border-radius:9px}
+
+/* 状态药丸 */
+.pill{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:999px;
+  font-size:13px;border:1px solid var(--line-strong);background:rgba(13,23,40,.7);white-space:nowrap}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 8px}
+.pill.ok{border-color:rgba(52,211,153,.4);background:var(--ok-soft);color:#a7f3d0}
+.pill.ok .dot{background:var(--ok);box-shadow:0 0 9px var(--ok)}
+.pill.warn{border-color:rgba(251,191,36,.4);background:var(--warn-soft);color:#fde68a}
+.pill.warn .dot{background:var(--warn)}
+.pill.bad{border-color:rgba(248,113,113,.42);background:var(--bad-soft);color:#fecaca}
+.pill.bad .dot{background:var(--bad);box-shadow:0 0 9px var(--bad)}
+
+/* ---------- 卡片 ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;
+  backdrop-filter:blur(6px);box-shadow:0 10px 30px rgba(2,7,17,.28)}
+.card h2{margin:0 0 2px;font-size:15px;font-weight:600}
+.card .hint{font-size:12px;color:var(--muted)}
+.grid{display:grid;gap:12px}
+.g-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px;min-width:0}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font-size:26px;font-weight:650;letter-spacing:.3px;margin-top:6px;line-height:1.15;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stat .m{font-size:12px;color:var(--muted);margin-top:4px;min-height:16px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stat .v.ok{color:var(--ok)} .stat .v.warn{color:var(--warn)} .stat .v.bad{color:var(--bad)}
+
+/* 告警 */
+.alerts{display:grid;gap:8px;margin:14px 0 0}
+.alerts:empty{display:none}
+.alert{display:flex;gap:9px;align-items:flex-start;padding:11px 13px;border-radius:var(--r-sm);
+  border:1px solid rgba(248,113,113,.34);background:var(--bad-soft);color:#fecaca;font-size:13.5px}
+.alert::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad);margin-top:6px;flex:0 0 7px}
+
+/* 标签页 */
+.tabs{display:flex;gap:6px;margin:20px 0 14px;padding:5px;border:1px solid var(--line);
+  border-radius:14px;background:rgba(12,21,38,.6);overflow:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:1 0 auto;height:38px;padding:0 15px;border:0;background:transparent;color:var(--ink-2);
+  border-radius:10px;font-size:14px;white-space:nowrap}
+.tab:hover{background:rgba(77,141,253,.10);border:0}
+.tab.active{background:var(--accent-soft);color:#dbe9ff;font-weight:550;box-shadow:inset 0 0 0 1px rgba(77,141,253,.34)}
+.section{display:none;margin-top:14px}
+.section.active{display:block}
+
+/* 表格 */
+.tw{margin-top:12px;overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-sm)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;z-index:1;background:#0f1a2c;color:var(--ink-2);font-weight:550;font-size:12.5px;
+  letter-spacing:.3px;white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:rgba(77,141,253,.055)}
+td.cell-mono{font-family:var(--mono);font-size:12.5px;word-break:break-all}
+td.cell-wide{max-width:520px;white-space:pre-wrap;word-break:break-word}
+.empty{padding:22px 14px;text-align:center;color:var(--muted);font-size:13.5px}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;
+  font-size:12px;border:1px solid var(--line-strong);background:rgba(13,23,40,.7);white-space:nowrap}
+.tag.ok{border-color:rgba(52,211,153,.4);background:var(--ok-soft);color:#a7f3d0}
+.tag.warn{border-color:rgba(251,191,36,.4);background:var(--warn-soft);color:#fde68a}
+.tag.bad{border-color:rgba(248,113,113,.42);background:var(--bad-soft);color:#fecaca}
+
+/* 图表 */
+.chart{height:170px;margin-top:14px;padding:14px 6px 0;border-bottom:1px solid var(--line)}
+.chart .bars{display:flex;align-items:flex-end;gap:2px;height:100%}
+.chart .bar{flex:1 1 0;min-width:2px;border-radius:3px 3px 0 0;
+  background:linear-gradient(180deg,rgba(125,177,255,.95),rgba(63,127,240,.35));transition:filter .12s}
+.chart .bar:hover{filter:brightness(1.25)}
+.axis{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:7px}
+
+/* JSON 折叠 */
+details.json{margin-top:12px;border:1px solid var(--line);border-radius:var(--r-sm);background:rgba(10,18,32,.6)}
+details.json>summary{cursor:pointer;padding:10px 13px;font-size:13px;color:var(--ink-2);list-style:none}
+details.json>summary::-webkit-details-marker{display:none}
+details.json>summary::before{content:"▸";display:inline-block;margin-right:7px;color:var(--muted);transition:transform .15s}
+details.json[open]>summary::before{transform:rotate(90deg)}
+pre{margin:0;padding:0 13px 13px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#c3d4ee;
+  white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto}
+details.item{border:1px solid var(--line);border-radius:var(--r-sm);background:rgba(10,18,32,.55);margin-top:9px}
+details.item>summary{cursor:pointer;padding:10px 13px;font-size:13.5px;color:var(--ink-2);list-style:none}
+details.item>summary::-webkit-details-marker{display:none}
+details.item>summary::before{content:"▸";display:inline-block;margin-right:7px;color:var(--muted);transition:transform .15s}
+details.item[open]>summary::before{transform:rotate(90deg)}
+details.item pre{max-height:340px;font-size:11.5px}
+
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.toolbar input{flex:1 1 150px;min-width:0}
+.pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.pager .info{font-size:12.5px;color:var(--muted)}
+.split{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px;margin-top:12px}
+.kv .row{border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;background:rgba(10,18,32,.5)}
+.kv .row .k{font-size:11.5px;color:var(--muted)}
+.kv .row .v{font-size:15px;font-weight:600;margin-top:2px;word-break:break-all}
+.foot{margin-top:22px;text-align:center;font-size:12px;color:var(--muted)}
+.foot.stale{color:#fecaca}
+
+/* ---------- 手机 ---------- */
+@media (max-width:900px){
+  .split{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:720px){
+  .wrap{padding:16px 12px calc(48px + env(safe-area-inset-bottom))}
+  header.top{margin:-16px -12px 14px;padding:12px 12px 10px}
+  .brand h1{font-size:16px}
+  .pills{width:100%;margin-left:0}
+  .tools{width:100%}
+  .tools select{flex:1 1 auto}
+  .g-4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stat{padding:13px}
+  .stat .v{font-size:22px}
+  .stat .m{display:none}
+  .tab{flex:0 0 auto;padding:0 13px}
+  .card{padding:14px;border-radius:14px}
+  /* 表格转卡片：靠 data-label 显示列名 */
+  .tw{border:0;overflow:visible}
+  table{min-width:0;display:block}
+  thead{display:none}
+  tbody{display:grid;gap:10px}
+  tbody tr{display:block;border:1px solid var(--line);border-radius:var(--r-sm);
+    background:rgba(10,18,32,.55);padding:6px 2px}
+  tbody td{display:flex;gap:10px;border:0;padding:7px 12px;align-items:flex-start}
+  tbody td::before{content:attr(data-label);flex:0 0 84px;color:var(--muted);font-size:12px;padding-top:1px}
+  tbody td:empty{display:none}
+  td.cell-wide{max-width:none}
+  tbody tr:hover td{background:transparent}
+  .chart{height:130px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="top-row">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <h1>运维监控</h1>
+          <div class="sub">wechat-agent · QQ 陪伴机器人</div>
+        </div>
+      </div>
+      <div class="pills">
+        <span class="pill" id="pill-app"><i class="dot"></i><span>应用 —</span></span>
+        <span class="pill" id="pill-qq"><i class="dot"></i><span>QQ —</span></span>
+      </div>
+    </div>
+    <div class="top-row" style="margin-top:12px">
+      <div class="tools">
+        <select id="interval" aria-label="自动刷新间隔">
+          <option value="5000">每 5 秒</option>
+          <option value="10000" selected>每 10 秒</option>
+          <option value="30000">每 30 秒</option>
+          <option value="60000">每 60 秒</option>
+          <option value="0">不自动刷新</option>
+        </select>
+        <button id="refresh" class="primary">立即刷新</button>
+      </div>
+    </div>
+    <div class="tick" aria-hidden="true"><i id="tick"></i></div>
+  </header>
+
+  <div class="alerts" id="alerts"></div>
+
+  <div class="grid g-4" style="margin-top:14px">
+    <div class="stat"><div class="k">应用状态</div><div class="v" id="s-app">—</div><div class="m" id="s-app-meta"></div></div>
+    <div class="stat"><div class="k">QQ 网关</div><div class="v" id="s-qq">—</div><div class="m" id="s-qq-meta"></div></div>
+    <div class="stat"><div class="k">用户数</div><div class="v" id="s-users">—</div><div class="m" id="s-users-meta"></div></div>
+    <div class="stat"><div class="k">异常任务</div><div class="v" id="s-tasks">—</div><div class="m" id="s-tasks-meta"></div></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab active" role="tab" data-tab="overview">总览</button>
+    <button class="tab" role="tab" data-tab="qqtab">QQ 通道</button>
+    <button class="tab" role="tab" data-tab="tasks">任务</button>
+    <button class="tab" role="tab" data-tab="usersTab">用户与记忆</button>
+    <button class="tab" role="tab" data-tab="logs">日志</button>
+  </div>
+
+  <section id="overview" class="section active" role="tabpanel">
+    <div class="split">
+      <div class="card">
+        <h2>运行时</h2><div class="hint">JVM 与磁盘</div>
+        <div class="kv" id="runtime"></div>
+      </div>
+      <div class="card">
+        <h2>数据与任务</h2><div class="hint">持久化记录条数</div>
+        <div class="kv" id="counts"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>堆内存趋势</h2><div class="hint">服务端环形缓冲，重启后重新采样；每根柱是一次采样</div>
+      <div class="chart"><div class="bars" id="chart"></div></div>
+      <div class="axis"><span id="chart-from">—</span><span id="chart-peak">—</span><span id="chart-to">—</span></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>完整状态</h2><div class="hint">接口原始返回，排查问题时看这里</div>
+      <details class="json"><summary>展开 overview JSON</summary><pre id="overview-json">—</pre></details>
+      <details class="json"><summary>展开 dependencies / moduleErrors</summary><pre id="deps-json">—</pre></details>
+    </div>
+  </section>
+
+  <section id="qqtab" class="section" role="tabpanel">
+    <div class="card">
+      <h2>QQ 通道</h2><div class="hint">网关连通性与收发、心跳计数</div>
+      <div class="kv" id="qq-kv"></div>
+      <div class="toolbar">
+        <button id="reconnect" class="danger sm">触发 QQ 重连</button>
+        <button id="cleanup" class="sm">清理过期缓存</button>
+      </div>
+      <details class="json"><summary>展开 qqMetrics JSON</summary><pre id="qq-json">—</pre></details>
+    </div>
+  </section>
+
+  <section id="tasks" class="section" role="tabpanel">
+    <div class="card">
+      <h2>任务列表</h2><div class="hint" id="task-hint">按状态、类型、失败原因或关键词筛选</div>
+      <div class="toolbar">
+        <select id="taskStatus" aria-label="任务状态">
+          <option value="">全部状态</option>
+          <option>RUNNING</option><option>FAILED</option><option>UNKNOWN_RESULT</option><option>REPLY_SENT</option>
+        </select>
+        <input id="taskType" placeholder="任务类型" aria-label="任务类型">
+        <input id="taskFailure" placeholder="失败原因包含…" aria-label="失败原因">
+        <input id="taskQuery" placeholder="关键词" aria-label="关键词">
+        <button id="taskLoad">筛选</button>
+      </div>
+      <div class="tw" id="taskTable"></div>
+      <div class="pager" id="taskPager"></div>
+    </div>
+  </section>
+
+  <section id="usersTab" class="section" role="tabpanel">
+    <div class="card">
+      <h2>用户</h2><div class="hint">用户标识已脱敏；点开可看记忆、对话与提醒</div>
+      <div class="tw" id="userTable"></div>
+    </div>
+    <div class="card" style="margin-top:12px" id="userDetailCard" hidden>
+      <h2 id="userDetailTitle">用户详情</h2><div class="hint">每页 50 条</div>
+      <div id="userDetailBody"></div>
+      <div class="pager" id="userDetailPager"></div>
+    </div>
+  </section>
+
+  <section id="logs" class="section" role="tabpanel">
+    <div class="card">
+      <h2>运行日志</h2><div class="hint">操作审计（最近 100 条）+ 应用日志尾部（200 行）</div>
+      <div class="toolbar">
+        <select id="logLevel" aria-label="日志级别">
+          <option value="">全部级别</option><option>INFO</option><option>WARN</option><option>ERROR</option>
+        </select>
+        <input id="logQuery" placeholder="关键词过滤" aria-label="关键词">
+        <button id="logLoad">筛选</button>
+      </div>
+      <div class="tw" id="logTable"></div>
+    </div>
+  </section>
+
+  <div class="foot" id="status" role="status">正在加载…</div>
+</div>
+<script src="/admin.js" defer></script>
+</body>
+</html>
