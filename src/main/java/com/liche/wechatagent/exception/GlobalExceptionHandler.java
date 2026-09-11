@@ -19,11 +19,11 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
     }
 
-    /** 接口不存在（如未以 clawbot 模式启动时访问 /api/clawbot/*）→ 返回 404 友好提示，不记 ERROR */
+    /** 资源不存在（如访问已移除的页面，或未启用对应模式时访问 /api/clawbot/*）→ 返回 404 友好提示，不记 ERROR */
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public ResponseEntity<Map<String, String>> handleNoResource(org.springframework.web.servlet.resource.NoResourceFoundException e) {
         return ResponseEntity.status(404).body(Map.of("message",
-                "接口不存在：请确认应用已以 clawbot 模式启动（使用 start-clawbot.cmd 或加 --wechat.channel.mode=clawbot 参数）"));
+                "请求的资源不存在：请确认访问路径，或该功能未在当前模式下启用"));
     }
 
     @ExceptionHandler(Exception.class)

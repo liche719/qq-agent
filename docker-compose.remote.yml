@@ -71,7 +71,71 @@ services:
       - searxng-data:/etc/searxng
       - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
 
+  # ---- 运维面板的私人通道：不参与 CI 部署，需在服务器上手动 up -d 才启动 ----
+  # WireGuard（wg-easy v14）：手机/电脑装客户端，扫码即可在外网打开面板
+  wireguard:
+    # 该镜像在内网需经镜像源拉取，服务器上已打好此标签（见 AGENTS.md 部署说明）
+    image: ghcr.io/wg-easy/wg-easy:14
+    container_name: wechat-agent-wireguard
+    restart: unless-stopped
+    # host 网络：wg0 建在宿主机命名空间，客户端来源 IP 保持 10.8.0.x 不被 docker NAT，
+    # 且 10.8.0.1 是宿主机地址，下面的转发服务才能绑在它上面。
+    network_mode: host
+    environment:
+      WG_HOST: ${WG_HOST:-}
+      WG_PORT: ${WG_PORT:-51820}
+      WG_DEVICE: ${WG_DEVICE:-eth0}
+      # 网页管理界面只绑回环，只能通过 SSH 隧道打开，不对公网暴露
+      WEBUI_HOST: 127.0.0.1
+      PORT: ${WG_UI_PORT:-51821}
+      # v14 不接受明文密码，只认 bcrypt 哈希（用镜像自带 /app/wgpw.sh 生成）
+      PASSWORD_HASH: ${WG_UI_PASSWORD_HASH:-}
+      WG_DEFAULT_ADDRESS: 10.8.0.x
+      # 分隧道：客户端只把 VPN 网段走隧道，手机正常上网不经过服务器
+      WG_ALLOWED_IPS: 10.8.0.0/24
+      # 国内可达的 DNS，避免客户端连上后域名解析失败
+      WG_DEFAULT_DNS: 223.5.5.5
+      # 手机在移动网络下 NAT 会丢映射，保持 25 秒心跳
+      WG_PERSISTENT_KEEPALIVE: "25"
+      # 镜像内 iptables 是 legacy 后端，而宿主机内核只有 nft（nat 表不存在），
+      # 默认 PostUp/PostDown 的 MASQUERADE 规则会让 wg-quick 启动失败；
+      # 本项目是分隧道且只访问宿主机自身服务，不需要 NAT/转发规则，故替换为空操作。
+      WG_POST_UP: /bin/true
+      WG_POST_DOWN: /bin/true
+      TZ: Asia/Shanghai
+    volumes:
+      - wireguard-data:/etc/wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+  # 面板转发：只在 VPN 地址 10.8.0.1 上开 8080，转到 agent 只绑回环的 127.0.0.1:8080。
+  # agent 保持只绑回环不动 → 公网无论如何都连不上面板（不依赖安全组配置）。
+  admin-forward:
+    image: alpine/socat
+    container_name: wechat-agent-admin-forward
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - wireguard
+    entrypoint: ["sh", "-c"]
+    command:
+      - while ! grep -q 'wg0' /proc/net/dev; do sleep 2; done; exec socat TCP-LISTEN:8080,bind=10.8.0.1,fork,reuseaddr TCP:127.0.0.1:8080
+
+  # 面板的公网入口：TLS 终止 + 账号密码（Basic Auth）+ 请求限流。
+  # 上游 agent 仍只监听回环，暴露面完全由这里控制；证书与凭据在服务器侧生成，不入库。
+  gateway:
+    image: nginx:stable-alpine
+    container_name: wechat-agent-gateway
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./docker/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/gateway/certs:/etc/nginx/certs:ro
+      - ./docker/gateway/auth:/etc/nginx/auth:ro
+
 volumes:
   mysql-data:
   redis-data:
   searxng-data:
+  wireguard-data:

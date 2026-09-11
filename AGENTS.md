@@ -38,7 +38,7 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 
 - 凭据来源：项目根目录 `.env`（已 gitignore）。Spring 用 `spring.config.import: optional:file:.env[.properties]` 加载。
 - 不再需要 `--spring.quartz.jdbc.initialize-schema=never` 参数，已固化在 `application-local.yml`。
-- 访问：主页 http://127.0.0.1:8080/ ，运维后台 http://127.0.0.1:8080/admin.html
+- 访问：运维后台 http://127.0.0.1:8080/admin.html （`static/index.html` 扫码登录页已删除，`/` 不再有欢迎页）
 - 管理接口默认不要求密钥（`ADMIN_REQUIRE_KEY=false`，回环地址免密钥）；`production` profile 才强制密钥。
 - 关闭占用 8080 的进程：`Get-NetTCPConnection -LocalPort 8080` → `Stop-Process -Id <PID>`
 - 重要：本机 JAR 与远程容器使用同一个 QQ AppID，**不要同时运行**，否则双开抢网关。
@@ -62,6 +62,37 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 ```
 
 - 只重启 agent：`cd /opt/wechat-agent-infra && AGENT_IMAGE=wechat-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
+
+### 远程运维面板访问（WireGuard 私人通道，2026-09-11 建立）
+
+- 目的：手机/电脑在任意网络都能看运维面板，且面板不暴露公网。不再依赖 SSH 隧道。
+- 两个附加容器（**不在 CI 部署范围内**，需在服务器手动 `up -d`）：
+  - `wechat-agent-wireguard`（wg-easy v14，host 网络，`wg0=10.8.0.1/24`，UDP 51820；管理界面只绑 `127.0.0.1:51821`）
+  - `wechat-agent-admin-forward`（alpine/socat，host 网络，只在 `10.8.0.1:8080` 监听并转发到 agent 的 `127.0.0.1:8080`）
+- **agent 保持 `SERVER_ADDRESS=127.0.0.1` 不变**：VPN 能访问面板靠的是 socat 转发容器，公网永远连不上 8080（不依赖安全组配置）。
+- 访问方式：VPN 连上后浏览器打开 `http://10.8.0.1:8080/admin.html`；新增设备用 `ssh -L 51821:127.0.0.1:51821 root@120.25.170.92` 打开 wg-easy 网页生成二维码。
+- 分隧道：客户端 `AllowedIPs=10.8.0.0/24`、DNS `223.5.5.5`、`PersistentKeepalive=25`，手机正常上网不经过服务器。
+- 凭据：`WG_HOST`、`WG_UI_PASSWORD_HASH`（bcrypt）在服务器 `.env`（600）；`WG_UI_PASSWORD` 行仅作人工记录。
+- 该通道的坑：
+  1. wg-easy v14 **拒绝明文 `PASSWORD`**，只认 `PASSWORD_HASH`；用镜像内 `/app/wgpw.sh '密码'` 生成，写进 `.env` 时必须用单引号包住（防 compose 展开 `$`）。
+  2. 镜像内 iptables 是 **legacy 后端**，宿主机内核只有 nft（无 `nat` 表），默认 PostUp 的 MASQUERADE 会让 `wg-quick up` 失败；已用 `WG_POST_UP/WG_POST_DOWN=/bin/true` 覆盖（分隧道不需要 NAT/转发）。
+  3. host 网络下 compose 的 `sysctls` 无效，`net.ipv4.ip_forward`、`net.ipv4.conf.all.src_valid_mark` 写在宿主机 `/etc/sysctl.d/99-wechat-agent-wireguard.conf`。
+  4. 服务器**不能直连 ghcr.io 拉镜像**（API 通、层下载卡死），需 `docker pull ghcr.m.daocloud.io/wg-easy/wg-easy:latest` 后再 `docker tag` 成 `ghcr.io/wg-easy/wg-easy:14`。
+  5. 阿里云安全组需放行入方向 **UDP 51820**；`wireguard-data` 卷与其它数据卷一样**严禁删除**。
+  6. 服务器上 Windows 侧传文件：命令行超 ~8KB 会报 "command line is too long"，改用 `scp`（本机 ssh 走 `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force` 可非交互带密码）。
+
+### 运维面板公网入口（nginx 网关 + 账号密码，2026-09-11 建立）
+
+- 用户选择"公网直连 + 唯一账号密码"，与上面的 VPN 通道**并存**（VPN 未开 51820，作为备用；两者都不改 agent）。
+- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/admin.html`、`/admin.js`、`/api/admin/*`，其余路径 404。
+- 配置：仓库内 `docker/gateway/nginx.conf`（**CI 不传**，改动后需手动 scp 到服务器）。
+- 服务器侧生成、不入库（都在 `/opt/wechat-agent-infra/docker/gateway/`）：`certs/server.crt|server.key`（自签、含 IP SAN、10 年）、`auth/htpasswd`（用户 `admin`，apr1 哈希）。
+- 安全组需放行入方向 **TCP 8443**；手机首次访问自签证书会提示"不安全"，需手动继续。
+- 该网关的坑：
+  1. **htpasswd 权限**：必须是容器内 nginx 用户（uid **101**）可读，否则"带凭据"的请求返回 **500**（错误日志 `open() "/etc/nginx/auth/htpasswd" failed (13: Permission denied)`）而不是 401。已 `chown 101:101 htpasswd` + `chmod 600`。
+  2. `nginx:alpine` 在阿里云镜像源里是 **4 年前的旧版本**，公网网关要用 `docker pull docker.m.daocloud.io/library/nginx:stable-alpine` 后再打 `nginx:stable-alpine` 标签（当前 1.30.4）。
+  3. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s，实测连续 40 次请求后出现 429），防公网爆破。
+  4. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
 
 ## 4. CI/CD
 
@@ -89,13 +120,17 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 - 写文件统一用 LF 换行，避免 git 警告与补丁解析失败。
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
 
-## 7. 当前状态（2026-09-11 18:30）
+## 7. 当前状态（2026-09-11 19:45）
 
-- 上游线程 `codex://threads/01a060dd-d68a-7431-a74f-b678a8f7ab7e` 的遗留事项已全部完成：CI 部署链路打通，Actions run `34588660239` 成功。
-- 远程 `wechat-agent-java` 正在运行，镜像 `wechat-agent:df188d3…`；`/api/admin/overview` 返回 200，QQ 通道 `UP`、`connected=true`。
+- 远程 `wechat-agent-java` 运行中，镜像 `wechat-agent:0b7a25f…`；本次所有操作**从未重启过 agent**；`/api/admin/overview` 返回 200、QQ 通道 `UP`。
 - 远程数据完好：`user_profile` 21 条、`reminder_task` 23 条、`QRTZ_TRIGGERS` 2 条。
-- 本地：Docker Desktop 未启动，本地 JAR 未运行（当前只有远程在跑）；本地 `main` = `df188d3`，与 `origin/main` 一致，工作区干净。
-- 无未完成的待办事项。
+- 面板两条访问通道都已就绪（都不改 agent，agent 仍只绑 `127.0.0.1`）：
+  - **公网网关（用户当前选择）**：`wechat-agent-gateway`（nginx，8443/TLS，Basic Auth 用户 `admin`）；服务器侧已验证 401/200/404/429、`overview` 正常。**只差阿里云安全组放行 TCP 8443**，放行后即可用 `https://120.25.170.92:8443/admin.html` 访问。
+  - **WireGuard（备用）**：`wechat-agent-wireguard` + `wechat-agent-admin-forward` 运行中，客户端 `phone(10.8.0.2)`、`pc(10.8.0.3)` 已创建；需放行 UDP 51820 才可用（用户当时下载不了客户端 App，故搁置）。
+- 本机侧实测公网暴露面：**8080 / 51821 / 8443 均关闭，仅 22 开着**（8443 等安全组放行）。
+- 本地代码改动（**未 commit、未 push、未部署**）：删除 `static/index.html` 与 `static/js/qrcode.min.js`（`/api/clawbot/*` 接口保留）、404 文案改中性、`docker-compose.remote.yml` 新增 wireguard/admin-forward/gateway 三个服务、新增 `docker/gateway/nginx.conf`。
+- 用户表示运维监控界面不满意、**后续会重做**（`admin.html`/`admin.js` 保持原样没动）；重做时建议一并加登录页（现在用的是浏览器原生 Basic Auth 弹窗）。
+- 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
 
@@ -103,6 +138,8 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 |---|---|
 | 本地 LLM / QQ 凭据 | `wechat-agent-java\.env`（gitignore） |
 | 服务器容器凭据 | 服务器 `120.25.170.92:/opt/wechat-agent-infra/.env`（600） |
+| 运维面板公网登录（用户 `admin`） | 服务器 `/opt/wechat-agent-infra/docker/gateway/auth/htpasswd`（600，chown 101:101）；明文只由用户保存 |
+| WireGuard 网页管理密码 | 服务器 `.env` 的 `WG_UI_PASSWORD`（人工记录）与 `WG_UI_PASSWORD_HASH`（容器实际使用） |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
