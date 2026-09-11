@@ -47,28 +47,47 @@ public class AdminAccessFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        FailureWindow existing = failures.get(request.getRemoteAddr());
+        String client = clientKey(request);
+        FailureWindow existing = failures.get(client);
         if (existing != null && !existing.expired() && existing.count >= 5) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.getWriter().write("{\"message\":\"管理接口暂时封禁，请稍后再试\"}");
             return;
         }
         if (hasValidKey(request) || (!dashboard && canUseLoopbackWithoutKey(request))) {
-            failures.remove(request.getRemoteAddr());
+            failures.remove(client);
             filterChain.doFilter(request, response);
             return;
         }
         failures.entrySet().removeIf(entry -> entry.getValue().expired());
-        if (failures.size() >= 1024 && !failures.containsKey(request.getRemoteAddr())) {
+        if (failures.size() >= 1024 && !failures.containsKey(client)) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.getWriter().write("{\"message\":\"管理接口请求过多，请稍后再试\"}");
             return;
         }
-        FailureWindow window = failures.compute(request.getRemoteAddr(), (address, previous) -> previous == null || previous.expired() ? new FailureWindow() : previous.next());
+        FailureWindow window = failures.compute(client, (address, previous) -> previous == null || previous.expired() ? new FailureWindow() : previous.next());
         if (window.count >= 5) { response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value()); response.getWriter().write("{\"message\":\"管理接口暂时封禁，请稍后再试\"}"); return; }
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setContentType("application/json;charset=UTF-8");
         response.getWriter().write("{\"message\":\"管理接口需要管理员密钥\"}");
+    }
+
+    /**
+     * 失败封禁的计数键。直连来源是本机回环时（面板经 nginx 反代就是这种情形），
+     * 用 X-Forwarded-For 的首个地址区分真实客户端，避免所有人的失败次数互相牵连、
+     * 让攻击者靠故意输错把正常用户一起封禁。
+     */
+    private String clientKey(HttpServletRequest request) {
+        String remote = request.getRemoteAddr();
+        if (!isLoopback(remote)) {
+            return remote;
+        }
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded == null || forwarded.isBlank()) {
+            return remote;
+        }
+        String first = forwarded.split(",")[0].trim();
+        return first.isEmpty() ? remote : first;
     }
 
     private boolean hasValidKey(HttpServletRequest request) {

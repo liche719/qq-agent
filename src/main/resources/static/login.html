@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="robots" content="noindex,nofollow">
+<title>运维监控 · 登录</title>
+<style>
+:root{
+  --bg:#eef3fa; --surface:rgba(255,255,255,.86); --line:rgba(30,41,59,.12); --line-strong:rgba(30,41,59,.22);
+  --ink:#1f2329; --ink-2:#4b5563; --muted:#6b7280;
+  --blue:#2d72ca; --blue-deep:#1857a9; --blue-soft:rgba(45,114,202,.10);
+  --bad:#c0392b; --bad-soft:rgba(192,57,43,.08);
+  --r:26px; --r-sm:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:linear-gradient(180deg,#e9f1ff 0%,#eff4fb 52%,#e8eef7 100%);
+  color:var(--ink); display:flex; align-items:center; justify-content:center;
+  padding:28px 20px calc(28px + env(safe-area-inset-bottom));
+  font:16px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;
+}
+main{width:100%;max-width:430px}
+.panel{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+  padding:34px 32px 30px; backdrop-filter:blur(12px);
+  box-shadow:0 18px 46px rgba(24,55,102,.10);
+}
+.brand{display:flex;align-items:center;gap:11px}
+.mark{
+  width:34px;height:34px;flex:0 0 34px;border-radius:11px;
+  background:linear-gradient(150deg,#3f8ae0,var(--blue-deep));
+  box-shadow:0 8px 20px rgba(45,114,202,.28);
+}
+h1{margin:0;font-size:21px;font-weight:600;letter-spacing:.2px}
+.lead{margin:14px 0 26px;color:var(--ink-2);font-size:14.5px}
+label{display:block;font-size:13.5px;color:var(--ink-2);margin-bottom:8px}
+input{
+  width:100%;height:48px;padding:0 15px;font:inherit;color:var(--ink);
+  background:#fbfcfe;border:1px solid var(--line-strong);border-radius:var(--r-sm);outline:none;
+  transition:border-color .2s,box-shadow .2s,background .2s;
+}
+input:focus{border-color:var(--blue);background:#fff;box-shadow:0 0 0 4px var(--blue-soft)}
+.msg{min-height:22px;margin:12px 2px 0;font-size:13.5px;color:var(--muted)}
+.msg.bad{color:var(--bad)}
+.msg .box{
+  display:block;padding:11px 13px;border-radius:var(--r-sm);
+  background:var(--bad-soft);border:1px solid rgba(192,57,43,.22);
+}
+button{
+  width:100%;height:48px;margin-top:16px;border:0;border-radius:var(--r-sm);cursor:pointer;
+  font:inherit;font-weight:550;color:#fff;background:linear-gradient(180deg,#3579d2,var(--blue-deep));
+  transition:filter .2s,box-shadow .2s,transform .08s;
+}
+button:hover:not(:disabled){filter:brightness(1.06);box-shadow:0 10px 24px rgba(45,114,202,.26)}
+button:active:not(:disabled){transform:translateY(1px)}
+button:focus-visible{outline:3px solid var(--blue-soft);outline-offset:2px}
+button:disabled{opacity:.6;cursor:not-allowed}
+.foot{margin:26px 2px 0;font-size:12.5px;color:var(--muted);line-height:1.7}
+@media (max-width:420px){
+  .panel{padding:28px 22px 24px;border-radius:22px}
+  h1{font-size:19px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+  <div class="panel">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <h1>运维监控</h1>
+    </div>
+    <p class="lead">请输入访问口令进入运维面板。口令只保存在本机当前标签页，关闭浏览器即失效。</p>
+    <form id="form" novalidate>
+      <label for="key">访问口令</label>
+      <input id="key" type="password" autocomplete="current-password" enterkeyhint="go"
+             placeholder="请输入访问口令" required autofocus>
+      <div class="msg" id="msg" role="alert" aria-live="polite"></div>
+      <button type="submit" id="submit">进入面板</button>
+    </form>
+    <p class="foot">连续输错 5 次会暂时禁止访问，请稍后再试。如需修改口令，请在服务器上更新配置。</p>
+  </div>
+</main>
+<script src="/login.js" defer></script>
+</body>
+</html>

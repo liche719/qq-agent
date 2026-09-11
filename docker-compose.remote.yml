@@ -25,6 +25,7 @@ services:
       QQ_APP_ID: ${QQ_APP_ID:-}
       QQ_CLIENT_SECRET: ${QQ_CLIENT_SECRET:-}
       ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:-true}
     depends_on:
       mysql:
@@ -81,7 +82,6 @@ services:
     volumes:
       - ./docker/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/gateway/certs:/etc/nginx/certs:ro
-      - ./docker/gateway/auth:/etc/nginx/auth:ro
 
 volumes:
   mysql-data:
