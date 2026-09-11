@@ -18,6 +18,8 @@ public class AlertProperties {
     private long diskFreeMinBytes = 2L * 1024 * 1024 * 1024;
     /** 堆内存占用超过该百分比时告警 */
     private int heapUsedMaxPercent = 85;
+    /** 启动后多久才开始检查（避免重启瞬间网关还没连上就误报） */
+    private int startupGraceSeconds = 120;
 
     public boolean isEnabled() {
         return enabled;
@@ -65,5 +67,13 @@ public class AlertProperties {
 
     public void setHeapUsedMaxPercent(int heapUsedMaxPercent) {
         this.heapUsedMaxPercent = Math.min(99, Math.max(1, heapUsedMaxPercent));
+    }
+
+    public int getStartupGraceSeconds() {
+        return startupGraceSeconds;
+    }
+
+    public void setStartupGraceSeconds(int startupGraceSeconds) {
+        this.startupGraceSeconds = Math.max(0, startupGraceSeconds);
     }
 }

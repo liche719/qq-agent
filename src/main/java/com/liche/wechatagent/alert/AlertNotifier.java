@@ -46,6 +46,8 @@ public class AlertNotifier {
     private final Map<String, String> active = new ConcurrentHashMap<>();
     /** 每个问题上次推送时间 */
     private final Map<String, Long> sentAt = new ConcurrentHashMap<>();
+    /** 应用启动时刻，用于跳过启动初期的误报 */
+    private final long startedAt = System.currentTimeMillis();
 
     public AlertNotifier(AlertProperties properties, ObjectProvider<QqChannel> qqChannel, JdbcTemplate jdbc,
                          StringRedisTemplate redis, Scheduler scheduler,
@@ -61,6 +63,10 @@ public class AlertNotifier {
     @Scheduled(fixedDelayString = "${alert.check-interval-ms:60000}")
     public void scheduledCheck() {
         if (!usable()) {
+            return;
+        }
+        // 启动宽限期：重启后网关/依赖才陆续就绪，这段时间不判定为故障
+        if (System.currentTimeMillis() - startedAt < properties.getStartupGraceSeconds() * 1000L) {
             return;
         }
         inspect();

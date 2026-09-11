@@ -290,6 +290,7 @@ alert:
   check-interval-ms: ${ALERT_CHECK_INTERVAL_MS:60000}
   disk-free-min-bytes: ${ALERT_DISK_FREE_MIN_BYTES:2147483648}
   heap-used-max-percent: ${ALERT_HEAP_USED_MAX_PERCENT:85}
+  startup-grace-seconds: ${ALERT_STARTUP_GRACE_SECONDS:120}
 
 management:
   access:
