@@ -38,7 +38,8 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 
 - 凭据来源：项目根目录 `.env`（已 gitignore）。Spring 用 `spring.config.import: optional:file:.env[.properties]` 加载。
 - 不再需要 `--spring.quartz.jdbc.initialize-schema=never` 参数，已固化在 `application-local.yml`。
-- 访问：运维后台 http://127.0.0.1:8080/admin.html （`static/index.html` 扫码登录页已删除，`/` 不再有欢迎页）
+- 访问：运维面板 http://127.0.0.1:8080/ （Vue 单页应用；本机 `ADMIN_REQUIRE_KEY=false` 时回环免口令，直接进 `/#/dashboard`）
+- **前端是独立工程**：`cd web && npm install && npm run dev`（Vite 5173，接口代理到 8080）最方便；要进 jar 就先 `npm run build`，否则 `mvn package` 出来的包不带界面。
 - 管理接口默认不要求密钥（`ADMIN_REQUIRE_KEY=false`，回环地址免密钥）；`production` profile 才强制密钥。
 - 关闭占用 8080 的进程：`Get-NetTCPConnection -LocalPort 8080` → `Stop-Process -Id <PID>`
 - 重要：本机 JAR 与远程容器使用同一个 QQ AppID，**不要同时运行**，否则双开抢网关。
@@ -66,9 +67,9 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 ### 运维面板公网入口（nginx 网关 + 账号密码，2026-09-11 建立）
 
 - **这是面板唯一的访问方式**（用户 2026-09-11 明确弃用 VPN：WireGuard/socat 容器、`wg0`、51820 端口、`wireguard-data` 卷、`.env` 里的 WG 配置、宿主机 sysctl 文件**已全部拆除**，不要再加回来）。
-- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/login.html`、`/login.js`、`/admin.html`、`/admin.js`、`/api/admin/*`，根路径 302 跳登录页，其余路径 404。
+- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/`、`/index.html`、`/assets/`、`/api/admin/*`（前端是 Vue 单页应用，用 hash 路由，所以不需要服务端 rewrite），其余路径一律 404。
 - **agent 始终 `SERVER_ADDRESS=127.0.0.1`**：网关在宿主机上直连 `127.0.0.1:8080`，所以公网永远连不上 8080（不依赖安全组配置）。
-- **鉴权在应用层**（2026-09-12 改）：nginx 不再做 Basic Auth（浏览器原生弹窗没法美化），改为 `login.html` 收口令 → 存 `sessionStorage` → 每次请求带 `X-Agent-Admin-Key` 头。**所以服务器 `.env` 必须同时有 `ADMIN_REQUIRE_KEY=true` 和 `ADMIN_API_KEY=<强口令>`**；`htpasswd` 与 `docker/gateway/auth/` 已删除，compose 里也去掉了该挂载。
+- **鉴权在应用层**（2026-09-12 改）：nginx 不做 Basic Auth（浏览器原生弹窗无法美化）。前端登录页提交「账号 + 密码」→ `POST /api/admin/session`（口令由 `AdminAccessFilter` 用 `X-Agent-Admin-Key` 头校验、账号由 `AdminSessionController` 校验）→ 存 `sessionStorage` → 之后每个请求都带头。**服务器 `.env` 必须同时有 `ADMIN_REQUIRE_KEY=true`、`ADMIN_API_KEY=<口令>`、`ADMIN_USERNAME=admin`**；`htpasswd` 与 `docker/gateway/auth/` 已删除。
 - 配置：仓库内 `docker/gateway/nginx.conf`（**CI 不传**，改动后需手动 scp 到服务器）。
 - 证书：服务器侧生成、不入库（`/opt/wechat-agent-infra/docker/gateway/certs/server.crt|server.key`，自签、含 IP SAN、10 年）。
 - 安全组需放行入方向 **TCP 8443**；手机首次访问自签证书会提示"不安全"，需手动继续。
@@ -77,20 +78,25 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   2. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s），再叠加应用层「连续 5 次口令错误封禁 10 分钟」防爆破。
   3. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
   4. 若以后要把 Basic Auth 加回来：`htpasswd` 必须是容器内 nginx 用户（uid **101**）可读，否则带凭据的请求会返回 **500**（`open() failed (13: Permission denied)`）而不是 401。
+  5. **改了 `docker/gateway/nginx.conf` 必须显式重启网关容器**（`docker restart wechat-agent-gateway`）：它是挂载文件，`docker compose up -d gateway` 不会重建容器（输出是 `Running` 而不是 `Recreated`），配置不会生效——表现为旧配置继续工作（例如仍 302 到已删除的旧路径）。
 
-### 运维面板界面（2026-09-12 按深度求索前端风格重做）
+### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
-- **四个静态文件，零框架零构建**：`static/login.html` / `login.js`（登录页）、`static/admin.html` / `admin.js`（面板）。`mvn package` 直接打进 jar。
-- **必须保持"只有这四个文件"**：网关只放行 `/login.html`、`/login.js`、`/admin.html`、`/admin.js`、`/api/admin/*`，所以**不能引入外部 CDN、字体、图标库或额外 CSS/JS 文件**（界面已完全自包含，可用 `Select-String -Pattern 'https?://'` 自查）。加新页面时记得同步改 `docker/gateway/nginx.conf` 并 scp。
-- 风格取自 skill `deepseek-front-end-style` 的**工作台/表单**场景：浅蓝灰渐变底（`#e9f1ff → #e8eef7`）、极淡网格层（竖线略清晰、横线更淡，120px 间距，几乎不可察觉）、白色半透明圆角面板（24px 圆角 + 12px 模糊 + 弱边框）、蓝色焦点（`#2d72ca`／`#1857a9`）、**不使用深色下沉层和大展示块**。登录页按表单场景做最安静的单列布局，无网格。
-- 文案规则：界面**不出现英文状态词**，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。每个页面只留一个主要按钮（面板是「立即刷新」，登录页是「进入面板」）。
-- 登录流程：`login.html` 校验口令（`GET /api/admin/overview` + `X-Agent-Admin-Key` 头）→ 存 `sessionStorage` → 跳 `admin.html`；面板每次请求都带头，401 自动清口令并回登录页（`?expired=1` 会给出提示）。顶栏有「退出登录」。
-- 手机适配：`≤720px` 时概览卡 2 列、表格**转卡片列表**（每格用 `data-label` 显示列名、`thead` 隐藏）、无横向滚动；`≤900px` 时总览两栏变单栏。
-- 安全约定：所有来自接口的文本一律用 `textContent`/`createElement` 渲染，**不许用 innerHTML**（日志、用户记忆都是用户数据）。
-- 验证方式（可复用）：`node --check` 校 JS 语法；Playwright（Chromium 已装）直接打**公网真实地址**跑布局与交互断言。脚本在 `C:\Users\33721\Desktop\wechat-agent\.ui-test\`：
-  - `verify_login_flow.py`：登录页 → 错误口令 → 正确口令 → 面板 → 退出 → 手机端（含浅色底/网格/圆角断言）。
-  - `verify_public_ui.py`：旧版（Basic Auth 时代）的公网面板断言，仍可用作回归。
-  - 注意：Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
+- **架构**：前端是独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，无 UI 框架），只通过 JSON 接口与后端通信；后端只提供 `/api/admin/*`。构建产物输出到 `src/main/resources/static/`，由 Dockerfile 的 node 阶段在打包镜像时生成，**部署仍是单容器**（nginx 网关 → agent）。
+- **本地开发**：`cd web && npm install`；`npm run dev`（Vite 5173，已把 `/api` 代理到 `http://127.0.0.1:8080`）。改完样式或组件必须 `npm run build`（直接写进后端 static 目录）才会进 jar。
+- **目录结构**：`web/src/views/`（LoginView、DashboardView）、`web/src/panels/`（Overview / Qq / Tasks / Users / Logs 五个页签）、`web/src/components/`（StatCard、StatusPill、InfoGrid、DataTable、JsonBlock、ChartBars）、`web/src/{api,auth,labels,router}.js`，以及**集中承载全部视觉规范的 `web/src/style.css`**。
+- **路由**：`createWebHashHistory`（`/#/login`、`/#/dashboard`），因此网关只需放行固定路径、不需要服务端 rewrite。
+- **视觉**：按 skill `deepseek-front-end-style` 的官网观感做**深色 + 网格 + 高级半透明玻璃**——冷蓝到深蓝的下沉渐变底、固定网格层（`body::before`：120px 间距，竖线略清晰、横线更淡、交点带极淡圆点，并用 mask 向外淡出）、玻璃面板（`rgba(255,255,255,.03~.08)` 渐变 + `backdrop-filter: blur(18px) saturate(140%)` + 22px 圆角 + 1px 冷蓝描边 + 内高光）、亮蓝 `#4d6bfe` 只用于主按钮/焦点/状态点。
+- **文案**：界面不出现英文状态词，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。`labels.js` 是唯一的状态词典，新增状态值改那里。
+- **登录**：账号 + 密码 → `POST /api/admin/session` → 成功后口令存 `sessionStorage`，路由守卫拦截 `/#/dashboard`；接口 401 清登录态并回登录页；顶栏有「退出登录」。
+- **手机适配**：`≤720px` 概览卡 2 列、表格**转卡片列表**（靠每格 `data-label` 显示列名、`thead` 隐藏）、工具栏换行、无横向滚动。
+- **安全约定**：接口文本一律用 Vue 插值（自动转义），**不要用 `v-html`**（日志、用户记忆都是用户数据）。
+- **验证方式**（可复用）：`.ui-test\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/退出/手机端与视觉断言：
+  ```powershell
+  $env:WG_PW='<口令>'; $env:SPA_BASE='https://120.25.170.92:8443'; $env:SPA_TAG='v5'
+  & "D:\soft\JetBrains\Python\python\python.exe" "C:\Users\33721\Desktop\wechat-agent\.ui-test\verify_spa.py"
+  ```
+  （本机调试可用 `.ui-test\spa_server.py` 代理模式，把 `SPA_BASE` 留空即走 `http://127.0.0.1:8899`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
 ## 4. CI/CD
 
@@ -111,6 +117,9 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 8. 不要 `git commit`/建分支除非用户明确要求；本项目历史提交由用户账号 `YOLO <3372134858@qq.com>` 完成。
 9. **`/api/admin/*` 的鉴权语义**（2026-09-12 修正）：`AdminAccessFilter` 原先对 dashboard 路径**只校验来源 IP 就直接放行**，密钥形同虚设（面板数据全靠 nginx Basic Auth 挡着）。现已统一为「带正确 `X-Agent-Admin-Key` 头，或在 require-key=false 时回环免密钥」；`require-key=true`（服务器 `.env`）时面板接口必须带口令。历史测试 `AdminAccessFilterTest` 正是按这个语义写的（其中「回环在 local 模式下免密钥」一条与项目文档相冲突，属预期差异）；CI 的 Dockerfile 用 `-DskipTests`，不跑测试。
 10. 失败封禁按**来源 IP** 计数：直连来源是回环时改用 `X-Forwarded-For` 首个地址，否则经 nginx 反代后所有请求共用 `127.0.0.1`，攻击者故意输错 5 次就能把正常用户一起封禁 10 分钟。
+11. **CSS 里只写标准 `backdrop-filter`**：手写一行 `-webkit-backdrop-filter` 会被 Vite 8 的 CSS 压缩（lightningcss）合并掉标准属性，构建产物里只剩带前缀的那条，而 Chromium 根本不认（`CSS.supports('-webkit-backdrop-filter')` 为 false）→ 毛玻璃**静默失效**。让构建工具自己加前缀即可。
+12. 不要用 PowerShell 5.1 的 `Get-Content -Raw` + `Set-Content` 往返改 UTF-8 源文件：会按 ANSI 读取、再写成带 BOM 的 UTF-8，中文全变乱码（Python 直接语法报错）。用 write 工具或 `[IO.File]::ReadAllText` + `WriteAllText(..., UTF8Encoding($false))`。
+13. 前端改动必须 `cd web && npm run build`（或走 CI 的 Dockerfile）才会进 jar；`src/main/resources/static/` 已在 `.gitignore`（构建产物不入库），新克隆的仓库直接 `mvn package` 是**不带界面**的。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -125,15 +134,15 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 01:10）
+## 7. 当前状态（2026-09-12 02:00）
 
-- 远程 `wechat-agent-java` 运行中（镜像来自 commit `6091556`），`/api/admin/overview`（带口令）返回 200、`status=UP`、QQ 通道 `UP`；数据 `user_profile` 21、`reminder_task` 23、`QRTZ_TRIGGERS` 2。
-- 面板**唯一入口**：`https://120.25.170.92:8443/` → 302 到登录页 `login.html`，输口令后进 `admin.html`；口令存在标签页 `sessionStorage`。VPN 相关组件已按用户要求**全部拆除**。
-- 鉴权链路：nginx（TLS+限流，**无 Basic Auth**）→ agent 的 `AdminAccessFilter`（`ADMIN_REQUIRE_KEY=true` + `ADMIN_API_KEY`，连续 5 次错误按来源 IP 封禁 10 分钟）。
+- 远程 `wechat-agent-java` 运行中（镜像来自 commit `a283aa9`，含 Vue 前端）；带口令请求 `/api/admin/overview` 返回 200、`status=UP`、QQ 通道 `UP`；数据 `user_profile` 21、`reminder_task` 23、`QRTZ_TRIGGERS` 2。
+- 面板**唯一入口**：`https://120.25.170.92:8443/`（Vue 单页应用，hash 路由）→ 未登录自动进 `/#/login`；账号 + 密码登录，口令存标签页 `sessionStorage`。VPN 相关组件已按用户要求**全部拆除**。
+- 鉴权链路：nginx（TLS + 限流，**无 Basic Auth**）→ agent 的 `AdminAccessFilter`（`ADMIN_REQUIRE_KEY=true` + `ADMIN_API_KEY`，连续 5 次错误按来源 IP 封禁 10 分钟）+ `AdminSessionController`（账号校验）。
 - 远程 5 个容器：`wechat-agent-java` / `wechat-agent-gateway` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
-- 公网暴露面：**22（SSH）、8443（登录页+面板）**；8080 / 51820 / 51821 均未开。
-- 部署方式不变：push `main` 触发 CI，只重建 agent 容器（QQ 会断约 40 秒后自动重连）；改 `docker/gateway/nginx.conf` 需手动 scp 并只重启 gateway。
-- 遗留可选项：换成受信任证书（**需要域名**，8443 不需要备案）；给面板加"记住我"（现在关标签页即退出）；`/api/clawbot/*` 保留但已无页面入口。
+- 公网暴露面：**22（SSH）、8443（登录页 + 面板 + 接口）**；8080 / 51820 / 51821 均未开。
+- 部署方式：push `main` 触发 CI（Dockerfile 里先 node 构建前端再 maven 打包），只重建 agent 容器（QQ 断约 40 秒后自动重连）；改 `docker/gateway/nginx.conf` 需手动 scp **并显式 `docker restart wechat-agent-gateway`**。
+- 遗留可选项：换成受信任证书（**需要域名**，8443 不需要备案）；登录加"记住我"（现在关标签页即退出）；`/api/clawbot/*` 保留但已无页面入口。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
@@ -142,7 +151,7 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 |---|---|
 | 本地 LLM / QQ 凭据 | `wechat-agent-java\.env`（gitignore） |
 | 服务器容器凭据 | 服务器 `120.25.170.92:/opt/wechat-agent-infra/.env`（600） |
-| 运维面板登录口令 | 服务器 `.env` 的 `ADMIN_API_KEY`（600）；明文只由用户保存（旧 Basic Auth 的 `htpasswd` 已删除） |
+| 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（默认 `admin`）与 `ADMIN_API_KEY`（600）；明文只由用户保存（旧 Basic Auth 的 `htpasswd` 已删除） |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
