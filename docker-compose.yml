@@ -2,7 +2,7 @@
 # 使用：启动 Docker Desktop 后，在本目录执行  docker compose up -d
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: wechat-agent-mysql
     restart: unless-stopped
     environment:
