@@ -86,12 +86,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 - **告警**：QQ 通道页有「发送测试告警」按钮，调 `POST /api/admin/actions/alerts/test`。
 - **手机适配**：`≤720px` 概览卡 2 列、表格**转卡片列表**（靠每格 `data-label` 显示列名、`thead` 隐藏）、工具栏换行、无横向滚动。
 - **安全约定**：接口文本一律用 Vue 插值（自动转义），**不要用 `v-html`**（日志、用户记忆都是用户数据）。
-- **验证方式**（可复用）：`.ui-test\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/退出/手机端与视觉断言：
+- **验证方式**（可复用）：`tools\ui-verify\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/聊天视图/手机端与视觉断言（详细跑法见该目录 README）：
   ```powershell
-  $env:WG_PW='<口令>'; $env:SPA_BASE='https://120.25.170.92:8443'; $env:SPA_TAG='v5'
-  & "D:\soft\JetBrains\Python\python\python.exe" "C:\Users\33721\Desktop\wechat-agent\.ui-test\verify_spa.py"
+  $env:WG_PW='<口令>'; $env:ADMIN_USERNAME='rootlcw'; $env:SPA_BASE='https://120.25.170.92:8443'; $env:SPA_TAG='v7'
+  & "D:\soft\JetBrains\Python\python\python.exe" "C:\Users\33721\Desktop\wechat-agent\tools\ui-verify\verify_spa.py"
   ```
-  （本机调试可用 `.ui-test\spa_server.py` 代理模式，把 `SPA_BASE` 留空即走 `http://127.0.0.1:8899`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
+  （本机调试用同目录 `spa_server.py` 起代理、不设 `SPA_BASE`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
 ### 运维告警推送（2026-09-12 新增）
 
@@ -127,7 +127,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 13. 前端改动必须 `cd web && npm run build`（或走 CI 的 Dockerfile）才会进 jar；`src/main/resources/static/` 已在 `.gitignore`（构建产物不入库），新克隆的仓库直接 `mvn package` 是**不带界面**的。
 14. **经 stdin 传给 `bash` 的远程脚本里不能直接用 `docker exec -i`**：它会读走 stdin（也就是脚本剩下的部分），导致脚本在后面某行静默中断。要么 `< /dev/null`，要么把整段 SQL 用 heredoc（heredoc 会把该命令的 stdin 换成 here-doc，反而正常）。
 15. 后端 `AdminDashboardController.userList()` 用 `String.valueOf(u.getLastSeenAt())`，空值会序列化成**字符串 `"null"`**，前端按字符串排序时 `"null"` 会排到最前（`'n' > '2'`）。前端 `labels.js` 已把 `"null"/"undefined"/"NaN"` 当空值处理，用户列表也只用合法日期参与排序。
-16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` 与 `*@im.wechat`），用户已于 2026-09-12 要求清空，**已删除并留全库备份** `/root/wechat-agent-backup-20260912015146.sql.gz`（服务器上，98KB）。删除时用的条件：`last_channel IS NULL AND (user_id LIKE 'wx\_%' OR user_id LIKE '%@im.wechat')`。
+16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` 与 `*@im.wechat`），用户已于 2026-09-12 要求清空，**已删除并留全库备份** `/root/wechat-agent-backup-20260912015146.sql.gz`（服务器上，98KB，已 chmod 600）。删除时用的条件：`last_channel IS NULL AND (user_id LIKE 'wx\_%' OR user_id LIKE '%@im.wechat')`；模拟器测试账号 `sim-user-qq` 同日一并删除。
+17. **服务器旧镜像会累积**：CI 只跑 `docker image prune -f`（仅悬空镜像），带 tag 的历史 `wechat-agent:<sha>` 会一直留着（每个 431MB）。2026-09-12 已手动清到只剩当前 + 上一个（用于回滚），Docker 占用 3.15GB → 1.63GB。以后隔段时间清一次：保留最新两个 sha，其余 `docker rmi -f`。
+18. 服务器上的旧 `.env.bak-*` 会带着历史口令，只留最近 2 个即可。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -148,7 +150,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 - 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上，服务器 `.env` 的 `ADMIN_API_KEY`）。勾「记住账号密码」后凭据存浏览器本地，不再重复输入。
 - 远程**只有 4 个容器**：`wechat-agent-java` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`（nginx 网关与 VPN 全部拆除）；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
 - 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。移除 nginx 后内存 used 从 983MB 降到 **937MB**（available 933MB）。
-- 数据（已清空微信遗留）：`user_profile` **4**（3 个 QQ + 1 个模拟器测试账号）、`conversation_memory` 336（作者本人 304）、`reminder_task` **14**（全部属于作者本人）、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。
+- 数据（已清空微信与模拟器遗留）：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` 332（本人 304）、`reminder_task` **14**（全部属于本人）、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。
 - 告警已上线：`ALERT_ENABLED=true`，推送给 `9C81741E2EFD75552F7FB3EB4B0D821C`（本人），已实测手动测试告警发送成功。
 - 部署：push `main` 触发 CI（`docker/build-push-action` + gha 层缓存），只重建 agent 容器（QQ 断约 40 秒后自动重连）。
 - 遗留可选项：换成受信任证书（**需要域名**，8443 不需备案）；`/api/clawbot/*` 代码保留但已无页面入口；模拟器测试账号 `sim-user-qq` 若也要清掉，用同一条 SQL 条件即可。
@@ -167,3 +169,22 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 ## 9. 历史会话
 
 Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格式，其他 harness 读不到），因此本文件是唯一可迁移的记忆载体；如需更多细节可回头检索这些 jsonl。
+
+## 10. 工作区结构（2026-09-12 整理过，约 161MB）
+
+```
+C:\Users\33721\Desktop\wechat-agent\
+├─ AGENTS.md                    工作区记忆入口
+├─ DS-HARNESS-PROMPT.md         用户给 AI 的初始提示词
+├─ tools\ui-verify\             面板端到端验证工具（脚本 + README + 最新一轮截图）
+├─ .git-ca\                     导出的系统根证书，**git push 依赖它，不能删**
+├─ .trash\                      整理时留下的 research 打包（确认不用可删）
+└─ wechat-agent-java\           git 仓库（源码、配置、AGENTS.md 完整记忆）
+   ├─ target\ (~95MB)           Maven 构建产物，`mvn package` 可重建
+   ├─ web\node_modules\ (~53MB) 前端依赖，`npm install` 可重建
+   └─ logs\ (~5.5MB)            本地跑 JAR 时的日志
+```
+
+- 已删除（2026-09-12）：`research/`（打包进 `.trash`）、`wechat-agent-java/{tmp,backup,stored-media}`、工作区根 `logs/`、空的 `docker/`、`.ui-test/`（并入 `tools/ui-verify`）。
+- `backup/`、`stored-media/`、`logs/`、`tmp/` 都是**本地跑 JAR 时生成**的，远程服务器各有独立一份；以后本地调试完顺手删。
+- 验证面板不再用 `.ui-test`，跑法见 `tools\ui-verify\README.md`。
