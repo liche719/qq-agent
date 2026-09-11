@@ -20,7 +20,7 @@
 - 代码目录：`C:\Users\33721\Desktop\wechat-agent\wechat-agent-java`
 - 仓库：https://github.com/liche719/wechat-qq-agent （private，账号 liche719，主分支 main）
 - 入口类：`com.liche.wechatagent.WechatAgentApplication`
-- 包结构：agent / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user
+- 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`
 
@@ -52,43 +52,38 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
   - `docker-compose.remote.yml` —— 含 agent 服务，CI 使用
   - `.env`（权限 600，服务器侧凭据，不入库、CI 也不传）
   - `docker/searxng/settings.yml`
-- 容器：`wechat-agent-mysql`(mysql:8.0.46) / `wechat-agent-redis` / `wechat-agent-searxng` / `wechat-agent-java` / `wechat-agent-gateway`(nginx，面板公网入口)
+- 容器：`wechat-agent-mysql`(mysql:8.0.46) / `wechat-agent-redis` / `wechat-agent-searxng` / `wechat-agent-java` —— **只有 4 个**（nginx 网关已于 2026-09-12 按用户要求拆除）。
 - 数据卷：`wechat-agent-infra_mysql-data` / `_redis-data` / `_searxng-data` —— **任何操作都不允许删除或重建这些卷**。
-- agent 容器用 `network_mode: host`，只监听服务器 `127.0.0.1:8080`；MySQL/Redis/SearXNG 走 `127.0.0.1`。
-- 远程查看运维后台：
+- agent 容器用 `network_mode: host`，**直接对公网监听 `0.0.0.0:8443`（HTTPS，应用自带 TLS）**；MySQL/Redis/SearXNG 走 `127.0.0.1`。
+- 远程排查（面板走 HTTPS，注意 `-k`）：
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
-# 本机浏览器打开 http://127.0.0.1:8080/admin.html
+ssh root@120.25.170.92
+curl -sk https://127.0.0.1:8443/index.html -o /dev/null -w '%{http_code}\n'          # 前端
+curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overview    # 面板接口
 ```
 
 - 只重启 agent：`cd /opt/wechat-agent-infra && AGENT_IMAGE=wechat-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
 
-### 运维面板公网入口（nginx 网关 + 账号密码，2026-09-11 建立）
+### 运维面板访问方式（应用自带 HTTPS，2026-09-12 定型）
 
-- **这是面板唯一的访问方式**（用户 2026-09-11 明确弃用 VPN：WireGuard/socat 容器、`wg0`、51820 端口、`wireguard-data` 卷、`.env` 里的 WG 配置、宿主机 sysctl 文件**已全部拆除**，不要再加回来）。
-- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/`、`/index.html`、`/assets/`、`/api/admin/*`（前端是 Vue 单页应用，用 hash 路由，所以不需要服务端 rewrite），其余路径一律 404。
-- **agent 始终 `SERVER_ADDRESS=127.0.0.1`**：网关在宿主机上直连 `127.0.0.1:8080`，所以公网永远连不上 8080（不依赖安全组配置）。
-- **鉴权在应用层**（2026-09-12 改）：nginx 不做 Basic Auth（浏览器原生弹窗无法美化）。前端登录页提交「账号 + 密码」→ `POST /api/admin/session`（口令由 `AdminAccessFilter` 用 `X-Agent-Admin-Key` 头校验、账号由 `AdminSessionController` 校验）→ 存 `sessionStorage` → 之后每个请求都带头。**服务器 `.env` 必须同时有 `ADMIN_REQUIRE_KEY=true`、`ADMIN_API_KEY=<口令>`、`ADMIN_USERNAME=admin`**；`htpasswd` 与 `docker/gateway/auth/` 已删除。
-- 配置：仓库内 `docker/gateway/nginx.conf`（**CI 不传**，改动后需手动 scp 到服务器）。
-- 证书：服务器侧生成、不入库（`/opt/wechat-agent-infra/docker/gateway/certs/server.crt|server.key`，自签、含 IP SAN、10 年）。
-- 安全组需放行入方向 **TCP 8443**；手机首次访问自签证书会提示"不安全"，需手动继续。
-- 该网关的坑：
-  1. `nginx:alpine` 在阿里云镜像源里是 **4 年前的旧版本**，公网网关要用 `docker pull docker.m.daocloud.io/library/nginx:stable-alpine` 后再打 `nginx:stable-alpine` 标签（当前 1.30.4）。
-  2. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s），再叠加应用层「连续 5 次口令错误封禁 10 分钟」防爆破。
-  3. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
-  4. 若以后要把 Basic Auth 加回来：`htpasswd` 必须是容器内 nginx 用户（uid **101**）可读，否则带凭据的请求会返回 **500**（`open() failed (13: Permission denied)`）而不是 401。
-  5. **改了 `docker/gateway/nginx.conf` 必须显式重启网关容器**（`docker restart wechat-agent-gateway`）：它是挂载文件，`docker compose up -d gateway` 不会重建容器（输出是 `Running` 而不是 `Recreated`），配置不会生效——表现为旧配置继续工作（例如仍 302 到已删除的旧路径）。
+- **面板唯一入口**：`https://120.25.170.92:8443/`（Vue 单页应用）。用户明确弃用 VPN（WireGuard/socat/wg0/51820/wireguard-data/宿主 sysctl 已全拆）与 nginx 网关（一次性容器 + 限流都没必要），**不要再加回来**。
+- 应用直接用 PEM 证书起 HTTPS，无需 keystore：compose 里 `SERVER_ADDRESS=0.0.0.0`、`SERVER_PORT=8443`、`SERVER_SSL_ENABLED=true`、`SERVER_SSL_CERTIFICATE=/app/certs/server.crt`、`SERVER_SSL_CERTIFICATE_PRIVATE_KEY=/app/certs/server.key`，并把宿主机 `docker/tls/` 挂到 `/app/certs`（证书服务器侧生成、不入库；`server.key` 600、`server.crt` 644）。
+- 安全组只需放行 **TCP 8443**（与之前一致，URL 不变）；手机首次访问自签证书仍会提示“不安全”。
+- **鉴权分层**：口令经请求头 `X-Agent-Admin-Key` 由 `AdminAccessFilter` 校验（`ADMIN_REQUIRE_KEY=true` 时**这是唯一凭据**，因此不再要求来源 IP 在白名单内），账号由 `AdminSessionController` 经 `POST /api/admin/session` 校验；前端把凭据存 `sessionStorage`（勾「记住账号密码」则存 `localStorage`）。
+- **爆破防护**：`AdminAccessFilter` 连续 5 次口令错误即按**真实来源 IP** 封禁 10 分钟（见第 5 节第 10、14 条）。原来 nginx 的 `limit_req` 已随网关一起移除；QQ 机器人本身不受面板限流影响。
 
 ### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
-- **架构**：前端是独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，无 UI 框架），只通过 JSON 接口与后端通信；后端只提供 `/api/admin/*`。构建产物输出到 `src/main/resources/static/`，由 Dockerfile 的 node 阶段在打包镜像时生成，**部署仍是单容器**（nginx 网关 → agent）。
+- **架构**：前端是独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，无 UI 框架），只通过 JSON 接口与后端通信；后端只提供 `/api/admin/*` 与静态入口。构建产物输出到 `src/main/resources/static/`，由 Dockerfile 的 node 阶段在打包镜像时生成，**部署就是 agent 这一个容器**（没有额外网关）。
 - **本地开发**：`cd web && npm install`；`npm run dev`（Vite 5173，已把 `/api` 代理到 `http://127.0.0.1:8080`）。改完样式或组件必须 `npm run build`（直接写进后端 static 目录）才会进 jar。
 - **目录结构**：`web/src/views/`（LoginView、DashboardView）、`web/src/panels/`（Overview / Qq / Tasks / Users / Logs 五个页签）、`web/src/components/`（StatCard、StatusPill、InfoGrid、DataTable、JsonBlock、ChartBars）、`web/src/{api,auth,labels,router}.js`，以及**集中承载全部视觉规范的 `web/src/style.css`**。
 - **路由**：`createWebHashHistory`（`/#/login`、`/#/dashboard`），因此网关只需放行固定路径、不需要服务端 rewrite。
-- **视觉**：按 skill `deepseek-front-end-style` 的官网观感做**深色 + 网格 + 高级半透明玻璃**——冷蓝到深蓝的下沉渐变底、固定网格层（`body::before`：120px 间距，竖线略清晰、横线更淡、交点带极淡圆点，并用 mask 向外淡出）、玻璃面板（`rgba(255,255,255,.03~.08)` 渐变 + `backdrop-filter: blur(18px) saturate(140%)` + 22px 圆角 + 1px 冷蓝描边 + 内高光）、亮蓝 `#4d6bfe` 只用于主按钮/焦点/状态点。
+- **视觉（2026-09-12 按用户要求改成白色主调）**：白到浅蓝的极淡渐变底 + 极淡冷色网格（`body::before`：120px，竖线略清晰、横线更淡、交点小圆点，mask 向外淡出）；面板是**白色半透明玻璃**（`rgba(255,255,255,.58~.84)` 渐变 + `backdrop-filter: blur(20px) saturate(150%)` + 22px 圆角 + 白色描边 + 极淡外圈 `--ring`）；**强调色只用「淡蓝 → 白」渐变**（`#cfe0ff → #fff`，用在主按钮、选中页签、用户气泡、图表柱），蓝色不铺面积；状态色为柔和的绿/琥珀/红。改视觉只动 `web/src/style.css`。
 - **文案**：界面不出现英文状态词，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。`labels.js` 是唯一的状态词典，新增状态值改那里。
-- **登录**：账号 + 密码 → `POST /api/admin/session` → 成功后口令存 `sessionStorage`，路由守卫拦截 `/#/dashboard`；接口 401 清登录态并回登录页；顶栏有「退出登录」。
+- **登录**：账号默认 `rootlcw` + 密码 → `POST /api/admin/session`；勾「记住账号密码」时凭据写 `localStorage`（不勾只写 `sessionStorage`，关标签页即退出），退出登录会清凭据但保留账号名。路由守卫拦截 `/#/dashboard`，接口 401 自动清登录态并回登录页。
+- **用户与记忆页**：用户列表按最近活动倒序（**每个用户一条**，空时间的排最后），点「查看记录」进入聊天式视图——用户/机器人左右气泡、可上下滚动、`加载更早的消息` 分页往前翻、可选显示工具调用（`system` 消息）；同一页内还可用分段控件切到「长期记忆」「提醒任务」。
+- **告警**：QQ 通道页有「发送测试告警」按钮，调 `POST /api/admin/actions/alerts/test`。
 - **手机适配**：`≤720px` 概览卡 2 列、表格**转卡片列表**（靠每格 `data-label` 显示列名、`thead` 隐藏）、工具栏换行、无横向滚动。
 - **安全约定**：接口文本一律用 Vue 插值（自动转义），**不要用 `v-html`**（日志、用户记忆都是用户数据）。
 - **验证方式**（可复用）：`.ui-test\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/退出/手机端与视觉断言：
@@ -98,9 +93,19 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   ```
   （本机调试可用 `.ui-test\spa_server.py` 代理模式，把 `SPA_BASE` 留空即走 `http://127.0.0.1:8899`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
+### 运维告警推送（2026-09-12 新增）
+
+- `alert` 包里的 `AlertNotifier` 每 60 秒检查一次：QQ 网关是否断开、MySQL/Redis/Quartz 是否可用、磁盘可用空间是否低于阈值（默认 2GB）、堆内存是否超过阈值（默认 85%）。
+- 只在**问题新出现**或**问题恢复**时推送，同一问题在 `repeat-minutes`（默认 30 分钟）内不重复；启动后有 2 分钟宽限期，避免重启瞬间网关未连上就误报。
+- 推送目标由 `.env` 的 `ALERT_QQ_OPENID` 指定（**是 openid，不是 QQ 号**；管理员本人的 openid 是 `9C81741E2EFD75552F7FB3EB4B0D821C`，从 `user_profile` 里按最近活动确认），**只推给这一个人**，不会推给其它用户。
+- 手动验证：面板「QQ 通道」页的「发送测试告警」按钮，或 `POST /api/admin/actions/alerts/test`（需带口令头）。
+- 注意 QQ 官方机器人对**主动消息**有额度限制，因此告警是「尽力而为」：发送失败会记 WARN 日志（`运维告警推送失败（可能是 QQ 主动消息额度限制）`），面板里的状态永远是最可靠的来源。
+- 配置项：`ALERT_ENABLED`、`ALERT_QQ_OPENID`、`ALERT_REPEAT_MINUTES`、`ALERT_CHECK_INTERVAL_MS`、`ALERT_DISK_FREE_MIN_BYTES`、`ALERT_HEAP_USED_MAX_PERCENT`、`ALERT_STARTUP_GRACE_SECONDS`。
+
 ## 4. CI/CD
 
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
+- 构建步骤用 `docker/build-push-action@v6` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（实测纯后端改动约 192 秒、含前端全量约 240 秒）。
 - 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f`。MySQL/Redis/SearXNG 及其卷不受影响。
 - 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥文件已删除，需要轮换时重新生成并更新 Secret）。
 - 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
@@ -116,10 +121,13 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 7. 提交信息风格：小写英文短句（例：`run remote agent on host network and document deploy secrets`）。
 8. 不要 `git commit`/建分支除非用户明确要求；本项目历史提交由用户账号 `YOLO <3372134858@qq.com>` 完成。
 9. **`/api/admin/*` 的鉴权语义**（2026-09-12 修正）：`AdminAccessFilter` 原先对 dashboard 路径**只校验来源 IP 就直接放行**，密钥形同虚设（面板数据全靠 nginx Basic Auth 挡着）。现已统一为「带正确 `X-Agent-Admin-Key` 头，或在 require-key=false 时回环免密钥」；`require-key=true`（服务器 `.env`）时面板接口必须带口令。历史测试 `AdminAccessFilterTest` 正是按这个语义写的（其中「回环在 local 模式下免密钥」一条与项目文档相冲突，属预期差异）；CI 的 Dockerfile 用 `-DskipTests`，不跑测试。
-10. 失败封禁按**来源 IP** 计数：直连来源是回环时改用 `X-Forwarded-For` 首个地址，否则经 nginx 反代后所有请求共用 `127.0.0.1`，攻击者故意输错 5 次就能把正常用户一起封禁 10 分钟。
+10. 失败封禁按**来源 IP** 计数：直连来源是回环时用 `X-Forwarded-For` 的**最后一段**（代理追加的那段才是真实地址；取第一段会被客户端伪造，既可能绕过封禁也可能反过来封禁别人）。实测：服务器本机连错 5 次后本机被 429，同时另一来源 IP 仍然 200 —— 别人乱输不会连累你。
 11. **CSS 里只写标准 `backdrop-filter`**：手写一行 `-webkit-backdrop-filter` 会被 Vite 8 的 CSS 压缩（lightningcss）合并掉标准属性，构建产物里只剩带前缀的那条，而 Chromium 根本不认（`CSS.supports('-webkit-backdrop-filter')` 为 false）→ 毛玻璃**静默失效**。让构建工具自己加前缀即可。
 12. 不要用 PowerShell 5.1 的 `Get-Content -Raw` + `Set-Content` 往返改 UTF-8 源文件：会按 ANSI 读取、再写成带 BOM 的 UTF-8，中文全变乱码（Python 直接语法报错）。用 write 工具或 `[IO.File]::ReadAllText` + `WriteAllText(..., UTF8Encoding($false))`。
 13. 前端改动必须 `cd web && npm run build`（或走 CI 的 Dockerfile）才会进 jar；`src/main/resources/static/` 已在 `.gitignore`（构建产物不入库），新克隆的仓库直接 `mvn package` 是**不带界面**的。
+14. **经 stdin 传给 `bash` 的远程脚本里不能直接用 `docker exec -i`**：它会读走 stdin（也就是脚本剩下的部分），导致脚本在后面某行静默中断。要么 `< /dev/null`，要么把整段 SQL 用 heredoc（heredoc 会把该命令的 stdin 换成 here-doc，反而正常）。
+15. 后端 `AdminDashboardController.userList()` 用 `String.valueOf(u.getLastSeenAt())`，空值会序列化成**字符串 `"null"`**，前端按字符串排序时 `"null"` 会排到最前（`'n' > '2'`）。前端 `labels.js` 已把 `"null"/"undefined"/"NaN"` 当空值处理，用户列表也只用合法日期参与排序。
+16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` 与 `*@im.wechat`），用户已于 2026-09-12 要求清空，**已删除并留全库备份** `/root/wechat-agent-backup-20260912015146.sql.gz`（服务器上，98KB）。删除时用的条件：`last_channel IS NULL AND (user_id LIKE 'wx\_%' OR user_id LIKE '%@im.wechat')`。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -134,15 +142,16 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 02:00）
+## 7. 当前状态（2026-09-12 02:15）
 
-- 远程 `wechat-agent-java` 运行中（镜像来自 commit `a283aa9`，含 Vue 前端）；带口令请求 `/api/admin/overview` 返回 200、`status=UP`、QQ 通道 `UP`；数据 `user_profile` 21、`reminder_task` 23、`QRTZ_TRIGGERS` 2。
-- 面板**唯一入口**：`https://120.25.170.92:8443/`（Vue 单页应用，hash 路由）→ 未登录自动进 `/#/login`；账号 + 密码登录，口令存标签页 `sessionStorage`。VPN 相关组件已按用户要求**全部拆除**。
-- 鉴权链路：nginx（TLS + 限流，**无 Basic Auth**）→ agent 的 `AdminAccessFilter`（`ADMIN_REQUIRE_KEY=true` + `ADMIN_API_KEY`，连续 5 次错误按来源 IP 封禁 10 分钟）+ `AdminSessionController`（账号校验）。
-- 远程 5 个容器：`wechat-agent-java` / `wechat-agent-gateway` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
-- 公网暴露面：**22（SSH）、8443（登录页 + 面板 + 接口）**；8080 / 51820 / 51821 均未开。
-- 部署方式：push `main` 触发 CI（Dockerfile 里先 node 构建前端再 maven 打包），只重建 agent 容器（QQ 断约 40 秒后自动重连）；改 `docker/gateway/nginx.conf` 需手动 scp **并显式 `docker restart wechat-agent-gateway`**。
-- 遗留可选项：换成受信任证书（**需要域名**，8443 不需要备案）；登录加"记住我"（现在关标签页即退出）；`/api/clawbot/*` 保留但已无页面入口。
+- 远程 `wechat-agent-java` 运行中（commit `acd67e1`），**应用自带 HTTPS 监听 `0.0.0.0:8443`**；`status=UP`、QQ 通道 `UP`。
+- 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上，服务器 `.env` 的 `ADMIN_API_KEY`）。勾「记住账号密码」后凭据存浏览器本地，不再重复输入。
+- 远程**只有 4 个容器**：`wechat-agent-java` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`（nginx 网关与 VPN 全部拆除）；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
+- 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。移除 nginx 后内存 used 从 983MB 降到 **937MB**（available 933MB）。
+- 数据（已清空微信遗留）：`user_profile` **4**（3 个 QQ + 1 个模拟器测试账号）、`conversation_memory` 336（作者本人 304）、`reminder_task` **14**（全部属于作者本人）、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。
+- 告警已上线：`ALERT_ENABLED=true`，推送给 `9C81741E2EFD75552F7FB3EB4B0D821C`（本人），已实测手动测试告警发送成功。
+- 部署：push `main` 触发 CI（`docker/build-push-action` + gha 层缓存），只重建 agent 容器（QQ 断约 40 秒后自动重连）。
+- 遗留可选项：换成受信任证书（**需要域名**，8443 不需备案）；`/api/clawbot/*` 代码保留但已无页面入口；模拟器测试账号 `sim-user-qq` 若也要清掉，用同一条 SQL 条件即可。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
@@ -151,7 +160,7 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 |---|---|
 | 本地 LLM / QQ 凭据 | `wechat-agent-java\.env`（gitignore） |
 | 服务器容器凭据 | 服务器 `120.25.170.92:/opt/wechat-agent-infra/.env`（600） |
-| 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（默认 `admin`）与 `ADMIN_API_KEY`（600）；明文只由用户保存（旧 Basic Auth 的 `htpasswd` 已删除） |
+| 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（现为 `rootlcw`）与 `ADMIN_API_KEY`（600）；明文只由用户保存 |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
