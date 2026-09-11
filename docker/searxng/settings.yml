@@ -1,0 +1,41 @@
+# Read the documentation before extending the defaults:
+# https://docs.searxng.org/admin/settings/
+#
+# 远程服务器外网搜索配置：
+# - 关闭反爬限流（后端直接调用 JSON API）
+# - 显式启用 json 输出格式（默认只允许 html）
+# - 同时启用常用国际和国内搜索引擎，由 SearXNG 按可用性聚合结果
+
+use_default_settings: true
+
+server:
+  secret_key: "au3YAZnq1wPU6lmytCOJ7R1boCpGOuE"
+  image_proxy: true
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false
+  - name: 360search
+    disabled: false
