@@ -150,10 +150,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 03:20）
+## 7. 当前状态（2026-09-12 03:30）
 
-- 远程 `wechat-agent-java` 运行中（commit `bc5d004`），**应用自带 HTTPS 监听 `0.0.0.0:8443`**；`status=UP`、QQ 通道 `UP`。
-- 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用，6 个页签：总览 / QQ 通道 / 模型与搜索 / 任务 / 用户与记忆 / 日志）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。
+- 远程 `wechat-agent-java` 运行中（commit `f15dd4e`，其后 `0c770f5` 为文档提交），**应用自带 HTTPS 监听 `0.0.0.0:8443`**；`status=UP`、QQ 通道 `UP`；CI（run 34637290177）含部署后自检全绿。
+- 面板入口：`https://120.25.170.92:8443/`（Vue 单页应用，6 个页签：总览 / QQ 通道 / 模型与搜索 / 任务 / 用户与记忆 / 日志）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。
 - 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
 - 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。内存 used 约 940MB / available 930MB。
 - 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` 332（本人 304）、`reminder_task` **14**、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。微信与模拟器残留已清空。
