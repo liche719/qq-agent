@@ -66,26 +66,31 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 ### 运维面板公网入口（nginx 网关 + 账号密码，2026-09-11 建立）
 
 - **这是面板唯一的访问方式**（用户 2026-09-11 明确弃用 VPN：WireGuard/socat 容器、`wg0`、51820 端口、`wireguard-data` 卷、`.env` 里的 WG 配置、宿主机 sysctl 文件**已全部拆除**，不要再加回来）。
-- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/admin.html`、`/admin.js`、`/api/admin/*`，其余路径 404。
+- 容器 `wechat-agent-gateway`（`nginx:stable-alpine`，host 网络，监听公网 **8443/TLS**），反代到只绑回环的 agent；**只公开** `/login.html`、`/login.js`、`/admin.html`、`/admin.js`、`/api/admin/*`，根路径 302 跳登录页，其余路径 404。
 - **agent 始终 `SERVER_ADDRESS=127.0.0.1`**：网关在宿主机上直连 `127.0.0.1:8080`，所以公网永远连不上 8080（不依赖安全组配置）。
+- **鉴权在应用层**（2026-09-12 改）：nginx 不再做 Basic Auth（浏览器原生弹窗没法美化），改为 `login.html` 收口令 → 存 `sessionStorage` → 每次请求带 `X-Agent-Admin-Key` 头。**所以服务器 `.env` 必须同时有 `ADMIN_REQUIRE_KEY=true` 和 `ADMIN_API_KEY=<强口令>`**；`htpasswd` 与 `docker/gateway/auth/` 已删除，compose 里也去掉了该挂载。
 - 配置：仓库内 `docker/gateway/nginx.conf`（**CI 不传**，改动后需手动 scp 到服务器）。
-- 服务器侧生成、不入库（都在 `/opt/wechat-agent-infra/docker/gateway/`）：`certs/server.crt|server.key`（自签、含 IP SAN、10 年）、`auth/htpasswd`（用户 `admin`，apr1 哈希）。
+- 证书：服务器侧生成、不入库（`/opt/wechat-agent-infra/docker/gateway/certs/server.crt|server.key`，自签、含 IP SAN、10 年）。
 - 安全组需放行入方向 **TCP 8443**；手机首次访问自签证书会提示"不安全"，需手动继续。
 - 该网关的坑：
-  1. **htpasswd 权限**：必须是容器内 nginx 用户（uid **101**）可读，否则"带凭据"的请求返回 **500**（错误日志 `open() "/etc/nginx/auth/htpasswd" failed (13: Permission denied)`）而不是 401。已 `chown 101:101 htpasswd` + `chmod 600`。
-  2. `nginx:alpine` 在阿里云镜像源里是 **4 年前的旧版本**，公网网关要用 `docker pull docker.m.daocloud.io/library/nginx:stable-alpine` 后再打 `nginx:stable-alpine` 标签（当前 1.30.4）。
-  3. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s，实测连续 40 次请求后出现 429），防公网爆破。
-  4. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
+  1. `nginx:alpine` 在阿里云镜像源里是 **4 年前的旧版本**，公网网关要用 `docker pull docker.m.daocloud.io/library/nginx:stable-alpine` 后再打 `nginx:stable-alpine` 标签（当前 1.30.4）。
+  2. 限流 `limit_req zone=panel rate=5r/s burst=20 nodelay`（面板正常轮询约 0.5r/s），再叠加应用层「连续 5 次口令错误封禁 10 分钟」防爆破。
+  3. 该容器上 `docker exec` 会挂住（会话无输出直到超时）；查日志用 `docker logs wechat-agent-gateway`（nginx 的 access/error 日志都指向 stdout/stderr），进容器排查用 `docker run --rm`。
+  4. 若以后要把 Basic Auth 加回来：`htpasswd` 必须是容器内 nginx 用户（uid **101**）可读，否则带凭据的请求会返回 **500**（`open() failed (13: Permission denied)`）而不是 401。
 
-### 运维面板界面（2026-09-11 重做，commit `59a7831`）
+### 运维面板界面（2026-09-12 按深度求索前端风格重做）
 
-- 仍然是**两个静态文件**：`static/admin.html`（结构 + 内联 CSS，17 KB）与 `static/admin.js`（原生 JS，22 KB）。**没有任何框架与构建步骤**，`mvn package` 直接打进 jar。
-- **必须保持"只有这两个文件"**：网关只放行 `/admin.html`、`/admin.js`、`/api/admin/*`，所以**不能引入外部 CDN、字体、图标库或额外 CSS/JS 文件**（新界面已完全自包含，可用 `Select-String -Pattern 'https?://'` 自查）。
-- 界面结构：顶栏（应用/QQ 状态药丸 + 刷新间隔 + 立即刷新 + 进度条）、4 张概览卡、5 个标签页（总览 / QQ 通道 / 任务 / 用户与记忆 / 日志）、底部状态行；标签页与刷新间隔记在 `localStorage`。
-- 手机适配（关键改动）：`≤720px` 时概览卡 2 列、表格**转卡片列表**（每格用 `data-label` 显示列名、`thead` 隐藏）、按钮 32px 触控高度、无横向滚动；`≤900px` 时总览两栏变单栏。
-- 交互细节：401 会**停止自动刷新**并提示重新登录（避免被限流）、429 提示被限流、任务/用户详情支持翻页、JSON 用 `<details>` 折叠。
+- **四个静态文件，零框架零构建**：`static/login.html` / `login.js`（登录页）、`static/admin.html` / `admin.js`（面板）。`mvn package` 直接打进 jar。
+- **必须保持"只有这四个文件"**：网关只放行 `/login.html`、`/login.js`、`/admin.html`、`/admin.js`、`/api/admin/*`，所以**不能引入外部 CDN、字体、图标库或额外 CSS/JS 文件**（界面已完全自包含，可用 `Select-String -Pattern 'https?://'` 自查）。加新页面时记得同步改 `docker/gateway/nginx.conf` 并 scp。
+- 风格取自 skill `deepseek-front-end-style` 的**工作台/表单**场景：浅蓝灰渐变底（`#e9f1ff → #e8eef7`）、极淡网格层（竖线略清晰、横线更淡，120px 间距，几乎不可察觉）、白色半透明圆角面板（24px 圆角 + 12px 模糊 + 弱边框）、蓝色焦点（`#2d72ca`／`#1857a9`）、**不使用深色下沉层和大展示块**。登录页按表单场景做最安静的单列布局，无网格。
+- 文案规则：界面**不出现英文状态词**，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。每个页面只留一个主要按钮（面板是「立即刷新」，登录页是「进入面板」）。
+- 登录流程：`login.html` 校验口令（`GET /api/admin/overview` + `X-Agent-Admin-Key` 头）→ 存 `sessionStorage` → 跳 `admin.html`；面板每次请求都带头，401 自动清口令并回登录页（`?expired=1` 会给出提示）。顶栏有「退出登录」。
+- 手机适配：`≤720px` 时概览卡 2 列、表格**转卡片列表**（每格用 `data-label` 显示列名、`thead` 隐藏）、无横向滚动；`≤900px` 时总览两栏变单栏。
 - 安全约定：所有来自接口的文本一律用 `textContent`/`createElement` 渲染，**不许用 innerHTML**（日志、用户记忆都是用户数据）。
-- 验证方式（本次用过，可复用）：`node --check admin.js` 校语法；本地用 Python 起一个把 `/api/admin/*` 反代到网关的静态服务器，再用 Playwright（Chromium 已装）对**公网真实地址**做布局与交互断言（横向溢出、网格列数、表格卡片化、控制台报错）。脚本留在 `C:\Users\33721\Desktop\wechat-agent\.ui-test\`。
+- 验证方式（可复用）：`node --check` 校 JS 语法；Playwright（Chromium 已装）直接打**公网真实地址**跑布局与交互断言。脚本在 `C:\Users\33721\Desktop\wechat-agent\.ui-test\`：
+  - `verify_login_flow.py`：登录页 → 错误口令 → 正确口令 → 面板 → 退出 → 手机端（含浅色底/网格/圆角断言）。
+  - `verify_public_ui.py`：旧版（Basic Auth 时代）的公网面板断言，仍可用作回归。
+  - 注意：Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
 ## 4. CI/CD
 
@@ -104,6 +109,8 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 6. 用管道把 `.env` 写到服务器会带 UTF-8 BOM，docker compose 读取前需去掉（`sed -i '1s/^\xEF\xBB\xBF//'`）。
 7. 提交信息风格：小写英文短句（例：`run remote agent on host network and document deploy secrets`）。
 8. 不要 `git commit`/建分支除非用户明确要求；本项目历史提交由用户账号 `YOLO <3372134858@qq.com>` 完成。
+9. **`/api/admin/*` 的鉴权语义**（2026-09-12 修正）：`AdminAccessFilter` 原先对 dashboard 路径**只校验来源 IP 就直接放行**，密钥形同虚设（面板数据全靠 nginx Basic Auth 挡着）。现已统一为「带正确 `X-Agent-Admin-Key` 头，或在 require-key=false 时回环免密钥」；`require-key=true`（服务器 `.env`）时面板接口必须带口令。历史测试 `AdminAccessFilterTest` 正是按这个语义写的（其中「回环在 local 模式下免密钥」一条与项目文档相冲突，属预期差异）；CI 的 Dockerfile 用 `-DskipTests`，不跑测试。
+10. 失败封禁按**来源 IP** 计数：直连来源是回环时改用 `X-Forwarded-For` 首个地址，否则经 nginx 反代后所有请求共用 `127.0.0.1`，攻击者故意输错 5 次就能把正常用户一起封禁 10 分钟。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -118,14 +125,15 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-11 21:10）
+## 7. 当前状态（2026-09-12 01:10）
 
-- 远程 `wechat-agent-java` 运行中，`/api/admin/overview` 返回 200、`status=UP`、QQ 通道 `UP`；数据 `user_profile` 21、`reminder_task` 23、`QRTZ_TRIGGERS` 2。
-- 面板**只有一条访问路径**：`https://120.25.170.92:8443/admin.html`（nginx 网关 + Basic Auth 用户 `admin`）；VPN 相关组件已按用户要求**全部拆除**。
-- 远程只有 5 个容器：`wechat-agent-java` / `wechat-agent-gateway` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
-- 公网暴露面：**22（SSH）、8443（面板，需密码）**；8080 / 51820 / 51821 均未开。
-- 部署方式不变：push `main` 触发 CI，只重建 agent 容器（QQ 会断约 40 秒后自动重连）。
-- 遗留可选项：把自签证书换成受信任证书（**需要域名**，8443 不需要备案）；再加一个正式登录页（现在用浏览器原生 Basic Auth 弹窗）；`/api/clawbot/*` 保留但已无页面入口。
+- 远程 `wechat-agent-java` 运行中（镜像来自 commit `6091556`），`/api/admin/overview`（带口令）返回 200、`status=UP`、QQ 通道 `UP`；数据 `user_profile` 21、`reminder_task` 23、`QRTZ_TRIGGERS` 2。
+- 面板**唯一入口**：`https://120.25.170.92:8443/` → 302 到登录页 `login.html`，输口令后进 `admin.html`；口令存在标签页 `sessionStorage`。VPN 相关组件已按用户要求**全部拆除**。
+- 鉴权链路：nginx（TLS+限流，**无 Basic Auth**）→ agent 的 `AdminAccessFilter`（`ADMIN_REQUIRE_KEY=true` + `ADMIN_API_KEY`，连续 5 次错误按来源 IP 封禁 10 分钟）。
+- 远程 5 个容器：`wechat-agent-java` / `wechat-agent-gateway` / `wechat-agent-mysql` / `wechat-agent-redis` / `wechat-agent-searxng`；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
+- 公网暴露面：**22（SSH）、8443（登录页+面板）**；8080 / 51820 / 51821 均未开。
+- 部署方式不变：push `main` 触发 CI，只重建 agent 容器（QQ 会断约 40 秒后自动重连）；改 `docker/gateway/nginx.conf` 需手动 scp 并只重启 gateway。
+- 遗留可选项：换成受信任证书（**需要域名**，8443 不需要备案）；给面板加"记住我"（现在关标签页即退出）；`/api/clawbot/*` 保留但已无页面入口。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行。
 
 ## 8. 凭据索引（只写位置，不写明文）
@@ -134,7 +142,7 @@ ssh -L 8080:127.0.0.1:8080 root@120.25.170.92
 |---|---|
 | 本地 LLM / QQ 凭据 | `wechat-agent-java\.env`（gitignore） |
 | 服务器容器凭据 | 服务器 `120.25.170.92:/opt/wechat-agent-infra/.env`（600） |
-| 运维面板公网登录（用户 `admin`） | 服务器 `/opt/wechat-agent-infra/docker/gateway/auth/htpasswd`（600，chown 101:101）；明文只由用户保存 |
+| 运维面板登录口令 | 服务器 `.env` 的 `ADMIN_API_KEY`（600）；明文只由用户保存（旧 Basic Auth 的 `htpasswd` 已删除） |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
