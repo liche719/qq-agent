@@ -1,0 +1,75 @@
+services:
+  agent:
+    image: ${AGENT_IMAGE:-wechat-agent:latest}
+    container_name: wechat-agent-java
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: ${MYSQL_DB:-wechat_agent}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      SEARXNG_BASE_URL: http://searxng:8080
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      QQ_ENABLED: ${QQ_ENABLED:-false}
+      QQ_APP_ID: ${QQ_APP_ID:-}
+      QQ_CLIENT_SECRET: ${QQ_CLIENT_SECRET:-}
+      ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
+      ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY: ${ADMIN_ALLOW_LOOPBACK_WITHOUT_KEY:-true}
+    ports:
+      - "${AGENT_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      searxng:
+        condition: service_started
+
+  mysql:
+    image: mysql:8.0.46
+    container_name: wechat-agent-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DB:-wechat_agent}
+      TZ: Asia/Shanghai
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+08:00"]
+    ports: ["127.0.0.1:3306:3306"]
+    volumes: ["mysql-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: wechat-agent-redis
+    restart: unless-stopped
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis-data:/data"]
+    command: redis-server --appendonly yes
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: wechat-agent-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888
+      TZ: Asia/Shanghai
+    ports: ["127.0.0.1:8888:8080"]
+    volumes:
+      - searxng-data:/etc/searxng
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+
+volumes:
+  mysql-data:
+  redis-data:
+  searxng-data:

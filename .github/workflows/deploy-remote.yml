@@ -1,0 +1,50 @@
+name: Build and deploy remote agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: remote-agent-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: docker build --tag wechat-agent:${GITHUB_SHA} .
+
+      - name: Export image
+        run: docker save wechat-agent:${GITHUB_SHA} | gzip > wechat-agent-${GITHUB_SHA}.tar.gz
+
+      - name: Install SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload image and deployment files
+        run: |
+          scp -i ~/.ssh/deploy_key wechat-agent-${GITHUB_SHA}.tar.gz \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/"
+          scp -i ~/.ssh/deploy_key docker-compose.remote.yml \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/wechat-agent-infra/docker-compose.remote.yml"
+          scp -i ~/.ssh/deploy_key docker/searxng/settings.yml \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/wechat-agent-infra/docker/searxng/settings.yml"
+
+      - name: Load image and update only Java service
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "set -eu; mkdir -p /opt/wechat-agent-infra/docker/searxng; docker load < /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; cd /opt/wechat-agent-infra; AGENT_IMAGE=wechat-agent:${GITHUB_SHA} docker compose -f docker-compose.remote.yml up -d --no-build agent; docker image prune -f; rm -f /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; docker compose -f docker-compose.remote.yml ps agent"
