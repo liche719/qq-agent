@@ -4,7 +4,8 @@ services:
     container_name: wechat-agent-java
     restart: unless-stopped
     # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机。
-    # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外只监听 8443。
+    # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外监听标准端口 443，
+    # 因此访问地址不带端口：https://liche.cloud/
     network_mode: host
     # 日志上限：json-file 默认不轮转，容器 stdout 会无限增长（应用日志同时写控制台）
     logging:
@@ -14,7 +15,7 @@ services:
         max-file: "3"
     environment:
       SERVER_ADDRESS: ${SERVER_ADDRESS:-0.0.0.0}
-      SERVER_PORT: ${SERVER_PORT:-8443}
+      SERVER_PORT: ${SERVER_PORT:-443}
       SERVER_SSL_ENABLED: "true"
       SERVER_SSL_CERTIFICATE: /app/certs/server.crt
       SERVER_SSL_CERTIFICATE_PRIVATE_KEY: /app/certs/server.key

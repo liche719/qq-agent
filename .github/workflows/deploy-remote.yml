@@ -65,8 +65,8 @@ jobs:
       # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
       - name: Smoke check deployed panel
         run: |
-          BASE="https://${{ secrets.DEPLOY_HOST }}:8443"
-          DOMAIN="https://liche.cloud:8443"
+          BASE="https://${{ secrets.DEPLOY_HOST }}"
+          DOMAIN="https://liche.cloud"
           KEY="${{ secrets.ADMIN_API_KEY }}"
           code() { curl -sk -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
           # 域名这一组不加 -k：验证的是真实证书链，证书过期或域名解析挂了都会让流水线变红
