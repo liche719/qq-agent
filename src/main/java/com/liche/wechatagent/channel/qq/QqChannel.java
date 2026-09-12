@@ -923,16 +923,31 @@ public class QqChannel implements WeChatChannel {
         long started = System.nanoTime();
         try {
             boolean sent = sendWithPassiveFirst(userId, replyToMsgId, text);
-            if (sent) textSendSuccessCount.incrementAndGet(); else textSendFailureCount.incrementAndGet();
-            return sent;
+            return recordTextSend(started, sent);
         } finally {
-            textSendDurationMillis.addAndGet((System.nanoTime() - started) / 1_000_000L);
             if (!isGroupConversation(userId)) {
                 stopTyping(userId);
             }
             // 清理未使用的流式会话（确认流程等未走 agent 的回复不会触发 onDone）
             streamStates.remove(userId);
         }
+    }
+
+    /**
+     * 统一的文本发送计数入口。
+     *
+     * <p>流式回复（{@code sendStreamFrame}、以及工具脚注那条普通发送）以前没有计入
+     * {@code textSendSuccess/Failure}：机器人明明回复成功，面板「QQ 消息 · 发送成功」却一直是 0。
+     * 这里把成功/失败与耗时都补上，保证统计口径一致。
+     */
+    private boolean recordTextSend(long startedNanos, boolean sent) {
+        if (sent) {
+            textSendSuccessCount.incrementAndGet();
+        } else {
+            textSendFailureCount.incrementAndGet();
+        }
+        textSendDurationMillis.addAndGet(Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L));
+        return sent;
     }
 
     @Override
@@ -1284,7 +1299,8 @@ public class QqChannel implements WeChatChannel {
                 boolean toolFooter = finalContent.contains("\n\n> _调用工具：");
                 if (toolFooter && !state.hasPartialContent) {
                     log.info("[qq] sending tool footer through standard markdown user={}", userId);
-                    boolean sent = sendWithPassiveFirst(userId, passiveMsgId, finalContent);
+                    long startedFooter = System.nanoTime();
+                    boolean sent = recordTextSend(startedFooter, sendWithPassiveFirst(userId, passiveMsgId, finalContent));
                     state.failed = !sent;
                     state.done = sent;
                     streamStates.remove(userId);
@@ -1292,7 +1308,8 @@ public class QqChannel implements WeChatChannel {
                 }
                 log.info("[qq] stream final frame user={} toolFooter={} len={}", userId,
                         toolFooter, finalContent.length());
-                boolean sent = sendStreamFrame(userId, passiveMsgId, state, finalContent, 10);
+                long startedFinal = System.nanoTime();
+                boolean sent = recordTextSend(startedFinal, sendStreamFrame(userId, passiveMsgId, state, finalContent, 10));
                 state.failed = !sent;
                 state.done = sent;
                 streamStates.remove(userId);
