@@ -27,8 +27,8 @@ public class CommandRegistry {
         TEXT_ALIASES.put("设置助手人设", "set-prompt");
         TEXT_ALIASES.put("陪练", "practice");
         TEXT_ALIASES.put("开始陪练", "practice");
-        TEXT_ALIASES.put("英语陪练", "practice");
         TEXT_ALIASES.put("面试陪练", "practice");
+        TEXT_ALIASES.put("模拟面试", "practice");
         TEXT_ALIASES.put("结束陪练", "practice");
         TEXT_ALIASES.put("开启每日复盘", "care");
         TEXT_ALIASES.put("开启每周复盘", "care");
@@ -71,7 +71,7 @@ public class CommandRegistry {
         if (!slash) {
             name = aliasName(trimmed);
             if (handlers.get(name) == null) {
-                // 「中文指令 + 参数」形式（例如「陪练 英语」）：整串不是别名时退回按首词识别，余下作为参数
+                // 「中文指令 + 参数」形式（例如「陪练 面试」）：整串不是别名时退回按首词识别，余下作为参数
                 String byHead = aliasName(parts[0]);
                 if (handlers.get(byHead) != null) {
                     name = byHead;
@@ -84,10 +84,9 @@ public class CommandRegistry {
                 args = trimmed.contains("每日") ? "daily" : trimmed.contains("每周") ? "weekly" : "off";
             } else if (name.equals("practice")) {
                 args = switch (trimmed) {
-                    case "英语陪练" -> "english";
-                    case "面试陪练" -> "interview";
+                    case "面试陪练", "模拟面试" -> "interview";
                     case "结束陪练" -> "off";
-                    // 「陪练 英语」「陪练 off」这类由首词解析带来的参数保持原样
+                    // 「陪练 面试」「陪练 Java 后端 3 年」这类由首词解析带来的参数保持原样
                     default -> args;
                 };
             }

@@ -42,7 +42,7 @@ public class ToolRegistry {
     public ToolRegistry(com.liche.wechatagent.search.SearchTool searchTool,
                          com.liche.wechatagent.search.WebPageTool webPageTool,
                          com.liche.wechatagent.tool.ReminderTool reminderTool,
-                         com.liche.wechatagent.tool.PracticeTool practiceTool,
+                         com.liche.wechatagent.tool.InterviewTool interviewTool,
                          com.liche.wechatagent.tool.TimeTool timeTool,
                          com.liche.wechatagent.media.MediaMemoryTool mediaMemoryTool,
                          com.liche.wechatagent.media.WebFileTool webFileTool,
@@ -50,7 +50,7 @@ public class ToolRegistry {
                          com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore,
                          @Value("${agent.tool-retry-attempts:1}") int retryAttempts,
                          @Value("${agent.tool-max-result-chars:8000}") int maxToolResultChars) {
-        this(List.of(searchTool, webPageTool, reminderTool, practiceTool, timeTool, mediaMemoryTool, webFileTool),
+        this(List.of(searchTool, webPageTool, reminderTool, interviewTool, timeTool, mediaMemoryTool, webFileTool),
                 retryAttempts, maxToolResultChars, invocationService, taskStateStore);
     }
 

@@ -61,7 +61,7 @@ public class UserService {
         userLogService.record(userId, "SET_PROMPT", Map.of("personaLength", newPersona.trim().length()));
     }
 
-    /** /陪练：设置或清除陪练模式（english / interview，null 或空表示关闭）；人设本身不动。 */
+    /** /陪练：设置或清除陪练模式（interview，null 或空表示关闭）；人设本身不动。 */
     public void setCoachMode(String userId, String coachMode) {
         UserProfile profile = get(userId);
         String normalized = coachMode == null || coachMode.isBlank()
@@ -76,6 +76,43 @@ public class UserService {
     /** 当前陪练模式；null 表示未开启 */
     public String coachMode(String userId) {
         return get(userId).getCoachMode();
+    }
+
+    /** 当前面试练习 session；null 表示没有进行中的练习 */
+    public String coachSessionId(String userId) {
+        return get(userId).getCoachSessionId();
+    }
+
+    /** 用户说的目标岗位 */
+    public String coachRole(String userId) {
+        return get(userId).getCoachRole();
+    }
+
+    /** 开始一次面试陪练：进入模式、生成新 session、记下岗位（岗位留空时沿用上次） */
+    public void startInterviewSession(String userId, String role) {
+        UserProfile profile = get(userId);
+        profile.setCoachMode("interview");
+        profile.setCoachSessionId(java.util.UUID.randomUUID().toString());
+        if (role != null && !role.isBlank()) {
+            profile.setCoachRole(role.strip());
+        }
+        profile.setUpdatedAt(java.time.LocalDateTime.now());
+        userProfileRepository.save(profile);
+        userLogService.record(userId, "INTERVIEW_START",
+                Map.of("role", profile.getCoachRole() == null ? "" : profile.getCoachRole()));
+    }
+
+    /** 结束面试陪练：退出模式并清掉 session（岗位保留，下次复盘还能显示） */
+    public void endInterviewSession(String userId) {
+        UserProfile profile = get(userId);
+        boolean wasPracticing = profile.getCoachMode() != null || profile.getCoachSessionId() != null;
+        profile.setCoachMode(null);
+        profile.setCoachSessionId(null);
+        profile.setUpdatedAt(java.time.LocalDateTime.now());
+        userProfileRepository.save(profile);
+        if (wasPracticing) {
+            userLogService.record(userId, "INTERVIEW_END");
+        }
     }
 
     public boolean isMemoryEnabled(String userId) {

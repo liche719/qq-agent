@@ -3,21 +3,25 @@ package com.liche.wechatagent.command.handler;
 import com.liche.wechatagent.agent.CoachPresets;
 import com.liche.wechatagent.command.CommandHandler;
 import com.liche.wechatagent.exception.BizException;
+import com.liche.wechatagent.interview.InterviewService;
 import com.liche.wechatagent.user.UserService;
 import org.springframework.stereotype.Component;
 
 /**
- * /practice（陪练）：切换英语陪练 / 面试陪练模式。
+ * /practice（陪练）：进入或结束**面试陪练**。
  *
- * <p>只改 {@code UserProfile.coachMode}，不动用户人设，因此随时可以退出、退出即恢复原样。
+ * <p>只改 {@code UserProfile.coachMode/coachSessionId}，不动用户人设；结束时会根据评分卡
+ * 生成一份复盘报告（由程序生成，不经过大模型）。
  */
 @Component
 public class PracticeHandler implements CommandHandler {
 
     private final UserService userService;
+    private final InterviewService interviewService;
 
-    public PracticeHandler(UserService userService) {
+    public PracticeHandler(UserService userService, InterviewService interviewService) {
         this.userService = userService;
+        this.interviewService = interviewService;
     }
 
     @Override
@@ -27,39 +31,32 @@ public class PracticeHandler implements CommandHandler {
 
     @Override
     public String description() {
-        return "开始或结束陪练：/practice english（英语）、/practice interview（面试）、/practice off（结束）";
+        return "面试陪练：/practice interview 开始（或「陪练 面试」），/practice off 结束并出复盘";
     }
 
     @Override
     public String handle(String args, String userId) {
         String raw = args == null ? "" : args.strip();
         try {
+            if (CoachPresets.isOff(raw)) {
+                String report = interviewService.finish(userId);
+                if (report != null) {
+                    return report;
+                }
+                String current = userService.coachMode(userId);
+                userService.endInterviewSession(userId);
+                return current == null
+                        ? "现在没有在陪练。想练的话发「陪练 面试」。"
+                        : "陪练结束，我们的说话方式恢复原样。想继续随时说「陪练 面试」。";
+            }
             if (raw.isEmpty() || raw.equalsIgnoreCase("help") || raw.contains("帮助") || raw.contains("说明")) {
                 return usage();
             }
-            if (CoachPresets.isOff(raw)) {
-                String current = userService.coachMode(userId);
-                userService.setCoachMode(userId, null);
-                return current == null
-                        ? "现在没有在陪练。想练的话发「陪练 英语」或「陪练 面试」。"
-                        : "陪练结束，我们的说话方式恢复原样。想继续随时说「陪练 英语 / 陪练 面试」。";
-            }
-            String mode = CoachPresets.normalize(raw);
-            if (mode == null) {
-                return "我没听出来要练哪种。\n\n" + usage();
-            }
-            userService.setCoachMode(userId, mode);
-            return CoachPresets.INTERVIEW.equals(mode)
-                    ? """
-                    好，进入「面试陪练」。我当面试官，一次问一个问题。
-                    • 先告诉我：投的什么岗位、几年经验、什么方向（不说也行，我按通用岗位问）
-                    • 每 3~5 轮我会给一次反馈和评分
-                    • 想结束说「结束陪练」，你的说话风格会原样恢复"""
-                    : """
-                    好，进入「英语陪练」。我们用英语聊，难度跟着你走。
-                    • 直接说一句英语就能开始，或者告诉我你想练什么场景（点餐 / 开会 / 闲聊…）
-                    • 每轮我只挑 1~3 处最影响表达的错，给出更自然的说法
-                    • 想结束说「结束陪练」，或者用中文说「讲解一下语法」我也会切过来解释""";
+            // 目前只有面试陪练一种模式，任何非 off 的参数都按"开始面试陪练"处理，岗位信息从参数里取
+            String role = raw.equalsIgnoreCase("interview") ? "" : raw;
+            String intro = interviewService.start(userId, role);
+            return "好，进入「面试陪练」。我当面试官，一次问一个问题；每轮会记进评分卡，随时说「结束陪练」我给你复盘报告。"
+                    + (role.isBlank() ? "\n先告诉我：投的什么岗位、几年经验、什么方向（不说也行，我按通用岗位问）。" : "\n本次岗位：" + role);
         } catch (BizException e) {
             return e.getMessage();
         }
@@ -67,11 +64,12 @@ public class PracticeHandler implements CommandHandler {
 
     private String usage() {
         return """
-                陪练模式：
-                • /practice english（或「陪练 英语」）— 英语口语陪练，边聊边纠错
-                • /practice interview（或「陪练 面试」）— 面试陪练，我当面试官提问+反馈
-                • /practice off（或「结束陪练」）— 退出陪练，恢复原来的说话方式
+                面试陪练：
+                • 「陪练 面试」或 /practice interview — 我当面试官，一次一个问题，逐轮评分
+                • 也可以直接说岗位，例如「陪练 Java 后端 3 年」，出的题会贴这个方向
+                • 「结束陪练」或 /practice off — 结束并给你一份复盘报告（各维度均分、最弱项、下次重点）
 
-                陪练只加一层"练习要求"，你现在的人设和记忆都不会动。""";
+                题库覆盖：自我介绍 / 项目深挖 / 技术基础 / 系统设计 / 行为面试 / 反问环节；
+                每轮的分数会记进评分卡，退出时的复盘报告由程序按记录生成，不是模型随口总结。""";
     }
 }

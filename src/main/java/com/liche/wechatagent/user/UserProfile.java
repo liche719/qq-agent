@@ -36,11 +36,19 @@ public class UserProfile {
     private String proactiveCareCadence = "WEEKLY";
 
     /**
-     * 陪练模式：null=关闭；english=英语陪练；interview=面试陪练。
-     * 由 /陪练 指令切换；开启时给系统提示词追加一段该模式的专属要求，人设本身不动。
+     * 陪练模式：null=关闭；interview=面试陪练。
+     * 由 /陪练 指令或模型工具切换；开启时给系统提示词追加该模式的专属要求，人设本身不动。
      */
     @Column(length = 32)
     private String coachMode;
+
+    /** 当前这次面试练习的 session 标识（开始陪练时生成，结束时清空） */
+    @Column(length = 40)
+    private String coachSessionId;
+
+    /** 用户说的目标岗位，例如"Java 后端 3 年"；复盘报告标题会用到 */
+    @Column(length = 120)
+    private String coachRole;
 
     private LocalDateTime nextCareAt;
 
