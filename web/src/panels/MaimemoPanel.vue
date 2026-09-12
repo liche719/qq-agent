@@ -128,7 +128,9 @@ onMounted(() => load())
       <StatCard label="今日进度" :value="fmtNum(progress.finished) + ' / ' + fmtNum(progress.total)"
                 :meta="'完成 ' + fmtNum(progress.percent) + '%'" :tone="tone"></StatCard>
       <StatCard label="还剩" :value="fmtNum(progress.remaining)" meta="今日待背单词"></StatCard>
-      <StatCard label="新学 / 复习" :value="fmtNum(progress.newCount) + ' / ' + fmtNum(progress.reviewCount)"
+      <StatCard label="新学 / 复习"
+                :value="progress.newCount === null || progress.newCount === undefined
+                  ? '—' : fmtNum(progress.newCount) + ' / ' + fmtNum(progress.reviewCount)"
                 meta="今天已学单词构成"></StatCard>
       <StatCard label="学习时长" :value="fmtNum(progress.studyTimeMinutes) + ' 分钟'" meta="墨墨统计"></StatCard>
     </div>

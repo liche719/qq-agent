@@ -122,9 +122,11 @@ public class MaimemoPushService {
                 sb.append("，还剩 ").append(remaining).append(" 个");
             }
             sb.append("\n");
-            sb.append("新学 ").append(number(progress.get("newCount")))
-                    .append(" · 复习 ").append(number(progress.get("reviewCount")))
-                    .append(" · 约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
+            if (progress.get("newCount") != null) {
+                sb.append("新学 ").append(number(progress.get("newCount")))
+                        .append(" · 复习 ").append(number(progress.get("reviewCount")))
+                        .append(" · 约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
+            }
             if (finished == 0) {
                 sb.append("今天还没开始，趁现在背 20 个？");
             } else if (remaining > 0) {

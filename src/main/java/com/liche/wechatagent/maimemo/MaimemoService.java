@@ -107,12 +107,14 @@ public class MaimemoService {
         }
         try {
             MaimemoClient.Progress progress = client.progress(token);
-            List<MaimemoClient.TodayItem> items = client.todayItems(token, itemLimit);
+            // 多取一些：新学/复习的拆分要用完整列表算，面板只展示前面 itemLimit 条
+            int fetchLimit = (int) Math.min(1000L, Math.max(itemLimit, progress.total()));
+            List<MaimemoClient.TodayItem> items = client.todayItems(token, fetchLimit);
             List<MaimemoClient.StudyRecord> records = client.records(token, itemLimit);
             result.put("status", STATUS_OK);
             result.put("message", "已连接墨墨开放 API");
             result.put("progress", progressMap(progress, items));
-            result.put("todayItems", itemList(items));
+            result.put("todayItems", itemList(items.size() > itemLimit ? items.subList(0, itemLimit) : items));
             result.put("records", recordList(records));
             return store(result);
         } catch (MaimemoClient.MaimemoAuthException exception) {
@@ -167,9 +169,11 @@ public class MaimemoService {
             sb.append("，今天已经背完了");
         }
         sb.append("\n");
-        sb.append("其中新学 ").append(number(progress.get("newCount")))
-                .append(" 个、复习 ").append(number(progress.get("reviewCount")))
-                .append(" 个；学习时长约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
+        if (progress.get("newCount") != null) {
+            sb.append("其中新学 ").append(number(progress.get("newCount")))
+                    .append(" 个、复习 ").append(number(progress.get("reviewCount"))).append(" 个；");
+        }
+        sb.append("学习时长约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
 
         List<String> pending = new ArrayList<>();
         for (Map<String, Object> item : items) {
@@ -336,8 +340,11 @@ public class MaimemoService {
                 newCount++;
             }
         }
-        map.put("newCount", newCount);
-        map.put("reviewCount", Math.max(0, items.size() - newCount));
+        // 接口只返回今日"总数"，新学/复习的拆分只能靠今日单词列表算——
+        // 列表没取全（total 大于本次拉取条数）时不能拿列表长度当复习数，宁可留空。
+        boolean complete = progress.total() > 0 && items.size() >= progress.total();
+        map.put("newCount", complete ? newCount : null);
+        map.put("reviewCount", complete ? Math.max(0, items.size() - newCount) : null);
         return map;
     }
 
