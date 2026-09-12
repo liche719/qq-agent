@@ -19,7 +19,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
     }
 
-    /** 资源不存在（如访问已移除的页面，或未启用对应模式时访问 /api/clawbot/*）→ 返回 404 友好提示，不记 ERROR */
+    /** 资源不存在（如访问已移除的页面，或未启用对应模式时访问 /api/sim/*）→ 返回 404 友好提示，不记 ERROR */
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public ResponseEntity<Map<String, String>> handleNoResource(org.springframework.web.servlet.resource.NoResourceFoundException e) {
         return ResponseEntity.status(404).body(Map.of("message",

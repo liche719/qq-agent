@@ -97,8 +97,8 @@ class AdminAccessFilterTest {
     }
 
     private MockHttpServletRequest managementRequest(String remoteAddress) {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/clawbot/bots");
-        request.setRequestURI("/api/clawbot/bots");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/sim/memories");
+        request.setRequestURI("/api/sim/memories");
         request.setRemoteAddr(remoteAddress);
         return request;
     }
