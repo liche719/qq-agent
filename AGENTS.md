@@ -151,6 +151,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 20. **容器 json-file 日志默认不轮转**：docker 的 json-file 驱动如果没有 `max-size`，容器 stdout 会无限增长（Spring Boot 的 root appender 同时挂控制台，所以每条日志都会落一份）。4 个服务已统一配 `logging.options: {max-size: 10m, max-file: 3}`（每个容器最多 30MB）。应用自身的文件日志由 logback 按 30 天轮转，但它写在**容器内**（没有挂卷），容器重建就没了 —— 面板「日志」页读的就是它。
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='LTAI5t…'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删了、其实是解析问题——本次就为这个白折腾了一轮。acme.sh 自身用 shell `source` 读该文件，带引号无影响。Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名会先被注册局 `client hold`**（阿里云实名认证通过前）：此期间公网 DNS 是 NXDOMAIN，DNS-01 的 `_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」重试**（实测空转 10 分钟以上不停），所以自动签发脚本必须用 `timeout 900` 之类包住，别让它挂着。另外 hold 解除后解析还有约 5 分钟负缓存：TXT 刚加好时可能短暂查不到，等一下就会通过。实测时间线：注册 19:29(UTC) → 次日 06:40 左右 hold 才消失。
+23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」（提示语是"您与此网站之间建立的连接不安全 / 请勿在此网站上输入任何敏感信息…"），**与服务器无关**。判定方法：`tools/ui-verify/check_security.py`（真实 Chromium 直连、不忽略证书错误）——直连正常就说明是浏览器侧；处理办法是关掉旧标签页/重启浏览器/换无痕窗口，并**清掉 IP 地址那个书签**（IP 访问永远提示证书名称不匹配，LE 不给 IP 签证书）。另注意本机装了 Steam++（Watt Toolkit，进程 `Steam++` / `Steam++.Accelerator`）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络问题时先把它退出。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -171,12 +172,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 - **面板入口：`https://liche.cloud:8443/`**（绿锁）。Vue 单页应用，6 个页签（总览 / QQ 通道 / 模型与搜索 / 任务 / 用户与记忆 / 日志）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92:8443/` 仍能打开，但会提示证书名称不匹配。
 - 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
 - 公网暴露面：**22（SSH）、8443（面板）**；8080 / 51820 / 51821 均未开。内存 used 约 940MB / available 930MB。
-- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` 332（本人 304）、`reminder_task` **14**、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。微信与模拟器残留已清空。
+- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **348**（本人为主）、`reminder_task` **14**、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。微信与模拟器残留已清空。
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，面板走 `https://liche.cloud:8443/` 绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已加入域名三项校验。整个流程全自动，用户无需再操作。
-- 遗留可选项：`/api/clawbot/*` 代码保留但已无页面入口；`.trash\research-20260912.zip` 待用户确认后删除。
-- 本地：Docker Desktop 未启动，本地 JAR 未运行。
+- 遗留可选项：`/api/clawbot/*` 代码保留但已无页面入口；面板若要支持"不带端口"访问（`https://liche.cloud/`）需要放行 443 并考虑未备案域名被抽查的风险，用户未要求，暂不做。
+- 本地：Docker Desktop 未启动，本地 JAR 未运行，`target/` 已删除（需要时 `mvn package` 重建）。
 
 ## 8. 凭据索引（只写位置，不写明文）
 
@@ -193,21 +194,20 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1:8443/api/admin/overv
 
 Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格式，其他 harness 读不到），因此本文件是唯一可迁移的记忆载体；如需更多细节可回头检索这些 jsonl。
 
-## 10. 工作区结构（2026-09-12 整理过，约 161MB）
+## 10. 工作区结构（2026-09-12 二次整理，约 59MB）
 
 ```
 C:\Users\33721\Desktop\wechat-agent\
 ├─ AGENTS.md                    工作区记忆入口
 ├─ DS-HARNESS-PROMPT.md         用户给 AI 的初始提示词
-├─ tools\ui-verify\             面板端到端验证工具（脚本 + README + 最新一轮截图）
+├─ tools\ui-verify\             面板端到端验证工具（脚本 + README + 最新一轮截图 v9-*.png）
 ├─ .git-ca\                     导出的系统根证书，**git push 依赖它，不能删**
-├─ .trash\                      整理时留下的 research 打包（确认不用可删）
 └─ wechat-agent-java\           git 仓库（源码、配置、AGENTS.md 完整记忆）
-   ├─ target\ (~95MB)           Maven 构建产物，`mvn package` 可重建
-   ├─ web\node_modules\ (~53MB) 前端依赖，`npm install` 可重建
-   └─ logs\ (~5.5MB)            本地跑 JAR 时的日志
+   └─ web\node_modules\ (~53MB) 前端依赖，`npm install` 可重建（保留了，方便随时构建前端）
 ```
 
-- 已删除（2026-09-12）：`research/`（打包进 `.trash`）、`wechat-agent-java/{tmp,backup,stored-media}`、工作区根 `logs/`、空的 `docker/`、`.ui-test/`（并入 `tools/ui-verify`）。
+- 已删除（2026-09-12 二次整理）：`wechat-agent-java\target\`（94.6MB，`mvn package` 可重建）、`wechat-agent-java\logs\`（5.5MB 本地跑 JAR 的日志）、`.trash\`（2.6MB 的 research 打包）、旧两轮验证截图（v8-* 与 light/dark 主题那轮）。
+- 第一次整理（同日更早）删除：`research/`、`wechat-agent-java/{tmp,backup,stored-media}`、工作区根 `logs/`、空的 `docker/`、`.ui-test/`（并入 `tools/ui-verify`）。
 - `backup/`、`stored-media/`、`logs/`、`tmp/` 都是**本地跑 JAR 时生成**的，远程服务器各有独立一份；以后本地调试完顺手删。
-- 验证面板不再用 `.ui-test`，跑法见 `tools\ui-verify\README.md`。
+- 服务器侧同步清理（2026-09-12）：acme.sh 源码目录、一次性「等实名」看守脚本、签发日志、`/tmp` 临时文件；**保留** `~/.acme.sh`、`/root/issue-liche-cloud.sh`、自签证书备份、数据库全库备份。
+- 验证面板跑法见 `tools\ui-verify\README.md`（含排查"浏览器说不安全"的 `check_security.py`）。
