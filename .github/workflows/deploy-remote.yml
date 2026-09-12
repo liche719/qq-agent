@@ -74,15 +74,23 @@ jobs:
           # 一律用 --resolve 把域名指到部署主机：这样**不需要公网 DNS 也能校验真实证书链**，
           # 于是不再需要 -k。原来 IP 那一组是 curl -sk + 明文口令头，等于把面板唯一凭据
           # 通过一条不校验证书的连接发出去；现在每个请求都走验证过的 TLS（证书过期也会让流水线红）。
-          code() { curl -s --resolve "$NAME:443:$HOST" -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
+          # --retry-connrefused：容器刚重建时端口可能还没起来，不重试会把"还在启动"误判成 000。
+          code() { curl -s --resolve "$NAME:443:$HOST" --retry 3 --retry-connrefused --retry-delay 2 \
+            -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
           problems=""
           check() { if [ "$2" != "$3" ]; then problems="$problems $1(期望$2得到$3)"; fi; }
 
-          for i in $(seq 1 24); do
-            [ "$(code "$BASE/index.html")" = "200" ] && break
+          # 应用冷启动实测要 35~40 秒（JPA + Quartz + TLS），容器重建后还要等 compose 起来；
+          # 窗口给足 4 分钟，避免"还在启动"被当成部署失败（已经误报过一次）。
+          ready=0
+          for i in $(seq 1 48); do
+            if [ "$(code "$BASE/index.html")" = "200" ]; then ready=1; echo "应用已就绪（第 $i 次探测）"; break; fi
             echo "等待应用就绪 ($i)…"
             sleep 5
           done
+          if [ "$ready" != "1" ]; then
+            echo "❌ 等了 4 分钟应用仍未就绪"
+          fi
 
           asset=$(curl -s --resolve "$NAME:443:$HOST" --max-time 25 "$BASE/index.html" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
           check "首页" 200 "$(code "$BASE/")"
