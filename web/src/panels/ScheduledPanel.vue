@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
+import MarkdownText from '../components/MarkdownText.vue'
 import { zh } from '../labels'
 
 const props = defineProps({
@@ -129,9 +130,7 @@ onMounted(() => load())
           <div class="hint" style="margin-bottom: 6px">
             #{{ row.id }}「{{ row.title }}」上次结果（{{ row.lastRunAt || '刚执行' }}）
           </div>
-          <div style="white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.65">
-            {{ row.lastResult || row.lastError }}
-          </div>
+          <MarkdownText :text="row.lastResult || row.lastError"></MarkdownText>
         </div>
       </div>
 

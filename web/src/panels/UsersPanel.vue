@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
+import MarkdownText from '../components/MarkdownText.vue'
 import { fmtNum, fmtTime, zh } from '../labels'
 
 const props = defineProps({
@@ -53,17 +54,58 @@ const visibleMessages = computed(() =>
 
 const memorySections = computed(() => {
   if (!detail.value) return []
-  const labels = {
-    profile: '资料与人设', coreMemories: '核心记忆', workMemories: '工作记忆',
-    episodicMemories: '情景记忆', media: '媒体文件'
+  const source = detail.value
+  const sections = []
+
+  const profile = source.profile
+  if (profile) {
+    sections.push({
+      key: 'profile',
+      title: '资料与人设',
+      note: '记忆开关 ' + (profile.memoryEnabled ? '已开启' : '已关闭')
+        + ' · 通道 ' + zh('channel', profile.lastChannel)
+        + ' · 最近活动 ' + fmtTime(profile.lastSeenAt),
+      entries: [{
+        meta: '人设',
+        text: profile.persona || '（未自定义人设，使用默认）',
+        metaRight: '创建于 ' + fmtTime(profile.createdAt)
+      }],
+      raw: profile
+    })
   }
-  return Object.entries(detail.value)
-    .filter(([key]) => Object.prototype.hasOwnProperty.call(labels, key))
-    .map(([key, value]) => ({
+
+  const pushList = (key, title, items, mapEntry) => {
+    if (!Array.isArray(items) || !items.length) return
+    sections.push({
       key,
-      title: labels[key] + (Array.isArray(value) ? '（' + value.length + ' 条）' : ''),
-      body: JSON.stringify(value, null, 2)
-    }))
+      title: title + '（' + items.length + ' 条）',
+      note: '',
+      entries: items.map(mapEntry),
+      raw: items
+    })
+  }
+
+  pushList('coreMemories', '核心记忆', source.coreMemories, item => ({
+    meta: '重要度 ' + (item.importance ?? '—') + ' · ' + (item.status || ''),
+    text: item.content,
+    metaRight: fmtTime(item.updatedAt)
+  }))
+  pushList('workMemories', '工作记忆', source.workMemories, item => ({
+    meta: '优先级 ' + (item.priority ?? '—') + (item.archived ? ' · 已归档' : ''),
+    text: item.content,
+    metaRight: fmtTime(item.updatedAt)
+  }))
+  pushList('episodicMemories', '情景记忆', source.episodicMemories, item => ({
+    meta: (item.title || '情景') + (item.status ? ' · ' + item.status : ''),
+    text: item.summary,
+    metaRight: fmtTime(item.occurredAt)
+  }))
+  pushList('media', '媒体文件', source.media, item => ({
+    meta: item.fileName || '文件',
+    text: item.summary || '（无摘要）',
+    metaRight: fmtTime(item.createdAt)
+  }))
+  return sections
 })
 
 const reminders = computed(() => {
@@ -176,7 +218,8 @@ onMounted(() => loadUsers())
 
             <div v-for="(message, index) in visibleMessages" :key="message.id || index"
                  class="bubble" :class="message.role">
-              <div class="text">{{ message.content }}</div>
+              <MarkdownText v-if="message.role !== 'system'" class="text" :text="message.content"></MarkdownText>
+              <div v-else class="text">{{ message.content }}</div>
               <div class="meta">
                 {{ message.role === 'user' ? '用户' : message.role === 'assistant' ? '机器人' : '工具' }}
                 · {{ fmtTime(message.createdAt) }}
@@ -188,9 +231,21 @@ onMounted(() => loadUsers())
       </template>
 
       <template v-else-if="section === 'memory'">
-        <details v-for="item in memorySections" :key="item.key" class="item">
+        <details v-for="item in memorySections" :key="item.key" class="item" open>
           <summary>{{ item.title }}</summary>
-          <pre class="json">{{ item.body }}</pre>
+          <div class="memory-list">
+            <div v-for="(entry, index) in item.entries" :key="index" class="memory-card">
+              <div class="memory-head">
+                <span class="memory-meta">{{ entry.meta }}</span>
+                <span class="memory-time">{{ entry.metaRight }}</span>
+              </div>
+              <MarkdownText :text="entry.text"></MarkdownText>
+            </div>
+          </div>
+          <details class="item" style="margin: 10px 14px 14px">
+            <summary>原始数据</summary>
+            <pre class="json">{{ JSON.stringify(item.raw, null, 2) }}</pre>
+          </details>
         </details>
         <div v-if="!memorySections.length" class="empty">暂无记忆数据</div>
       </template>
