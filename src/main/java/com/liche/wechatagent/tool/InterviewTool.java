@@ -33,7 +33,8 @@ public class InterviewTool {
     }
 
     @Tool(value = "把刚结束的这一轮面试问答记进评分卡：题类、题目、回答要点、四个维度 1~5 分（内容完整度/结构清晰度/技术深度/表达流畅度）、一句反馈。"
-            + "**每轮都要调用**，工具会返回当前均分、已问题目和还没覆盖的题类。")
+            + "**每轮都必须调用，而且要在写反馈之前先调用**（先记分再说话）；只处理对方真正答了一道面试题的那一轮，对方只是闲聊澄清时不要调用。"
+            + "工具会返回当前均分、已问题目和还没覆盖的题类。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     public ToolBusinessResult recordInterviewRound(String category, String question, String answerSummary,
