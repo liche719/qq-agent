@@ -1,5 +1,6 @@
 package com.liche.wechatagent.care;
 
+import com.liche.wechatagent.channel.ProactiveDelivery;
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
 import com.liche.wechatagent.memory.UserWorkMemory;
@@ -150,30 +151,15 @@ public class ProactiveCareService {
             advance(profile, now, false);
             return;
         }
-        WeChatChannel channel = channels.stream()
-                .filter(candidate -> candidate.channel().equals(profile.getLastChannel()))
-                .filter(candidate -> candidate.supportsProactiveCare(userId))
-                .findFirst().orElse(null);
-        if (channel == null) {
-            advance(profile, now, false);
-            return;
-        }
         String shortened = focus.length() > focusMaxChars ? focus.substring(0, focusMaxChars) + "…" : focus;
         String message = "来做个很短的近况复盘吧。你之前提到「" + shortened
                 + "」，最近推进得怎么样？有卡住的地方就直接告诉我，我陪你一起拆。若不想收到这类消息，发送 /care off 即可。";
-        if (!send(channel, profile, message)) {
-            throw new IllegalStateException("当前通道没有接受主动关怀消息");
+        if (!ProactiveDelivery.send(channels, profile, userId, message)) {
+            advance(profile, now, false);
+            return;
         }
         advance(profile, now, true);
         userLogService.record(userId, "PROACTIVE_CARE_PUSH", Map.of("focusLength", shortened.length()));
-    }
-
-    private boolean send(WeChatChannel channel, UserProfile profile, String text) {
-        if (channel.hasReliableSendStatus()) {
-            return channel.sendTextResultFrom(profile.getLastBotId(), profile.getUserId(), text);
-        }
-        channel.sendTextFrom(profile.getLastBotId(), profile.getUserId(), text);
-        return true;
     }
 
     private String findFocus(String userId) {

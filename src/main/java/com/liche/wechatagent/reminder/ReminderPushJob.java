@@ -1,5 +1,6 @@
 package com.liche.wechatagent.reminder;
 
+import com.liche.wechatagent.channel.ProactiveDelivery;
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
 import com.liche.wechatagent.log.UserScope;
@@ -101,33 +102,20 @@ public class ReminderPushJob extends QuartzJobBean {
         }
     }
 
-    private boolean send(WeChatChannel channel, String botId, String userId, String text) {
-        if (channel.hasReliableSendStatus()) {
-            return channel.sendTextResultFrom(botId, userId, text);
-        }
-        channel.sendTextFrom(botId, userId, text);
-        return true;
-    }
-
     /**
      * A reminder is an unsolicited message, so it must use the channel and bot
      * recorded from the user's own inbound message.  Guessing with the first
      * available channel can deliver a private reminder to the wrong platform.
+     * 记录过期（例如排障时用过模拟器）时由 ProactiveDelivery 做保守兜底：
+     * 只有唯一一个可用通道时才改用它。
      */
     private boolean sendToRecordedDelivery(ReminderTask task, String text) {
         UserProfile profile = userProfileRepository.findById(task.getUserId()).orElse(null);
-        if (profile == null || profile.getLastChannel() == null || profile.getLastChannel().isBlank()) {
-            log.warn("提醒缺少明确投递通道，保留待执行 reminderId={} user={}", task.getId(), task.getUserId());
+        if (profile == null) {
+            log.warn("提醒缺少用户资料 user={}", task.getUserId());
             return false;
         }
-        for (WeChatChannel channel : channels) {
-            if (profile.getLastChannel().equals(channel.channel())) {
-                return send(channel, profile.getLastBotId(), task.getUserId(), text);
-            }
-        }
-        log.warn("提醒投递通道不可用，保留待执行 reminderId={} user={} channel={}",
-                task.getId(), task.getUserId(), profile.getLastChannel());
-        return false;
+        return ProactiveDelivery.send(channels, profile, task.getUserId(), text);
     }
 
     private boolean hasCron(ReminderTask task) {

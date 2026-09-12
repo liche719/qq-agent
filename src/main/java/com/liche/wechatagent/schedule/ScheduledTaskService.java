@@ -2,6 +2,7 @@ package com.liche.wechatagent.schedule;
 
 import com.liche.wechatagent.agent.AgentOrchestrator;
 import com.liche.wechatagent.channel.InboundMessage;
+import com.liche.wechatagent.channel.ProactiveDelivery;
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.exception.BizException;
 import com.liche.wechatagent.log.UserLogService;
@@ -311,24 +312,14 @@ public class ScheduledTaskService {
         }
     }
 
-    /** 投递到用户最近一次说话的通道（与提醒一致：不能猜通道，否则可能投错平台） */
+    /** 投递到用户最近一次说话的通道（通道过期时由 ProactiveDelivery 保守兜底） */
     private boolean sendToUser(String userId, String text) {
         UserProfile profile = profileRepository.findById(userId).orElse(null);
-        if (profile == null || profile.getLastChannel() == null || profile.getLastChannel().isBlank()) {
-            log.warn("定时任务没有可用的投递通道 user={}", userId);
+        if (profile == null) {
+            log.warn("定时任务没有找到用户资料 user={}", userId);
             return false;
         }
-        for (WeChatChannel channel : channels) {
-            if (profile.getLastChannel().equals(channel.channel())) {
-                if (channel.hasReliableSendStatus()) {
-                    return channel.sendTextResultFrom(profile.getLastBotId(), userId, text);
-                }
-                channel.sendTextFrom(profile.getLastBotId(), userId, text);
-                return true;
-            }
-        }
-        log.warn("定时任务投递通道不可用 user={} channel={}", userId, profile.getLastChannel());
-        return false;
+        return ProactiveDelivery.send(channels, profile, userId, text);
     }
 
     // ---------------- Quartz ----------------
