@@ -43,6 +43,8 @@ services:
       ALERT_ENABLED: ${ALERT_ENABLED:-false}
       ALERT_QQ_OPENID: ${ALERT_QQ_OPENID:-}
       ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-30}
+      # ICP 备案号（备案通过后填这里，页面底部会显示并链接工信部；留空则完全不显示）
+      SITE_ICP: ${SITE_ICP:-}
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro

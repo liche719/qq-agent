@@ -87,9 +87,15 @@ jobs:
           check "带口令接口" 200 "$(code -H "X-Agent-Admin-Key: $KEY" "$BASE/api/admin/overview")"
           check "账号密码登录" 200 "$(code -X POST -H 'Content-Type: application/json' \
             -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' "$BASE/api/admin/session")"
-          check "域名首页（证书校验）" 200 "$(trust_code "$DOMAIN/")"
-          check "域名前端资源（证书校验）" 200 "$(trust_code "$DOMAIN${asset}")"
-          check "域名带口令接口（证书校验）" 200 "$(trust_code -H "X-Agent-Admin-Key: $KEY" "$DOMAIN/api/admin/overview")"
+          # 域名这一组只在域名有解析时校验：ICP 备案期间按规则会暂停 A 记录，
+          # 那时跳过（并打印提示），解析恢复后自动重新校验，避免误报红。
+          if getent hosts liche.cloud >/dev/null 2>&1; then
+            check "域名首页（证书校验）" 200 "$(trust_code "$DOMAIN/")"
+            check "域名前端资源（证书校验）" 200 "$(trust_code "$DOMAIN${asset}")"
+            check "域名带口令接口（证书校验）" 200 "$(trust_code -H "X-Agent-Admin-Key: $KEY" "$DOMAIN/api/admin/overview")"
+          else
+            echo "ℹ️ liche.cloud 当前无解析（ICP 备案期间按规则暂停了 A 记录），跳过域名三项自检；解析恢复后会自动重新校验"
+          fi
 
           if [ -n "$problems" ]; then
             echo "❌ 部署后自检失败:$problems"
