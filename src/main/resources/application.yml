@@ -42,6 +42,10 @@ spring:
       database: 0
       password: ${REDIS_PASSWORD:}
       timeout: ${REDIS_TIMEOUT:3s}
+      # 只用 StringRedisTemplate，不用 Spring Data Redis 仓库；
+      # 关掉可以避免启动时对 JPA 仓库报 "Could not safely identify store assignment"。
+      repositories:
+        enabled: false
   quartz:
     job-store-type: jdbc
     jdbc:
