@@ -129,6 +129,14 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 推送目标复用 `ALERT_QQ_OPENID`（用户本人的 openid）；QQ 主动消息有额度限制，推送"尽力而为"，失败只记日志，**面板状态才是准的**。每天只推一次（日期记在 `maimemo_setting.last_push_date`），面板有开关与时间设置 + 「立即推送一次」。
 - 接口只给"今日完成/总数"，**新学与复习的拆分要靠今日单词列表自己算**：列表没取全（`total` 大于拉取条数）时不能拿列表长度当复习数——所以按 `max(item-limit, total)` 拉取算拆分，面板只展示前 `item-limit` 条，取不全就显示 `—`。
 - 配置项：`MAIMEMO_ENABLED`、`MAIMEMO_API_TOKEN`、`MAIMEMO_DAILY_PUSH_ENABLED`、`MAIMEMO_DAILY_PUSH_TIME`、`MAIMEMO_TIMEOUT_SECONDS`、`MAIMEMO_CACHE_SECONDS`；compose 的 `environment` 里必须列出来（只传列出的变量）。
+- **长期方案：OIDC 授权（2026-09-12 代码已就绪，等用户凭据）**。Token 一天一换太折腾，所以加了 `MaimemoOidcService`：OIDC Authorization Code 换 `access_token`(1 小时) + `refresh_token`(90 天，每次刷新自动续期)，**授权一次就不用再管**。要点：
+  - 官方要求（memodocs「开放平台」）：在 `open.maimemo.com/app` 创建**后端应用**；**主页必须是已上线可访问的 HTTPS 页面、且与回调地址同域名、"使用已备案域名更容易通过审核"**；**应用创建后不可修改**（名称不能含"墨墨/MaiMemo/官方"）；审核通过后才会批准 scope。→ **实际前置条件是 ICP 备案通过、`liche.cloud` 解析恢复**。
+  - 本项目固定回调接口：`/api/maimemo/oauth/callback`（`MaimemoOauthController`，**故意不加管理员口令**，因为它是浏览器直接跳转的），配好 `MAIMEMO_OIDC_CLIENT_ID` / `MAIMEMO_OIDC_CLIENT_SECRET` / `MAIMEMO_OIDC_REDIRECT_URI` 后重启容器即可。
+  - 面板「背单词」页有「长期授权」区块：生成授权链接 → 打开授权 → **把浏览器跳转后地址栏里那整条地址（或其中的 code）粘回来** → 完成授权。这条"手动粘回调"的路子是为了应对域名暂时打不开时也能完成授权（浏览器报错页里地址栏照样带 code）。
+  - Token 解析顺序：**OIDC（自动续期）→ 面板保存的 Token → 环境变量 `MAIMEMO_API_TOKEN`**；OIDC 刷新失败会自动回落到后面的 token 并在面板上写明原因；真拿不到数据才报"授权失效"。OIDC 的 access token 被提前作废（401）时会**强制刷新一次再重试**。
+  - 关键值都存在 `maimemo_setting` 表（`oidc_refresh_token`/`oidc_access_token`/`oidc_access_expires_at`/`oidc_subject`…），`POST /api/admin/maimemo/oidc/disconnect` 可一键断开。**client_secret 只在服务器 `.env`，违反官方规则会被停用应用。**
+  - 已验证（无凭据状态）：`/oidc` 状态接口、`authorize-url` 未配置时优雅报错、公开回调页渲染（缺 code / 带 error 两种情况）、原 Token 方式不受影响；**真正的授权换 token 要等用户拿到 client_id/secret 后实测**。
+- **QQ 里背单词（用户 2026-09-12 决定：暂不做，继续用墨墨 App）**。原因是实测限制：开放 API **没有提交复习结果的接口**（`study/submit_study_response`、`study/review` 均 404 `common_not_found`），也**不提供官方释义**（`interpretations`/`phrases`/`notes` 只返回你自己在云词本里建的内容）；唯一能反向影响墨墨的写操作是 `study/advance_study`（把词提前拉回今日任务）与 `study/add_words`。所以 QQ 侧的复习**只能存我们自己的库、不会算进墨墨 App 的进度**——用户选择不做。若以后要做，设计方向是：墨墨出词表 + QQ 三档自评（认识/模糊/忘记）+ 自建间隔重复调度 + 「忘记」的词用 `advance_study` 拉回墨墨。
 
 ### 运维告警推送（2026-09-12 新增）
 
@@ -205,7 +213,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 公网暴露面：**22（SSH）、443（面板）**；8443 的安全组规则暂时保留（回滚备用，应用已不再监听），8080 / 51820 / 51821 均未开。内存占用平稳。
 - 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **370**（本人为主）、`reminder_task` 14、`user_work_memory` 49、`user_core_memory` 17；`interview_round` 与 `maimemo_setting` 为 2026-09-12 新建表（验证后已清空/仅留推送设置）。微信与模拟器残留保持清空。
 - **面试陪练**已上线并端到端验证（自然语言进模式 → 逐轮评分入库 → 「结束陪练」出程序生成的复盘报告 → 模式自动清除），英语陪练已删除。
-- **墨墨背单词**已上线并端到端验证：面板「背单词」页读得到今日进度（当日实测 0/124）、Token 可在页面保存/清除（存 `maimemo_setting`，优先于环境变量）、`POST /maimemo/push/now` 实测推送到本人 QQ 成功（`sent=true`）、QQ 聊天里两种不同说法都会调用工具取真实数据；每日 21:30 自动推送已启用（当天已推过一次，日期记在 `last_push_date`）。Token 目前写在服务器 `.env` 的 `MAIMEMO_API_TOKEN`（面板保存的值优先）。
+- **墨墨背单词**已上线并端到端验证：面板「背单词」页读得到今日进度、Token 可在页面保存/清除（存 `maimemo_setting`，优先于环境变量）、`POST /maimemo/push/now` 实测推送到本人 QQ 成功（`sent=true`）、QQ 聊天里两种不同说法都会调用工具取真实数据；每日 21:30 自动推送已启用（日期记在 `last_push_date`）。Token 目前写在服务器 `.env` 的 `MAIMEMO_API_TOKEN`。
+- **墨墨 OIDC（长期免维护）代码已就绪，等用户凭据**：`MaimemoOidcService` + 公开回调 `/api/maimemo/oauth/callback` + 面板「长期授权」区块（生成授权链接 / 粘贴回调 / 断开）。已验证未配置状态下的全部路径（状态接口、优雅报错、回调页渲染、原 Token 方式不受影响）。**下一步（备案通过后由用户做）**：在 `open.maimemo.com/app` 创建后端应用（主页与回调都用 `https://liche.cloud`，回调填 `https://liche.cloud/api/maimemo/oauth/callback`，权限勾学习数据 + offline_access）→ 把 client_id/secret 写进服务器 `.env` 的 `MAIMEMO_OIDC_*` 并重建容器 → 面板点「生成授权链接」走一遍授权。
+- **QQ 里背单词：用户 2026-09-12 决定不做**（开放 API 不能提交复习结果、也不给官方释义，QQ 侧复习无法回写墨墨进度），继续用墨墨 App，本项目只做进度查询 + 每日推送。
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。
@@ -223,6 +233,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | 服务器 SSH root 密码 | 由用户提供 |
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key` / `SAVED_Ali_Secret`）；用户可在 RAM 控制台随时禁用 |
 | 墨墨背单词个人 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`（600），或运维面板「背单词」页保存进 `maimemo_setting` 表（后者优先）；token 在墨墨 App「开放 API」里生成，**有效期约一天** |
+| 墨墨 OIDC 应用凭据（长期方案） | 服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID` / `MAIMEMO_OIDC_CLIENT_SECRET` / `MAIMEMO_OIDC_REDIRECT_URI`（600）；在 `open.maimemo.com/app` 创建「后端应用」后获得。**审核通过前只能预览，且回到面板完成一次授权**；换来的 refresh/access token 存在 `maimemo_setting` 表 |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
 ## 9. 历史会话
