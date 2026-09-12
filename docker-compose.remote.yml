@@ -20,6 +20,9 @@ services:
       SERVER_SSL_CERTIFICATE: /app/certs/server.crt
       SERVER_SSL_CERTIFICATE_PRIVATE_KEY: /app/certs/server.key
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      # 通道模式：disabled（只跑 QQ）/ simulator（本地或排障用的假通道，可调 /api/sim/*）。
+      # 注意 compose 只传 environment 里列出的变量——以前没有这一行，改服务器 .env 根本进不了容器。
+      WECHAT_CHANNEL_MODE: ${WECHAT_CHANNEL_MODE:-disabled}
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
       MYSQL_DB: ${MYSQL_DB:-wechat_agent}
