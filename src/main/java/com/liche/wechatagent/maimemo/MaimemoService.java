@@ -295,7 +295,7 @@ public class MaimemoService {
             sb.append("其中新学 ").append(number(progress.get("newCount")))
                     .append(" 个、复习 ").append(number(progress.get("reviewCount"))).append(" 个；");
         }
-        sb.append("学习时长约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
+        sb.append("学习时长约 ").append(progress.get("studyTimeText")).append("\n");
 
         List<String> pending = new ArrayList<>();
         for (Map<String, Object> item : items) {
@@ -470,7 +470,8 @@ public class MaimemoService {
         map.put("total", progress.total());
         map.put("remaining", progress.remaining());
         map.put("percent", progress.percent());
-        map.put("studyTimeMinutes", Math.max(0, progress.studyTimeSeconds()) / 60);
+        map.put("studyTimeMillis", Math.max(0, progress.studyTimeMillis()));
+        map.put("studyTimeText", humanDuration(progress.studyTimeMillis()));
         int newCount = 0;
         for (MaimemoClient.TodayItem item : items) {
             if (item.isNew()) {
@@ -528,6 +529,27 @@ public class MaimemoService {
 
     private int number(Object value) {
         return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    /**
+     * 毫秒 → 人话时长（和前端 labels.js 的 fmtDuration 保持同一套规则）：
+     * 小于 1 分钟说秒、小于 1 小时说「X 分 Y 秒」、再往上说「X 小时 Y 分」。
+     * 墨墨的 study_time 是毫秒，别再按秒算（会被放大 1000 倍）。
+     */
+    static String humanDuration(long millis) {
+        long value = Math.max(0, millis);
+        if (value < 1000) {
+            return value + " 毫秒";
+        }
+        if (value < 60_000) {
+            return String.format("%.1f 秒", value / 1000.0);
+        }
+        long totalSeconds = Math.round(value / 1000.0);
+        long minutes = totalSeconds / 60;
+        if (minutes < 60) {
+            return minutes + " 分 " + (totalSeconds % 60) + " 秒";
+        }
+        return (minutes / 60) + " 小时 " + (minutes % 60) + " 分";
     }
 
     /**

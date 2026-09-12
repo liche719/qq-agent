@@ -5,7 +5,7 @@ import StatCard from '../components/StatCard.vue'
 import InfoGrid from '../components/InfoGrid.vue'
 import DataTable from '../components/DataTable.vue'
 import JsonBlock from '../components/JsonBlock.vue'
-import { fmtNum, zh } from '../labels'
+import { fmtDuration, fmtNum, zh } from '../labels'
 
 const props = defineProps({
   tick: { type: Number, default: 0 }
@@ -201,7 +201,7 @@ onMounted(() => load())
                 :value="progress.newCount === null || progress.newCount === undefined
                   ? '—' : fmtNum(progress.newCount) + ' / ' + fmtNum(progress.reviewCount)"
                 meta="今天已学单词构成"></StatCard>
-      <StatCard label="学习时长" :value="fmtNum(progress.studyTimeMinutes) + ' 分钟'" meta="墨墨统计"></StatCard>
+      <StatCard label="学习时长" :value="fmtDuration(progress.studyTimeMillis)" meta="墨墨统计"></StatCard>
       <StatCard label="顽固单词" :value="fmtNum(sticking.count)"
                 :meta="stickyPreview" :tone="sticking.count > 0 ? 'warn' : ''"></StatCard>
     </div>

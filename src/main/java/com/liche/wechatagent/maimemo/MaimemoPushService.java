@@ -125,7 +125,7 @@ public class MaimemoPushService {
             if (progress.get("newCount") != null) {
                 sb.append("新学 ").append(number(progress.get("newCount")))
                         .append(" · 复习 ").append(number(progress.get("reviewCount")))
-                        .append(" · 约 ").append(number(progress.get("studyTimeMinutes"))).append(" 分钟\n");
+                        .append(" · 约 ").append(progress.get("studyTimeText")).append("\n");
             }
             if (finished == 0) {
                 sb.append("今天还没开始，趁现在背 20 个？");

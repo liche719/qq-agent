@@ -29,14 +29,23 @@ public class MaimemoClient {
 
     private static final Logger log = LoggerFactory.getLogger(MaimemoClient.class);
 
-    /** 今日学习进度：finished/total 为"今日任务"的完成情况 */
-    public record Progress(int finished, int total, int studyTimeSeconds) {
+    /**
+     * 今日学习进度：finished/total 为"今日任务"的完成情况。
+     *
+     * <p>注意 {@code studyTimeMillis}：墨墨返回的 {@code study_time} 字段是**毫秒**
+     * （实测 1457786 ≈ 24.3 分钟，按秒理解会变成 405 小时），别当成秒。
+     */
+    public record Progress(int finished, int total, int studyTimeMillis) {
         public int remaining() {
             return Math.max(0, total - finished);
         }
 
         public int percent() {
             return total <= 0 ? 0 : (int) Math.round(finished * 100.0 / total);
+        }
+
+        public long studyTimeSeconds() {
+            return Math.max(0, studyTimeMillis) / 1000L;
         }
     }
 

@@ -54,9 +54,25 @@ export function fmtNum(value) {
   return number.toLocaleString('zh-CN')
 }
 
-export function fmtMs(value) {
+/**
+ * 毫秒 → 人话时长。大数不再用千分位堆毫秒：
+ *  < 1 秒 → 「812 毫秒」；< 1 分钟 → 「24.3 秒」；< 1 小时 → 「24 分 18 秒」；再往上 → 「3 小时 5 分」
+ */
+export function fmtDuration(value) {
   const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? Math.round(number) + ' 毫秒' : '—'
+  if (!Number.isFinite(number) || number <= 0) return '—'
+  if (number < 1000) return Math.round(number) + ' 毫秒'
+  if (number < 60000) return (number / 1000).toFixed(1) + ' 秒'
+  const totalSeconds = Math.round(number / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return minutes + ' 分 ' + seconds + ' 秒'
+  return Math.floor(minutes / 60) + ' 小时 ' + (minutes % 60) + ' 分'
+}
+
+/** 后端耗时统一按毫秒给，这里交给 fmtDuration 决定用毫秒/秒/分显示 */
+export function fmtMs(value) {
+  return fmtDuration(value)
 }
 
 export function fmtTime(value) {
