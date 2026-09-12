@@ -69,7 +69,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **面板唯一入口**：`https://liche.cloud/`（**标准 443 端口，地址里不带端口号**；Vue 单页应用，Let's Encrypt 证书，浏览器绿锁）。**ICP 备案期间（2026-09-12 起）域名解析已暂停，暂时改用 `https://120.25.170.92/`**（证书名称不匹配，点继续访问）；备案通过后把 A 记录设回 `ENABLE` 即恢复域名访问。用户明确弃用 VPN（WireGuard/socat/wg0/51820/wireguard-data/宿主 sysctl 已全拆）与 nginx 网关（一次性容器 + 限流都没必要），**不要再加回来**。
 - 应用直接用 PEM 证书起 HTTPS，无需 keystore：compose 里 `SERVER_ADDRESS=0.0.0.0`、`SERVER_PORT=443`、`SERVER_SSL_ENABLED=true`、`SERVER_SSL_CERTIFICATE=/app/certs/server.crt`、`SERVER_SSL_CERTIFICATE_PRIVATE_KEY=/app/certs/server.key`，并把宿主机 `docker/tls/` 挂到 `/app/certs`（证书服务器侧生成、不入库；`server.key` 600、`server.crt` 644）。
-- 安全组放行 **TCP 443**（2026-09-12 由用户开通；**8443 的规则先留着不回滚时不用**，将来确认稳定可删）。手机访问同样是绿锁，不再弹"不安全"。
+- 安全组放行 **TCP 443**（2026-09-12 由用户开通，手机访问同样是绿锁）。**8443 的安全组规则待用户在控制台删除**：应用已不再监听 8443（本机探测 8443 是 `connection refused`＝规则还开着；规则删掉后会变成超时）。
 - **鉴权分层**：口令经请求头 `X-Agent-Admin-Key` 由 `AdminAccessFilter` 校验（`ADMIN_REQUIRE_KEY=true` 时**这是唯一凭据**，因此不再要求来源 IP 在白名单内），账号由 `AdminSessionController` 经 `POST /api/admin/session` 校验；前端把凭据存 `sessionStorage`（勾「记住账号密码」则存 `localStorage`）。
 - **爆破防护**：`AdminAccessFilter` 连续 5 次口令错误即按**真实来源 IP** 封禁 10 分钟（见第 5 节第 10、14 条）。原来 nginx 的 `limit_req` 已随网关一起移除；QQ 机器人本身不受面板限流影响。
 
@@ -152,7 +152,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` 与 `*@im.wechat`），用户已于 2026-09-12 要求清空，**已删除并留全库备份** `/root/wechat-agent-backup-20260912015146.sql.gz`（服务器上，98KB，已 chmod 600）。删除时用的条件：`last_channel IS NULL AND (user_id LIKE 'wx\_%' OR user_id LIKE '%@im.wechat')`；模拟器测试账号 `sim-user-qq` 同日一并删除。
 17. **服务器旧镜像会累积**（2026-09-12 已根治）：Docker 镜像不可变，CI 每次部署 load 一个新 tag 的镜像，旧的**不会自动消失**；原来的 `docker image prune -f` 只删悬空镜像（无 tag 的中间层），带 tag 的 `wechat-agent:<sha>` 永远不算悬空，于是攒了 11 个 × 431MB。现在部署步骤里加了一句「按创建时间只保留最新两个 tag」，`workflow_dispatch` 手动跑同样生效。回滚方式：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
 18. **数据卷 ≠ 备份**：`wechat-agent-infra_mysql-data` 和数据库在同一台机器、同一块云盘上（`/var/lib/docker/volumes/`）。卷只能扛「容器重装」，扛不住误删（例如我们删 17 个微信用户那种操作）、扛不住误迁移、也扛不住机器/云盘故障。`mysqldump` 出来的 dump 才是备份，**不要因为「有卷」就删掉备份**；更强的做法是定期导出后加密传到异地。
-19. 服务器上的旧 `.env.bak-*` 会带着历史口令，只留最近 2 个即可。
+19. 服务器上的旧 `.env.bak-*` 会带着历史口令，**只留最近 1 个**用于回滚即可（2026-09-12 已清理到只剩最新那份）。
 20. **容器 json-file 日志默认不轮转**：docker 的 json-file 驱动如果没有 `max-size`，容器 stdout 会无限增长（Spring Boot 的 root appender 同时挂控制台，所以每条日志都会落一份）。4 个服务已统一配 `logging.options: {max-size: 10m, max-file: 3}`（每个容器最多 30MB）。应用自身的文件日志由 logback 按 30 天轮转，但它写在**容器内**（没有挂卷），容器重建就没了 —— 面板「日志」页读的就是它。
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='LTAI5t…'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删了、其实是解析问题——本次就为这个白折腾了一轮。acme.sh 自身用 shell `source` 读该文件，带引号无影响。Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名会先被注册局 `client hold`**（阿里云实名认证通过前）：此期间公网 DNS 是 NXDOMAIN，DNS-01 的 `_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」重试**（实测空转 10 分钟以上不停），所以自动签发脚本必须用 `timeout 900` 之类包住，别让它挂着。另外 hold 解除后解析还有约 5 分钟负缓存：TXT 刚加好时可能短暂查不到，等一下就会通过。实测时间线：注册 19:29(UTC) → 次日 06:40 左右 hold 才消失。
@@ -182,7 +182,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。
-- 遗留可选项：`/api/clawbot/*` 代码保留但已无页面入口；**ICP 备案进行中**（用户 2026-09-12 提交，`.cloud` 可备案）：材料清单与逐屏步骤见 `docs/ICP备案指南.md`（**注意 `.gitignore` 里有 `/docs/`，新增文档要用 `git add -f` 才会入库**）；个人备案网站名称禁用词见该文档第 4 节（推荐 `技术学习记录`）。
+- 遗留可选项：`/api/clawbot/*` 与整个微信 clawbot 通道**已于 2026-09-12 按用户要求删除**（`channel/clawbot/`、`ClawbotController`、`wechat.clawbot.*` 配置，`WeChatChannel` 抽象保留给未来新通道）；**ICP 备案进行中**（用户 2026-09-12 提交，`.cloud` 可备案）：材料清单与逐屏步骤见 `docs/ICP备案指南.md`（**注意 `.gitignore` 里有 `/docs/`，新增文档要用 `git add -f` 才会入库**）；个人备案网站名称禁用词见该文档第 4 节（推荐 `技术学习记录`）。
 - **备案期间的状态（2026-09-12 起）**：按管局要求"未备案不得开通网站"，`liche.cloud` 的 `A @ → 120.25.170.92` 记录已置 **`DISABLE`**（保留未删，RecordId `2098500125097357312`，恢复时改回 `ENABLE`），**面板暂时改用 `https://120.25.170.92/`**（证书名称不匹配，点继续访问）。证书自动续期不受影响（DNS-01 只加临时 TXT）。CI 自检已改成**域名无解析时跳过域名三项并打印提示**，所以这段期间的部署不会误报红。备案通过后：① A 记录恢复 `ENABLE`；② 服务器 `.env` 填 `SITE_ICP=<备案号>` 并重启容器，页脚即显示备案号（已实现并验证：`site.icp` → `GET /api/site/info` → `web/src/components/SiteFooter.vue`，未配置时整块不渲染）。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行，`target/` 已删除（需要时 `mvn package` 重建）。
 

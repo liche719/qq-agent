@@ -205,44 +205,17 @@ src/main/java/com/liche/wechatagent
 | CARE_SCAN_INTERVAL_MS | 60000 | 主动关怀到期扫描间隔（毫秒） |
 | WEB_MAX_RESPONSE_BYTES | 2097152 | 单个网页最大响应字节数（2 MB） |
 | WEB_MAX_TEXT_CHARS | 12000 | 交给模型的网页正文最大长度 |
-| WECHAT_CHANNEL_MODE | disabled | 默认不启动微信通道；设 `clawbot` 或 `simulator` 才启用对应兼容通道 |
+| WECHAT_CHANNEL_MODE | disabled | 通道模式；默认 `disabled`（只跑 QQ），本地调试可设 `simulator` 启用假通道 |
 | BACKUP_DIR / BACKUP_CONVERSATION_LIMIT | backup / 10000 | 备份目录 / 单用户每份快照保留的最新持久化对话证据上限 |
 
-## 微信接入（已接入：腾讯官方 iLink Bot API）
+## 微信接入（已于 2026-09-12 移除）
 
-对接腾讯官方 iLink 协议（微信 ClawBot，合规通道），使用现成 Java SDK `io.github.lith0924:wechat-ilink-sdk`（已通过供应链安全审计：外连仅腾讯官方域名、无动态加载/进程执行、源码与字节码一致）。
+本项目现在**只服务 QQ 私聊**。历史上接入过腾讯官方 iLink Bot API（微信兼容通道），用户确认不再需要，相关代码、接口与配置已全部删除：
 
-**架构**：微信 → 腾讯 iLink 服务器（长轮询收 / sendmessage 发）→ SDK → `ClawBotChannel` → `AgentOrchestrator`（幂等/每用户串行/指令/记忆/LLM 全链路）。**无需额外进程**，就在 Spring Boot 内跑一个长轮询。
-
-### 使用步骤
-
-1. 启动应用并切换通道：
-   ```bash
-   java -jar target/wechat-agent-java-0.0.1-SNAPSHOT.jar --wechat.channel.mode=clawbot
-   ```
-2. **注册机器人**（多机器人：每个人一个专属助手，数据完全隔离）：
-   ```bash
-   curl -X POST http://localhost:8080/api/clawbot/register -H "Content-Type: application/json" -d '{"name":"我的助手"}'
-   # 返回 qrcodeUrl（腾讯 liteapp 登录链接），渲染成二维码图片，用手机微信扫码
-   ```
-3. 扫码确认后，凭证自动保存到 `data/ilink-login-{name}.json`（已 gitignore），**重启免扫码自动恢复**。
-4. 在微信机器人对话窗口发文字消息即可对话（**流式输出**，打字机效果）。
-
-### 登录管理接口（clawbot 模式下）
-
-| 接口 | 说明 |
-|---|---|
-| POST /api/clawbot/register {name} | 注册新机器人并返回登录二维码（多机器人用不同 name） |
-| GET /api/clawbot/bots | 列出所有机器人及登录状态（name/loggedIn/botId） |
-| POST /api/clawbot/logout?name=xxx | 清除指定机器人登录凭证并断开 |
-
-### 说明与限制（一期）
-
-- **多机器人隔离**：每个 name 注册的机器人独立登录凭证（`data/ilink-login-{name}.json`）、独立长轮询；消息按微信 `from_user_id` 做行级多租户隔离（人设/记忆/提醒/日志/上下文全部互不干扰）
-- **流式输出**：对话回复走 SSE 流式 + 按句子自然边界分片推送（打字机效果）；模型配置见 `llm.model`（.env）
-- 仅支持**私聊文本**收发；图片/语音/文件等媒体消息会收到"暂时只支持文字"提示（SDK 已支持媒体，二期可扩展）
-- 消息映射：微信 `from_user_id` → 多租户 `userId`；`message_id` → `msg_id`（幂等去重）
-- 断线/心跳/重试由 SDK 内置（长轮询 + 指数退避 + 心跳），心跳间隔可配 `wechat.clawbot.heartbeat-interval-ms`（默认 3000ms）
+- 删除内容：`channel/clawbot/ClawBotChannel.java`、`channel/clawbot/IlinkCredentialStore.java`、`controller/ClawbotController.java`（即 `/api/clawbot/*` 三个接口）、`wechat.clawbot.*` 配置项。
+- `WECHAT_CHANNEL_MODE` 现在只有 `disabled`（默认）与 `simulator`（本地调试用的假通道）两种有意义的值。
+- 通道抽象 `WeChatChannel` **保留**：将来若要接新通道（微信或其它平台），实现该接口并把平台用户标识映射成 `userId` 即可，下游（记忆/提醒/幂等/日志）零改动。
+- 需要恢复微信接入时：从 git 历史取回上述三个文件（`8b71b6d` 之前的提交）。
 
 ## 用户标识约定（多租户核心，多通道通用）
 
