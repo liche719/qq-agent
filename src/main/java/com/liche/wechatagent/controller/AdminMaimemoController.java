@@ -1,5 +1,6 @@
 package com.liche.wechatagent.controller;
 
+import com.liche.wechatagent.maimemo.MaimemoOidcService;
 import com.liche.wechatagent.maimemo.MaimemoPushService;
 import com.liche.wechatagent.maimemo.MaimemoService;
 import org.springframework.http.ResponseEntity;
@@ -25,10 +26,13 @@ public class AdminMaimemoController {
 
     private final MaimemoService maimemoService;
     private final MaimemoPushService pushService;
+    private final MaimemoOidcService oidcService;
 
-    public AdminMaimemoController(MaimemoService maimemoService, MaimemoPushService pushService) {
+    public AdminMaimemoController(MaimemoService maimemoService, MaimemoPushService pushService,
+                                  MaimemoOidcService oidcService) {
         this.maimemoService = maimemoService;
         this.pushService = pushService;
+        this.oidcService = oidcService;
     }
 
     /** 进度、今日单词、学习记录、Token 与推送状态（带 30 秒缓存） */
@@ -79,5 +83,52 @@ public class AdminMaimemoController {
         Map<String, Object> result = new LinkedHashMap<>(pushService.pushNow());
         result.put("push", maimemoService.pushState());
         return result;
+    }
+
+    /** OIDC 长期授权状态 */
+    @GetMapping("/oidc")
+    public Map<String, Object> oidcStatus() {
+        return oidcService.status();
+    }
+
+    /** 生成授权链接（state 存在库里，30 分钟内有效） */
+    @PostMapping("/oidc/authorize-url")
+    public ResponseEntity<Map<String, Object>> oidcAuthorizeUrl() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            result.put("accepted", true);
+            result.put("url", oidcService.authorizationUrl());
+            result.put("redirectUri", oidcService.status().get("redirectUri"));
+            result.put("message", "请在浏览器里打开这条链接完成授权，然后把跳转后的整条地址粘回来");
+            return ResponseEntity.ok(result);
+        } catch (RuntimeException exception) {
+            result.put("accepted", false);
+            result.put("message", exception.getMessage());
+            return ResponseEntity.ok(result);
+        }
+    }
+
+    /** 用回调地址（或授权码）换取长期凭据 */
+    @PostMapping("/oidc/callback")
+    public ResponseEntity<Map<String, Object>> oidcCallback(@RequestBody(required = false) Map<String, String> body) {
+        String code = body == null ? "" : String.valueOf(body.getOrDefault("code", ""));
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            result.putAll(oidcService.complete(code));
+            result.put("accepted", true);
+            maimemoService.invalidate();
+            result.put("overview", maimemoService.refresh());
+            return ResponseEntity.ok(result);
+        } catch (RuntimeException exception) {
+            result.put("accepted", false);
+            result.put("message", exception.getMessage());
+            return ResponseEntity.ok(result);
+        }
+    }
+
+    /** 断开 OIDC 授权 */
+    @PostMapping("/oidc/disconnect")
+    public Map<String, Object> oidcDisconnect() {
+        return oidcService.disconnect();
     }
 }

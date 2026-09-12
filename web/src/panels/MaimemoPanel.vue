@@ -18,11 +18,37 @@ const message = ref('')
 const tokenInput = ref('')
 const pushEnabled = ref(true)
 const pushTime = ref('21:30')
+const authUrl = ref('')
+const callbackInput = ref('')
 
 const status = computed(() => data.value?.status || '')
 const progress = computed(() => data.value?.progress || {})
 const todayItems = computed(() => data.value?.todayItems || [])
 const records = computed(() => data.value?.records || [])
+const oidc = computed(() => data.value?.oidc || {})
+
+const oidcState = computed(() => {
+  if (!oidc.value.configured) return { text: '未配置', tone: 'warn' }
+  if (oidc.value.authorized) return { text: '已授权', tone: 'ok' }
+  return { text: '等待授权', tone: 'warn' }
+})
+
+const oidcRows = computed(() => {
+  const rows = [
+    ['授权状态', oidcState.value.text],
+    ['应用 client_id', oidc.value.clientIdHint || '（未配置）'],
+    ['回调地址', oidc.value.redirectUri || '（未配置）'],
+    ['申请的权限', oidc.value.scopes || '—'],
+    ['授权账号', oidc.value.name || oidc.value.subject || '—'],
+    ['授权时间', oidc.value.authorizedAt || '—'],
+    ['access token 剩余', oidc.value.authorized
+      ? Math.max(0, Math.round(Number(oidc.value.accessTokenRemainingSeconds) || 0)) + ' 秒（到期前自动续）'
+      : '—'],
+    ['最近自动续期', oidc.value.lastRefreshAt || '—']
+  ]
+  if (oidc.value.lastError) rows.push(['最近错误', oidc.value.lastError])
+  return rows
+})
 
 const tone = computed(() => {
   if (status.value === 'OK') return 'ok'
@@ -118,6 +144,36 @@ function savePush() {
   run('push-settings', '/maimemo/push/settings', { enabled: pushEnabled.value, time: pushTime.value }, '推送设置已保存')
 }
 
+async function requestAuthUrl() {
+  busy.value = 'oidc-url'
+  message.value = ''
+  try {
+    const result = await api('/maimemo/oidc/authorize-url', { method: 'POST' })
+    if (result.accepted === false) throw new Error(result.message || '无法生成授权链接')
+    authUrl.value = result.url || ''
+    message.value = result.message || '授权链接已生成'
+  } catch (caught) {
+    message.value = '操作失败：' + caught.message
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function completeOidc() {
+  if (!callbackInput.value.trim()) {
+    message.value = '请先把跳转后的整条地址（或 code）粘进来'
+    return
+  }
+  await run('oidc-callback', '/maimemo/oidc/callback', { code: callbackInput.value.trim() }, '授权完成')
+  callbackInput.value = ''
+}
+
+async function disconnectOidc() {
+  if (!window.confirm('断开墨墨 OIDC 授权？断开后将回落到手工粘贴的 Token。')) return
+  await run('oidc-disconnect', '/maimemo/oidc/disconnect', undefined, '已断开授权')
+  authUrl.value = ''
+}
+
 watch(() => props.tick, () => load())
 onMounted(() => load())
 </script>
@@ -155,7 +211,40 @@ onMounted(() => load())
       </div>
       <p class="hint" style="margin-top: 8px">
         Token 有效期很短（墨墨 App 里显示一天左右），过期后聊天查询会提示失效；
-        把新 Token 粘到这里保存即可，不需要登录服务器改配置。
+        把新 Token 粘到这里保存即可，不需要登录服务器改配置。想彻底不用管 Token，见下面的「长期授权」。
+      </p>
+    </section>
+
+    <section class="glass panel">
+      <div class="panel-head">
+        <h2>长期授权（OIDC）</h2>
+        <span class="hint">配好后程序自动续期，不用再手工粘 Token</span>
+      </div>
+      <InfoGrid :rows="oidcRows"></InfoGrid>
+
+      <div class="toolbar">
+        <button class="btn btn-sm" :disabled="busy === 'oidc-url'" @click="requestAuthUrl">生成授权链接</button>
+        <button v-if="oidc.authorized" class="btn btn-sm" :disabled="busy === 'oidc-disconnect'"
+                @click="disconnectOidc">断开授权</button>
+        <span v-if="message" class="hint">{{ message }}</span>
+      </div>
+
+      <div v-if="authUrl" class="toolbar">
+        <input :value="authUrl" readonly spellcheck="false" aria-label="授权链接">
+        <a class="btn btn-sm" :href="authUrl" target="_blank" rel="noopener">在新标签打开授权页</a>
+      </div>
+
+      <div class="toolbar">
+        <input v-model="callbackInput" spellcheck="false"
+               placeholder="授权后浏览器跳转的那一整条地址（或其中的 code）粘到这里">
+        <button class="btn btn-sm" :disabled="busy === 'oidc-callback'" @click="completeOidc">完成授权</button>
+      </div>
+
+      <p class="hint" style="margin-top: 8px">
+        需要先在 <span class="mono">open.maimemo.com/app</span> 创建「后端应用」：主页要与回调地址同域名、必须是可访问的 HTTPS
+        （备案通过的域名更容易过审），回调地址填本页显示的那条；把 client_id / client_secret / 回调地址写到服务器
+        <span class="mono">.env</span> 的 <span class="mono">MAIMEMO_OIDC_*</span> 后重启容器，再回到这里点「生成授权链接」。
+        应用创建后不可修改，填之前对一遍。
       </p>
     </section>
 

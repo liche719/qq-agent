@@ -53,6 +53,10 @@ services:
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}
       MAIMEMO_DAILY_PUSH_ENABLED: ${MAIMEMO_DAILY_PUSH_ENABLED:-true}
       MAIMEMO_DAILY_PUSH_TIME: ${MAIMEMO_DAILY_PUSH_TIME:-21:30}
+      # OIDC 长期授权（创建"后端应用"后填这三项；回调地址要与平台登记一致）
+      MAIMEMO_OIDC_CLIENT_ID: ${MAIMEMO_OIDC_CLIENT_ID:-}
+      MAIMEMO_OIDC_CLIENT_SECRET: ${MAIMEMO_OIDC_CLIENT_SECRET:-}
+      MAIMEMO_OIDC_REDIRECT_URI: ${MAIMEMO_OIDC_REDIRECT_URI:-}
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro

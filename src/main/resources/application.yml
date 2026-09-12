@@ -285,6 +285,14 @@ maimemo:
   daily-push-time: ${MAIMEMO_DAILY_PUSH_TIME:21:30}
   push-scan-interval-ms: ${MAIMEMO_PUSH_SCAN_INTERVAL_MS:60000}
   push-initial-delay-ms: ${MAIMEMO_PUSH_INITIAL_DELAY_MS:60000}
+  # OIDC 长期授权（在 open.maimemo.com/app 创建"后端应用"后填这里；回调地址必须与平台登记的一致）
+  oidc:
+    client-id: ${MAIMEMO_OIDC_CLIENT_ID:}
+    client-secret: ${MAIMEMO_OIDC_CLIENT_SECRET:}
+    redirect-uri: ${MAIMEMO_OIDC_REDIRECT_URI:}
+    scopes: ${MAIMEMO_OIDC_SCOPES:openid offline_access open.memo.study}
+    authorization-endpoint: ${MAIMEMO_OIDC_AUTHORIZATION_ENDPOINT:https://accounts.maimemo.com/oidc/auth}
+    token-endpoint: ${MAIMEMO_OIDC_TOKEN_ENDPOINT:https://accounts.maimemo.com/oidc/token}
 
 logging:
   file:

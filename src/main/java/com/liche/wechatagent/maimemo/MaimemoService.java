@@ -44,6 +44,7 @@ public class MaimemoService {
 
     private final MaimemoClient client;
     private final MaimemoSettingRepository settings;
+    private final MaimemoOidcService oidcService;
     private final boolean enabled;
     private final String envToken;
     private final boolean defaultPushEnabled;
@@ -57,6 +58,7 @@ public class MaimemoService {
 
     public MaimemoService(MaimemoClient client,
                           MaimemoSettingRepository settings,
+                          MaimemoOidcService oidcService,
                           @Value("${maimemo.enabled:true}") boolean enabled,
                           @Value("${maimemo.api-token:}") String envToken,
                           @Value("${maimemo.daily-push-enabled:true}") boolean defaultPushEnabled,
@@ -66,6 +68,7 @@ public class MaimemoService {
                           @Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.client = client;
         this.settings = settings;
+        this.oidcService = oidcService;
         this.enabled = enabled;
         this.envToken = envToken == null ? "" : envToken.trim();
         this.defaultPushEnabled = defaultPushEnabled;
@@ -90,34 +93,58 @@ public class MaimemoService {
         result.put("enabled", enabled);
         result.put("checkedAt", LocalDateTime.now(zone).format(CHECKED_AT));
         result.put("tokenSource", tokenSource());
-        result.put("tokenHint", maskedToken());
+        result.put("tokenHint", oidcService.authorized() ? "（OIDC 授权，自动续期，不用手工维护）" : maskedToken());
         result.put("tokenUpdatedAt", tokenUpdatedAt());
         result.put("push", pushState());
+        result.put("oidc", oidcService.status());
 
-        String token = effectiveToken();
         if (!enabled) {
             result.put("status", STATUS_DISABLED);
             result.put("message", "墨墨接入已关闭（maimemo.enabled=false）");
             return store(result);
         }
+
+        // OIDC 授权优先（长期、自动续期）；刷新失败时退回到面板 Token / 环境变量，并把原因带给用户
+        String oidcError = "";
+        String token = "";
+        boolean oidcUsed = false;
+        if (oidcService.authorized()) {
+            try {
+                token = oidcService.accessTokenOrNull();
+                oidcUsed = token != null && !token.isBlank();
+            } catch (MaimemoClient.MaimemoAuthException exception) {
+                oidcError = exception.getMessage();
+                token = "";
+            }
+        }
+        if (token == null || token.isBlank()) {
+            token = effectiveToken();
+            if (!oidcError.isEmpty()) {
+                result.put("tokenSource", tokenSource() + "（OIDC 刷新失败，已回退）");
+            }
+        }
         if (token.isBlank()) {
             result.put("status", STATUS_NOT_CONFIGURED);
-            result.put("message", "还没配置墨墨 Token：在墨墨 App 的「开放 API」里生成，粘贴到本页保存即可。");
+            result.put("message", oidcError.isEmpty()
+                    ? "还没配置墨墨 Token：可以在墨墨 App 生成后粘贴到这里，或者配置 OIDC 授权长期使用。"
+                    : oidcError);
             return store(result);
         }
         try {
-            MaimemoClient.Progress progress = client.progress(token);
-            // 多取一些：新学/复习的拆分要用完整列表算，面板只展示前面 itemLimit 条
-            int fetchLimit = (int) Math.min(1000L, Math.max(itemLimit, progress.total()));
-            List<MaimemoClient.TodayItem> items = client.todayItems(token, fetchLimit);
-            List<MaimemoClient.StudyRecord> records = client.records(token, itemLimit);
-            result.put("status", STATUS_OK);
-            result.put("message", "已连接墨墨开放 API");
-            result.put("progress", progressMap(progress, items));
-            result.put("todayItems", itemList(items.size() > itemLimit ? items.subList(0, itemLimit) : items));
-            result.put("records", recordList(records));
-            return store(result);
+            return store(load(result, token, oidcError));
         } catch (MaimemoClient.MaimemoAuthException exception) {
+            // OIDC 的 access token 可能被服务端提前作废，强制刷新一次再试
+            if (oidcUsed) {
+                try {
+                    oidcService.forceRefresh();
+                    String retried = oidcService.accessTokenOrNull();
+                    if (retried != null && !retried.isBlank()) {
+                        return store(load(result, retried, ""));
+                    }
+                } catch (RuntimeException ignored) {
+                    // 刷新也失败：按下面的授权失效处理
+                }
+            }
             result.put("status", STATUS_UNAUTHORIZED);
             result.put("message", exception.getMessage());
             return store(result);
@@ -127,6 +154,23 @@ public class MaimemoService {
             result.put("message", exception.getMessage());
             return store(result);
         }
+    }
+
+    /** 取一次上游数据并写进结果快照 */
+    private Map<String, Object> load(Map<String, Object> result, String token, String oidcError) {
+        MaimemoClient.Progress progress = client.progress(token);
+        // 多取一些：新学/复习的拆分要用完整列表算，面板只展示前面 itemLimit 条
+        int fetchLimit = (int) Math.min(1000L, Math.max(itemLimit, progress.total()));
+        List<MaimemoClient.TodayItem> items = client.todayItems(token, fetchLimit);
+        List<MaimemoClient.StudyRecord> records = client.records(token, itemLimit);
+        result.put("status", STATUS_OK);
+        result.put("message", oidcError.isEmpty()
+                ? "已连接墨墨开放 API"
+                : "已连接（OIDC 刷新失败，当前用的是面板 Token：" + oidcError + "）");
+        result.put("progress", progressMap(progress, items));
+        result.put("todayItems", itemList(items.size() > itemLimit ? items.subList(0, itemLimit) : items));
+        result.put("records", recordList(records));
+        return result;
     }
 
     /** Token 失效后清缓存，让下一次读取立刻重试 */
@@ -216,6 +260,9 @@ public class MaimemoService {
     }
 
     public String tokenSource() {
+        if (oidcService.authorized()) {
+            return "OIDC 授权";
+        }
         String stored = settings.findById(KEY_TOKEN).map(MaimemoSetting::getValue).orElse("");
         if (stored != null && !stored.isBlank()) {
             return "面板保存";
