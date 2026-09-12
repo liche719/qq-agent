@@ -153,9 +153,15 @@ public class MemoryArchiveService {
                 log.warn("记忆归档记录保存为空 user={}，保留原始记忆", userId);
                 return;
             }
-            workMemoryService.markArchived(userId, ids, archive.getId());
+            // 顺序是刻意的：**先写摘要、最后才把原始记忆标记为归档**。
+            // 反过来（先 markArchived 再 add 摘要）一旦 add 抛异常（摘要超工作记忆上限、用户名非法等），
+            // 原始记忆已经不在 listActive/检索正文里、摘要又没写 —— 用户侧就是"这 10 条记忆凭空消失"。
+            // 现在最坏情况只是"摘要写了但原始记忆还留着"（检索仍能看到内容，不会丢东西）。
+            // 主路径另有 @Transactional 兜底（compressIfNeeded 由外部经代理调用）；
+            // periodicSweep 的自调用不走代理，所以这个顺序是该路径上的最后一道保险。
             workMemoryService.add(userId, summary, summaryPriority(oldest), "archive_summary", "SYSTEM",
                     archiveProvenance(oldest), null, archiveAttributes(oldest));
+            workMemoryService.markArchived(userId, ids, archive.getId());
             log.info("记忆归档 user={} 归档{}条 -> 摘要1条, archiveId={}", userId, ids.size(), archive.getId());
         } catch (Exception e) {
             log.warn("记忆归档失败 user={}", userId, e);

@@ -102,13 +102,15 @@ public class EpisodicMemoryService {
         }
         LocalDateTime timestamp = now == null ? LocalDateTime.now() : now;
         LocalDateTime refreshBefore = timestamp.minusMinutes(Math.max(1, minimumIntervalMinutes));
-        List<EpisodicMemory> updates = memories.stream()
-                .filter(memory -> memory != null
+        // 收集需要刷新的 id 后走定向 UPDATE（见 EpisodicMemoryRepository.updateLastUsedAt 的注释）：
+        // 不再 setLastUsedAt + saveAll，避免整行按旧快照回写、把并发的状态变更冲掉。
+        List<Long> staleIds = memories.stream()
+                .filter(memory -> memory != null && memory.getId() != null
                         && (memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore)))
-                .peek(memory -> memory.setLastUsedAt(timestamp))
+                .map(EpisodicMemory::getId)
                 .toList();
-        if (!updates.isEmpty()) {
-            repository.saveAll(updates);
+        if (!staleIds.isEmpty()) {
+            repository.updateLastUsedAt(staleIds, timestamp);
         }
     }
 
