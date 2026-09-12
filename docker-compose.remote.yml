@@ -95,7 +95,9 @@ services:
         condition: service_started
 
   mysql:
-    image: mysql:8.0.46
+    # 数据卷由 8.0.46 创建，**换 8.0.27 会导致 InnoDB 起不来**（AGENTS 第 5 节第 1 条）。
+    # 再钉死 digest，避免同 tag 被上游重推时悄悄换了内容。
+    image: mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
     container_name: wechat-agent-mysql
     restart: unless-stopped
     logging:
@@ -117,7 +119,8 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    # 钉 digest（这一层实测跑的是 Redis 7.4.11）；`redis:7-alpine` 这种浮动 minor 会跟着上游走
+    image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     container_name: wechat-agent-redis
     restart: unless-stopped
     logging:
@@ -130,7 +133,11 @@ services:
     command: redis-server --appendonly yes
 
   searxng:
-    image: searxng/searxng:latest
+    # 钉 digest 而不是 :latest —— 线上版本必须可复现，不能让上游的一次回归在下次重建时静默生效。
+    # 换版本的正确做法：`docker pull searxng/searxng:latest` 后
+    # `docker image inspect searxng/searxng:latest -f '{{index .RepoDigests 0}}'` 取新 digest 再改这里。
+    # 注意 compose 文件由 CI 每次 scp 覆盖，所以**只能改仓库里的这份**，改服务器上的会被冲掉。
+    image: searxng/searxng@sha256:6c9da4d4d236672a1b722f597d643de2202410a2281b7aa4d98fccca3a8f3732
     container_name: wechat-agent-searxng
     restart: unless-stopped
     logging:

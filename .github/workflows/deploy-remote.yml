@@ -23,14 +23,18 @@ jobs:
     permissions:
       contents: read
     steps:
+      # 三个 action 全部钉到 commit SHA（注释里保留人类可读的版本号）：
+      # 浮动 tag 被上游移动/接管时，会在**持有服务器部署私钥的 runner** 上执行任意代码 ——
+      # 那把私钥等于生产 root，所以这里不接受"跟随最新 tag"。
+      # 升级时手动改 SHA，并顺手确认版本号注释。
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e   # v3
 
       - name: Build image (with layer cache)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@0a97817b6ade9f46837855d676c4cca3a2471fc9   # v6
         with:
           context: .
           load: true
@@ -45,12 +49,22 @@ jobs:
       - name: Install SSH key
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          # 固定主机指纹，**不再用 ssh-keyscan**：keyscan 是"第一次见到就信任"（TOFU），
+          # 在途攻击者可以在首次部署时冒充部署目标，把镜像与 compose 推给伪造主机、
+          # 顺手收走我们发过去的口令。指纹值取自服务器自己的 /etc/ssh/ssh_host_ed25519_key.pub。
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
         run: |
           test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST_KEY"
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          # 显式要求严格校验主机指纹：默认的 ask 在非交互 shell 里会变成"提示并卡住"，
+          # yes 则是"不匹配就直接失败"—— 这正是我们要的（宁可部署红，也不要静默连到伪造主机）。
+          printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Upload image and deployment files
         run: |
