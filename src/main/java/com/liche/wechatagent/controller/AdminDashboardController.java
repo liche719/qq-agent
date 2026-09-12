@@ -115,6 +115,11 @@ public class AdminDashboardController {
     @Scheduled(fixedDelayString="${management.dashboard.metrics-sample-ms:10000}")
     public void scheduledSample() { history.record(overview()); }
 
+    /** 默认只返回最近 120 个采样点；需要全量时显式传更大的 limit */
+    public List<Map<String,Object>> history() {
+        return history(120);
+    }
+
     /**
      * 趋势图采样点。默认只返回最近 120 个点：环形缓冲能存 1 小时（约 360 点、100KB），
      * 面板每 10 秒拉一次，全量返回会白白吃掉几十 MB/小时的流量，而图里只画最后 60 根。
