@@ -1452,6 +1452,8 @@ public class QqChannel implements WeChatChannel {
         volatile boolean hasPartialContent;
         volatile boolean done;
         volatile boolean failed;
+        /** 某一帧是"结果未知"地失败的（超时/连接中断/5xx）：可能已经在 QQ 侧留下半截消息 */
+        volatile boolean deliveryUncertain;
         StreamSessionState(int msgSeq) { this.msgSeq = msgSeq; }
     }
     private final ConcurrentMap<String, StreamSessionState> streamStates = new ConcurrentHashMap<>();
@@ -1507,8 +1509,14 @@ public class QqChannel implements WeChatChannel {
                 streamStates.remove(userId);
                 if (sent) {
                     log.info("[qq] stream session done user={}", userId);
+                } else if (state.deliveryUncertain && !removeIncompleteStream(userId, state)) {
+                    // 结果未知（超时/中断）且拿不到 stream_msg_id、撤不回：QQ 侧可能已经显示了一部分内容。
+                    // 这时让 orchestrator 再补一条完整回复 = 用户看到"半截 + 完整"两条。按已发出处理。
+                    state.failed = false;
+                    state.done = true;
+                    sendResultUnknownCount.incrementAndGet();
+                    log.warn("[qq] 流式最终帧结果未知且无法撤回，视为已发出以免重复 user={}", userId);
                 } else {
-                    removeIncompleteStream(userId, state);
                     log.warn("[qq] stream final delivery failed; orchestrator will use standard reply user={}", userId);
                 }
             }
@@ -1528,12 +1536,22 @@ public class QqChannel implements WeChatChannel {
         };
     }
 
-    private void removeIncompleteStream(String userId, StreamSessionState state) {
+    /**
+     * 尽力撤掉半截的流式消息。
+     *
+     * @return true 表示**确认**服务器侧没有留下可见的半截消息（有 id 且删除成功）。
+     *         拿不到 id、或删除失败都算"不确定"——不能当成已经清干净。
+     */
+    private boolean removeIncompleteStream(String userId, StreamSessionState state) {
         String streamMessageId = state == null ? null : state.streamMsgId;
-        if (streamMessageId == null || streamMessageId.isBlank()) return;
+        if (streamMessageId == null || streamMessageId.isBlank()) {
+            return false;
+        }
         if (!deleteMessage(null, userId, streamMessageId)) {
             log.warn("[qq] unable to remove incomplete stream user={} messageId={}", userId, streamMessageId);
+            return false;
         }
+        return true;
     }
 
     /** 发送一帧流式消息（append 模式：content_raw 为增量）；首帧成功后记录 stream_msg_id */
@@ -1552,6 +1570,10 @@ public class QqChannel implements WeChatChannel {
             return true;
         } catch (Exception e) {
             state.failed = true;
+            if (!isDefiniteRejection(e)) {
+                // 超时/中断/5xx：这一帧可能已经生效，QQ 侧可能已经显示了内容
+                state.deliveryUncertain = true;
+            }
             apiErrorCount.incrementAndGet();
             recordApiError(e);
             log.warn("[qq] stream frame failed user={}: {}", userId, e.getMessage());

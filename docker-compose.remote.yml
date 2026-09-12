@@ -61,6 +61,10 @@ services:
       QQ_INBOUND_RATE_LIMIT_PER_MINUTE: ${QQ_INBOUND_RATE_LIMIT_PER_MINUTE:-20}
       # 主动消息每天上限（0 = 不限，只记账；面板「QQ 通道」页能看到当天发了多少条）
       QQ_PROACTIVE_DAILY_LIMIT: ${QQ_PROACTIVE_DAILY_LIMIT:-0}
+      # QQ REST 超时：平时不用改，但**验证"超时不再重复发消息"必须能改**（同坑 36/46：
+      # 不透传就没法在不改代码、不重新构建的前提下造出"结果未知"的发送失败）
+      QQ_API_CONNECT_TIMEOUT_SECONDS: ${QQ_API_CONNECT_TIMEOUT_SECONDS:-5}
+      QQ_API_READ_TIMEOUT_SECONDS: ${QQ_API_READ_TIMEOUT_SECONDS:-15}
       ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
