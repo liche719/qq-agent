@@ -82,7 +82,7 @@ async function refresh(force = false) {
   busy.value = true
   try {
     overview.value = await api('/overview')
-    history.value = await api('/metrics/history')
+    history.value = await api('/metrics/history?limit=90')
     tick.value += 1
     errorText.value = null
     stopped.value = false

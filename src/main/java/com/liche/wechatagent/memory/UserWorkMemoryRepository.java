@@ -14,6 +14,9 @@ public interface UserWorkMemoryRepository extends JpaRepository<UserWorkMemory, 
 
     long countByUserIdAndArchivedFalse(String userId);
 
+    /** 当前仍然生效的工作记忆（面板总览用；已归档的不算，和用户页口径保持一致） */
+    long countByArchivedFalse();
+
     List<UserWorkMemory> findByArchivedFalseAndValidUntilBefore(java.time.LocalDateTime validUntil);
 
     /** 最老旧的低优先级记忆（用于归档压缩） */

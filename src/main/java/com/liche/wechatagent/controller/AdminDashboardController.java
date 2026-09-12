@@ -93,7 +93,9 @@ public class AdminDashboardController {
         collect(out, moduleErrors, "conversations", conversations::count);
         collect(out, moduleErrors, "episodes", episodes::count);
         collect(out, moduleErrors, "coreMemories", core::count);
-        collect(out, moduleErrors, "workMemories", work::count);
+        // 工作记忆只统计"仍然生效"的：已归档的会单独给一个数字，避免总览和用户页口径不一致
+        collect(out, moduleErrors, "workMemories", work::countByArchivedFalse);
+        collect(out, moduleErrors, "workMemoriesArchived", () -> Math.max(0L, work.count() - work.countByArchivedFalse()));
         collect(out, moduleErrors, "reminders", reminders::count);
         collect(out, moduleErrors, "tasks", this::taskSummary);
         Map<String, String> dependencies = dependencyHealth();
@@ -113,7 +115,16 @@ public class AdminDashboardController {
     @Scheduled(fixedDelayString="${management.dashboard.metrics-sample-ms:10000}")
     public void scheduledSample() { history.record(overview()); }
 
-    @GetMapping("/metrics/history") public List<Map<String,Object>> history() { return history.snapshot(); }
+    /**
+     * 趋势图采样点。默认只返回最近 120 个点：环形缓冲能存 1 小时（约 360 点、100KB），
+     * 面板每 10 秒拉一次，全量返回会白白吃掉几十 MB/小时的流量，而图里只画最后 60 根。
+     */
+    @GetMapping("/metrics/history")
+    public List<Map<String,Object>> history(@RequestParam(defaultValue="120") int limit) {
+        List<Map<String,Object>> all = history.snapshot();
+        int bounded = Math.max(10, Math.min(3600, limit));
+        return all.size() <= bounded ? all : all.subList(all.size() - bounded, all.size());
+    }
 
     @GetMapping("/tasks") public Map<String,Object> taskList(@RequestParam(defaultValue="") String status,
             @RequestParam(defaultValue="") String query, @RequestParam(defaultValue="") String taskType,
