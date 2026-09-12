@@ -48,6 +48,9 @@ services:
       ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-30}
       # ICP 备案号（备案通过后填这里，页面底部会显示并链接工信部；留空则完全不显示）
       SITE_ICP: ${SITE_ICP:-}
+      # 定时任务（到点执行并把结果发回）
+      SCHEDULED_ENABLED: ${SCHEDULED_ENABLED:-true}
+      SCHEDULED_MAX_PER_USER: ${SCHEDULED_MAX_PER_USER:-10}
       # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
       MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}

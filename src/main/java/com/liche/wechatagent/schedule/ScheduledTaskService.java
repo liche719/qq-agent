@@ -1,0 +1,501 @@
+package com.liche.wechatagent.schedule;
+
+import com.liche.wechatagent.agent.AgentOrchestrator;
+import com.liche.wechatagent.channel.InboundMessage;
+import com.liche.wechatagent.channel.WeChatChannel;
+import com.liche.wechatagent.exception.BizException;
+import com.liche.wechatagent.log.UserLogService;
+import com.liche.wechatagent.log.UserScope;
+import com.liche.wechatagent.user.UserProfile;
+import com.liche.wechatagent.user.UserProfileRepository;
+import org.quartz.CronScheduleBuilder;
+import org.quartz.CronTrigger;
+import org.quartz.JobBuilder;
+import org.quartz.JobDetail;
+import org.quartz.JobKey;
+import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
+import org.quartz.TriggerBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 定时任务：创建 / 列出 / 启停 / 删除 / 立即执行。
+ *
+ * <p>调度复用项目已有的 Quartz（JDBC 持久化，`QRTZ_*` 表），任务组用 {@code scheduled-tasks}，
+ * 与提醒（组 {@code reminders}）互不干扰；因此**不需要改表结构**。
+ * 到点后由 {@link ScheduledTaskJob} 走完整的 Agent 链路执行并把结果推给用户。
+ */
+@Service
+public class ScheduledTaskService {
+
+    private static final Logger log = LoggerFactory.getLogger(ScheduledTaskService.class);
+    private static final String GROUP = "scheduled-tasks";
+    private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
+
+    private final ScheduledTaskRepository repository;
+    private final ScheduledTaskParseService parseService;
+    private final AgentOrchestrator orchestrator;
+    private final List<WeChatChannel> channels;
+    private final UserProfileRepository profileRepository;
+    private final UserLogService userLogService;
+    private final Scheduler scheduler;
+    private final ZoneId zone;
+    private final boolean enabled;
+    private final int maxPerUser;
+    private final int resultMaxChars;
+
+    /** 手动触发的执行放后台线程，避免在一次对话里嵌套执行 Agent */
+    private final java.util.concurrent.ExecutorService runner =
+            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "scheduled-task-runner");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    @Autowired
+    public ScheduledTaskService(ScheduledTaskRepository repository,
+                                ScheduledTaskParseService parseService,
+                                AgentOrchestrator orchestrator,
+                                List<WeChatChannel> channels,
+                                UserProfileRepository profileRepository,
+                                UserLogService userLogService,
+                                Scheduler scheduler,
+                                @Value("${scheduled.enabled:true}") boolean enabled,
+                                @Value("${scheduled.max-per-user:10}") int maxPerUser,
+                                @Value("${scheduled.result-max-chars:2000}") int resultMaxChars,
+                                @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        this.repository = repository;
+        this.parseService = parseService;
+        this.orchestrator = orchestrator;
+        this.channels = channels;
+        this.profileRepository = profileRepository;
+        this.userLogService = userLogService;
+        this.scheduler = scheduler;
+        this.enabled = enabled;
+        this.maxPerUser = Math.max(1, Math.min(100, maxPerUser));
+        this.resultMaxChars = Math.max(200, Math.min(4000, resultMaxChars));
+        this.zone = parseZone(timeZoneId);
+    }
+
+    /** 启动时把库里启用的任务同步进 Quartz（容器重建/时钟漂移后自动恢复） */
+    @EventListener(ApplicationReadyEvent.class)
+    public void resyncOnStartup() {
+        if (!enabled) {
+            return;
+        }
+        int restored = 0;
+        for (ScheduledTask task : repository.findByEnabledTrue()) {
+            try {
+                if (!scheduler.checkExists(jobKey(task.getId()))) {
+                    schedule(task);
+                    restored++;
+                }
+                refreshNextRun(task);
+            } catch (Exception exception) {
+                log.warn("定时任务恢复失败 id={} title={}: {}", task.getId(), task.getTitle(), exception.getMessage());
+            }
+        }
+        if (restored > 0) {
+            log.info("已恢复 {} 个定时任务到调度器", restored);
+        }
+    }
+
+    // ---------------- 对外能力（聊天工具与面板都用这些） ----------------
+
+    /** 自然语言创建：LLM 解析出标题/指令/Cron 后落库并调度 */
+    public String createFromDescription(String userId, String description) {
+        requireUser(userId);
+        if (description == null || description.isBlank()) {
+            return "没听清要定时做什么，可以用「每天早上 8 点把天气发我」这样的说法。";
+        }
+        ScheduledTaskParseService.ParsedTask parsed = parseService.parse(description);
+        if (parsed.cron() == null) {
+            String missing = parsed.missing().isEmpty() ? "执行频率" : String.join("；", parsed.missing());
+            return "还差点信息，没定下来：" + missing + "。比如「每天早上 8 点……」或「每周一 9 点……」。";
+        }
+        return create(userId, parsed.title(), parsed.instruction(), parsed.cron());
+    }
+
+    /** 结构化创建（面板表单与工具直连都走这里） */
+    public String create(String userId, String title, String instruction, String cron) {
+        requireUser(userId);
+        if (!enabled) {
+            return "定时任务功能当前关闭（scheduled.enabled=false）。";
+        }
+        String normalizedCron = ScheduledTaskParseService.normalizeCron(cron);
+        if (!ScheduledTaskParseService.isValidCron(normalizedCron)) {
+            return "Cron 表达式不合法，需要 Quartz 6 段（秒 分 时 日 月 周），例如每天 8 点 = 0 0 8 * * ?";
+        }
+        if (instruction == null || instruction.isBlank()) {
+            return "要执行什么还没说清楚。";
+        }
+        long existing = repository.countByUserId(userId);
+        if (existing >= maxPerUser) {
+            return "定时任务已经有 " + existing + " 个了（上限 " + maxPerUser + " 个），先删掉不用的再加。";
+        }
+
+        ScheduledTask task = new ScheduledTask();
+        task.setUserId(userId);
+        task.setTitle(safeTitle(title, instruction));
+        task.setInstruction(instruction.strip());
+        task.setCron(normalizedCron);
+        task.setEnabled(true);
+        task.setStatus(ScheduledTask.STATUS_IDLE);
+        task.setRunCount(0);
+        task.setNextRunAt(ScheduledTaskParseService.nextRun(normalizedCron, zone));
+        task.setCreatedAt(LocalDateTime.now(zone));
+        task.setUpdatedAt(LocalDateTime.now(zone));
+        repository.save(task);
+        try {
+            schedule(task);
+        } catch (SchedulerException exception) {
+            task.setEnabled(false);
+            task.setLastError("调度失败：" + exception.getMessage());
+            repository.save(task);
+            return "任务存下来了但调度失败：" + exception.getMessage();
+        }
+        userLogService.record(userId, "SCHEDULED_TASK_CREATE",
+                Map.of("taskId", task.getId(), "cron", normalizedCron));
+        return "好，记下了：「" + task.getTitle() + "」会按 " + describeCron(normalizedCron)
+                + " 执行，下次大约在 " + display(task.getNextRunAt()) + "。到点我做完会把结果发给你。";
+    }
+
+    public List<ScheduledTask> list(String userId) {
+        return repository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    public String listText(String userId) {
+        List<ScheduledTask> tasks = list(userId);
+        if (tasks.isEmpty()) {
+            return "还没有定时任务。想加的话直接说，例如「每天早上 8 点把今天的天气发我」。";
+        }
+        StringBuilder sb = new StringBuilder("定时任务（").append(tasks.size()).append(" 个）：\n");
+        for (ScheduledTask task : tasks) {
+            sb.append("#").append(task.getId()).append(" ")
+                    .append(Boolean.TRUE.equals(task.getEnabled()) ? "✅" : "⏸")
+                    .append(" 「").append(task.getTitle()).append("」")
+                    .append(describeCron(task.getCron()))
+                    .append("，下次 ").append(display(task.getNextRunAt()));
+            if (task.getLastRunAt() != null) {
+                sb.append("，上次 ").append(display(task.getLastRunAt()))
+                        .append(statusText(task.getStatus()));
+            }
+            sb.append("\n");
+        }
+        sb.append("要停掉/恢复或删除，直接说「停掉定时任务 3」「删除定时任务 3」「现在跑一下定时任务 3」。");
+        return sb.toString();
+    }
+
+    public String setEnabled(String userId, Long taskId, boolean value) {
+        ScheduledTask task = requireOwned(userId, taskId);
+        if (task == null) {
+            return "没找到这个定时任务（ID 可能不对，可以发「查看定时任务」）。";
+        }
+        task.setEnabled(value);
+        task.setUpdatedAt(LocalDateTime.now(zone));
+        if (value) {
+            task.setNextRunAt(ScheduledTaskParseService.nextRun(task.getCron(), zone));
+            repository.save(task);
+            try {
+                if (!scheduler.checkExists(jobKey(task.getId()))) {
+                    schedule(task);
+                }
+            } catch (SchedulerException exception) {
+                return "恢复失败：" + exception.getMessage();
+            }
+            return "已恢复「" + task.getTitle() + "」，下次 " + display(task.getNextRunAt()) + "。";
+        }
+        repository.save(task);
+        deleteJob(task.getId());
+        return "已暂停「" + task.getTitle() + "」，随时可以说「恢复定时任务 " + task.getId() + "」。";
+    }
+
+    public String cancel(String userId, Long taskId) {
+        ScheduledTask task = requireOwned(userId, taskId);
+        if (task == null) {
+            return "没找到这个定时任务（ID 可能不对，可以发「查看定时任务」）。";
+        }
+        deleteJob(task.getId());
+        repository.delete(task);
+        userLogService.record(userId, "SCHEDULED_TASK_CANCEL", Map.of("taskId", taskId));
+        return "已删除定时任务「" + task.getTitle() + "」。";
+    }
+
+    /** 立即执行一次：后台跑（避免嵌套在一次对话里执行，串了日志与工具尾注上下文） */
+    public String runNow(String userId, Long taskId) {
+        ScheduledTask task = requireOwned(userId, taskId);
+        if (task == null) {
+            return "没找到这个定时任务。";
+        }
+        final Long id = task.getId();
+        final String title = task.getTitle();
+        runner.submit(() -> execute(repository.findById(id).orElse(null), true));
+        return "好，「" + title + "」现在就去跑，做完我把结果发给你。";
+    }
+
+    // ---------------- 执行 ----------------
+
+    /** 到点执行：跑一遍 Agent，把结果推给用户 */
+    public String execute(ScheduledTask task, boolean manual) {
+        if (task == null) {
+            return "";
+        }
+        if (!manual && !Boolean.TRUE.equals(task.getEnabled())) {
+            return "";
+        }
+        ScheduledTask current = repository.findById(task.getId()).orElse(null);
+        if (current == null) {
+            return "";
+        }
+        String userId = current.getUserId();
+        MDC.put("userScope", UserScope.forUser(userId));
+        current.setStatus(ScheduledTask.STATUS_RUNNING);
+        current.setUpdatedAt(LocalDateTime.now(zone));
+        repository.save(current);
+        try {
+            String messageId = "scheduled-" + current.getId() + "-" + UUID.randomUUID();
+            String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId, current.getInstruction()));
+            String text = reply == null || reply.isBlank() ? "（这次没有拿到结果）" : reply.strip();
+            String clipped = text.length() > resultMaxChars ? text.substring(0, resultMaxChars) + "…" : text;
+
+            boolean sent = sendToUser(userId, "⏰ 「" + current.getTitle() + "」\n" + text);
+            current.setLastRunAt(LocalDateTime.now(zone));
+            current.setStatus(sent ? ScheduledTask.STATUS_SUCCESS : ScheduledTask.STATUS_FAILED);
+            current.setLastResult(clipped);
+            current.setLastError(sent ? null : "推送未被通道接受（可能是主动消息额度限制）");
+            current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
+            current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
+            current.setUpdatedAt(LocalDateTime.now(zone));
+            repository.save(current);
+            userLogService.record(userId, "SCHEDULED_TASK_RUN",
+                    Map.of("taskId", current.getId(), "sent", sent, "manual", manual));
+            return "已执行「" + current.getTitle() + "」：" + text;
+        } catch (RuntimeException exception) {
+            log.warn("定时任务执行失败 id={} user={}: {}", current.getId(), userId, exception.toString());
+            current.setLastRunAt(LocalDateTime.now(zone));
+            current.setStatus(ScheduledTask.STATUS_FAILED);
+            current.setLastError(shorten(exception.getMessage(), 500));
+            current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
+            current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
+            current.setUpdatedAt(LocalDateTime.now(zone));
+            repository.save(current);
+            return "执行失败：" + exception.getMessage();
+        } finally {
+            MDC.remove("userScope");
+        }
+    }
+
+    /** 投递到用户最近一次说话的通道（与提醒一致：不能猜通道，否则可能投错平台） */
+    private boolean sendToUser(String userId, String text) {
+        UserProfile profile = profileRepository.findById(userId).orElse(null);
+        if (profile == null || profile.getLastChannel() == null || profile.getLastChannel().isBlank()) {
+            log.warn("定时任务没有可用的投递通道 user={}", userId);
+            return false;
+        }
+        for (WeChatChannel channel : channels) {
+            if (profile.getLastChannel().equals(channel.channel())) {
+                if (channel.hasReliableSendStatus()) {
+                    return channel.sendTextResultFrom(profile.getLastBotId(), userId, text);
+                }
+                channel.sendTextFrom(profile.getLastBotId(), userId, text);
+                return true;
+            }
+        }
+        log.warn("定时任务投递通道不可用 user={} channel={}", userId, profile.getLastChannel());
+        return false;
+    }
+
+    // ---------------- Quartz ----------------
+
+    private void schedule(ScheduledTask task) throws SchedulerException {
+        String cron = ScheduledTaskParseService.normalizeCron(task.getCron());
+        JobDetail job = JobBuilder.newJob(ScheduledTaskJob.class)
+                .withIdentity(jobKey(task.getId()))
+                .usingJobData("taskId", task.getId())
+                .build();
+        CronTrigger trigger = TriggerBuilder.newTrigger()
+                .withIdentity("scheduled-trigger-" + task.getId(), GROUP)
+                .withSchedule(CronScheduleBuilder.cronSchedule(cron)
+                        .withMisfireHandlingInstructionDoNothing())
+                .forJob(job)
+                .build();
+        if (scheduler.checkExists(jobKey(task.getId()))) {
+            scheduler.deleteJob(jobKey(task.getId()));
+        }
+        scheduler.scheduleJob(job, trigger);
+    }
+
+    private void deleteJob(Long taskId) {
+        try {
+            scheduler.deleteJob(jobKey(taskId));
+        } catch (SchedulerException exception) {
+            log.warn("删除定时任务调度失败 id={}: {}", taskId, exception.getMessage());
+        }
+    }
+
+    private void refreshNextRun(ScheduledTask task) {
+        LocalDateTime next = ScheduledTaskParseService.nextRun(task.getCron(), zone);
+        if (next != null && !next.equals(task.getNextRunAt())) {
+            task.setNextRunAt(next);
+            repository.save(task);
+        }
+    }
+
+    private JobKey jobKey(Long taskId) {
+        return JobKey.jobKey("scheduled-" + taskId, GROUP);
+    }
+
+    // ---------------- 参数展示 ----------------
+
+    /** 面板/聊天里展示的下次执行时间（Quartz 触发器是权威，这里兜底算一次） */
+    public Map<String, Object> describe(ScheduledTask task) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", task.getId());
+        map.put("title", task.getTitle());
+        map.put("instruction", task.getInstruction());
+        map.put("cron", task.getCron());
+        map.put("schedule", describeCron(task.getCron()));
+        map.put("enabled", Boolean.TRUE.equals(task.getEnabled()));
+        map.put("status", task.getStatus());
+        map.put("nextRunAt", display(task.getNextRunAt()));
+        map.put("lastRunAt", task.getLastRunAt() == null ? "" : display(task.getLastRunAt()));
+        map.put("lastResult", task.getLastResult() == null ? "" : task.getLastResult());
+        map.put("lastError", task.getLastError() == null ? "" : task.getLastError());
+        map.put("runCount", task.getRunCount() == null ? 0 : task.getRunCount());
+        map.put("createdAt", task.getCreatedAt() == null ? "" : display(task.getCreatedAt()));
+        return map;
+    }
+
+    /** Cron → 人话（只覆盖常见写法，认不出来就原样显示） */
+    public static String describeCron(String cron) {
+        String value = ScheduledTaskParseService.normalizeCron(cron);
+        if (value == null) {
+            return "（未设置）";
+        }
+        String[] parts = value.split("\\s+");
+        if (parts.length != 6) {
+            return value;
+        }
+        String second = parts[0];
+        String minute = parts[1];
+        String hour = parts[2];
+        String day = parts[3];
+        String month = parts[4];
+        String week = parts[5];
+        StringBuilder sb = new StringBuilder();
+        if ("*".equals(minute) && "*".equals(hour)) {
+            sb.append("每分钟");
+        } else if (minute.startsWith("*/") && "*".equals(hour)) {
+            sb.append("每 ").append(minute.substring(2)).append(" 分钟");
+        } else if ("*".equals(hour) && isNumber(minute)) {
+            sb.append("每小时的第 ").append(minute).append(" 分");
+        } else if (isNumber(hour) && isNumber(minute)) {
+            sb.append("每天 ").append(pad(hour)).append(":").append(pad(minute));
+        } else if (hour.startsWith("*/") && isNumber(minute)) {
+            sb.append("每 ").append(hour.substring(2)).append(" 小时（第 ").append(minute).append(" 分）");
+        } else {
+            return value;
+        }
+        if (!"?".equals(week) && !"*".equals(week)) {
+            sb.append("，限 ").append(week);
+        }
+        if (!"*".equals(day) && !"?".equals(day)) {
+            sb.append("，日 ").append(day);
+        }
+        if (!"*".equals(month)) {
+            sb.append("，月 ").append(month);
+        }
+        return sb.toString();
+    }
+
+    private static boolean isNumber(String value) {
+        return value.matches("\\d{1,2}");
+    }
+
+    private static String pad(String value) {
+        return value.length() == 1 ? "0" + value : value;
+    }
+
+    private String statusText(String status) {
+        if (ScheduledTask.STATUS_SUCCESS.equals(status)) {
+            return "成功";
+        }
+        if (ScheduledTask.STATUS_FAILED.equals(status)) {
+            return "失败";
+        }
+        if (ScheduledTask.STATUS_RUNNING.equals(status)) {
+            return "执行中";
+        }
+        return "未执行";
+    }
+
+    private String display(LocalDateTime time) {
+        return time == null ? "待排期" : time.format(DISPLAY);
+    }
+
+    private void requireUser(String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new BizException("当前用户上下文不存在");
+        }
+    }
+
+    private ScheduledTask requireOwned(String userId, Long taskId) {
+        requireUser(userId);
+        if (taskId == null || taskId <= 0) {
+            return null;
+        }
+        return repository.findById(taskId)
+                .filter(task -> userId.equals(task.getUserId()))
+                .orElse(null);
+    }
+
+    private String safeTitle(String title, String instruction) {
+        String value = title == null ? "" : title.strip();
+        if (value.isBlank()) {
+            value = instruction == null ? "定时任务" : instruction.strip();
+            value = value.length() > 16 ? value.substring(0, 16) : value;
+        }
+        return value.length() > 120 ? value.substring(0, 120) : value;
+    }
+
+    private static String shorten(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() > max ? value.substring(0, max) : value;
+    }
+
+    private static ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return DEFAULT_ZONE;
+        }
+    }
+
+    /** 面板/兜底用：把任务自身信息整理成可读列表 */
+    public List<Map<String, Object>> describeAll(String userId) {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (ScheduledTask task : list(userId)) {
+            list.add(describe(task));
+        }
+        return list;
+    }
+}

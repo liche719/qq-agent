@@ -3,7 +3,7 @@ const DICTIONARY = {
   app: { UP: '正常', DEGRADED: '降级', DOWN: '异常' },
   qq: { UP: '正常', DOWN: '异常', DISABLED: '未启用' },
   dep: { UP: '正常', DOWN: '异常', STANDBY: '待机' },
-  task: { RUNNING: '运行中', FAILED: '失败', UNKNOWN_RESULT: '结果未知', REPLY_SENT: '已回复' },
+  task: { RUNNING: '运行中', FAILED: '失败', UNKNOWN_RESULT: '结果未知', REPLY_SENT: '已回复', SUCCESS: '已成功', IDLE: '未执行' },
   channel: { qq: 'QQ', wechat: '微信', wechat_ilink: '微信', clawbot: '微信', simulator: '模拟器' },
   source: { operation: '操作审计', application: '应用日志' },
   maimemo: {

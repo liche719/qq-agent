@@ -26,7 +26,9 @@ public class ReminderTool {
         this.statusService = statusService;
     }
 
-    @Tool(value = "解析用户的提醒需求并创建定时提醒。用户提到'提醒我/帮我记着/XX点叫我/定时/每天/每周'等意图时调用。参数 description 是用户的原话。")
+    @Tool(value = "解析用户的提醒需求并创建定时提醒。用户提到'提醒我/帮我记着/XX点叫我/定时/每天/每周'等意图时调用。参数 description 是用户的原话。"
+            + "**注意区分**：如果到点后需要你去做一件事（查天气、汇总内容、给建议等）再把结果发给他，请改用 createScheduledTask；"
+            + "本工具只适合「到点发一句话提醒」的场景。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult parseReminder(String description) {

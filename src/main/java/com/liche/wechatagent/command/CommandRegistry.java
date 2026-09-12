@@ -21,6 +21,9 @@ public class CommandRegistry {
         TEXT_ALIASES.put("帮助", "help");
         TEXT_ALIASES.put("查看记忆", "memory");
         TEXT_ALIASES.put("查看提醒", "reminders");
+        TEXT_ALIASES.put("定时任务", "schedules");
+        TEXT_ALIASES.put("查看定时任务", "schedules");
+        TEXT_ALIASES.put("我的定时任务", "schedules");
         TEXT_ALIASES.put("开启自动记忆", "memory");
         TEXT_ALIASES.put("关闭自动记忆", "memory");
         TEXT_ALIASES.put("删除记忆", "memory");
