@@ -66,8 +66,11 @@ jobs:
       - name: Smoke check deployed panel
         run: |
           BASE="https://${{ secrets.DEPLOY_HOST }}:8443"
+          DOMAIN="https://liche.cloud:8443"
           KEY="${{ secrets.ADMIN_API_KEY }}"
           code() { curl -sk -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
+          # 域名这一组不加 -k：验证的是真实证书链，证书过期或域名解析挂了都会让流水线变红
+          trust_code() { curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
           problems=""
           check() { if [ "$2" != "$3" ]; then problems="$problems $1(期望$2得到$3)"; fi; }
 
@@ -84,6 +87,9 @@ jobs:
           check "带口令接口" 200 "$(code -H "X-Agent-Admin-Key: $KEY" "$BASE/api/admin/overview")"
           check "账号密码登录" 200 "$(code -X POST -H 'Content-Type: application/json' \
             -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' "$BASE/api/admin/session")"
+          check "域名首页（证书校验）" 200 "$(trust_code "$DOMAIN/")"
+          check "域名前端资源（证书校验）" 200 "$(trust_code "$DOMAIN${asset}")"
+          check "域名带口令接口（证书校验）" 200 "$(trust_code -H "X-Agent-Admin-Key: $KEY" "$DOMAIN/api/admin/overview")"
 
           if [ -n "$problems" ]; then
             echo "❌ 部署后自检失败:$problems"
@@ -93,4 +99,4 @@ jobs:
               "$BASE/api/admin/actions/alerts/notify" || true
             exit 1
           fi
-          echo "✅ 部署后自检通过：页面可访问、鉴权生效、登录与面板接口正常"
+          echo "✅ 部署后自检通过：页面可访问、鉴权生效、登录与面板接口正常、域名证书校验通过"
