@@ -132,7 +132,11 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
 2. Quartz：`job-store-type: jdbc`，`initialize-schema` 必须为 `never`（历史上是 `always`，有重建表风险，已修）。
-3. SearXNG 的 Google / DuckDuckGo / Brave / Startpage 在服务器上网络不可达，属线路限制而非配置错误；实际可用 bing / baidu / sogou / 360。
+3. **SearXNG 引擎配置（2026-09-12 按实测重做，别再想当然）**：这台机器是阿里云大陆机房 IP，逐引擎实测结论——
+   - **可用**（中文查询都有 10~20 条）：`yandex`、`naver`、`resulthunter`、`searchmysite`、`mwmbl`（英文索引）、`bing`（**必须 `base_url: https://cn.bing.com`**，走 `www.bing.com` 会 302 且解析不到结果）。
+   - **不可用**：google / google cse / duckduckgo / brave / qwant / wikipedia / wikidata / seznam / tusksearch / wiby（超时不可达）；baidu（判验证码，引擎挂起 1 小时）、360search（跳 `qcaptcha` 页）、mojeek（验证码）、fastbot（403）、gabanza（证书错误）；**sogou 是引擎代码本身报错**（`AttributeError: resp.next_request`，与网络无关）；quark / yep / privacywall / crowdview / encyclosearch 返回空。
+   - **关键机制（本次"搜索一直失败"的真正原因）**：**失效引擎和可用引擎一样要处理**——每个失效引擎都要等 3 秒 `request_timeout` 再重试，十几个叠加会把单次搜索拖到 **20 秒以上**，超过应用侧 `searxng.timeout-seconds`（默认 15s）→ 聊天里表现为"搜索一直失败"，而 SearXNG 侧只是慢。因此配置用 `use_default_settings.engines.keep_only` **只保留上面 6 个引擎**，修好后实测 **2~3 秒返回 60 多条结果**。
+   - `docker/searxng/settings.yml` 是**挂载**进容器的，改完必须重启容器才生效——CI 部署步骤已加 `docker restart wechat-agent-searxng`。该文件处于 `.gitignore` 的 `/docker/searxng/` 规则下**但已被跟踪**：`git add` 会提示"被忽略"，实际仍能正常提交，用 `git hash-object <file>` 与 `git rev-parse HEAD:<path>` 对比确认即可，别被提示误导。
 4. 容器内绑定 `127.0.0.1` 会让 docker 端口映射失效，所以 agent 用 host 网络；同时管理后台的来源 IP 校验 `ADMIN_ALLOWED_IPS`（默认 `127.0.0.1,::1`）是**精确匹配、不支持 CIDR**，host 网络下才自然放行。
 5. 不要把密码放进命令行参数：会被本机安全策略拦截，也应避免；改用交互式 SSH 或 stdin 传参。
 6. 用管道把 `.env` 写到服务器会带 UTF-8 BOM，docker compose 读取前需去掉（`sed -i '1s/^\xEF\xBB\xBF//'`）。
@@ -153,6 +157,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='LTAI5t…'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删了、其实是解析问题——本次就为这个白折腾了一轮。acme.sh 自身用 shell `source` 读该文件，带引号无影响。Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名会先被注册局 `client hold`**（阿里云实名认证通过前）：此期间公网 DNS 是 NXDOMAIN，DNS-01 的 `_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」重试**（实测空转 10 分钟以上不停），所以自动签发脚本必须用 `timeout 900` 之类包住，别让它挂着。另外 hold 解除后解析还有约 5 分钟负缓存：TXT 刚加好时可能短暂查不到，等一下就会通过。实测时间线：注册 19:29(UTC) → 次日 06:40 左右 hold 才消失。
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」（提示语是"您与此网站之间建立的连接不安全 / 请勿在此网站上输入任何敏感信息…"），**与服务器无关**。判定方法：`tools/ui-verify/check_security.py`（真实 Chromium 直连、不忽略证书错误）——直连正常就说明是浏览器侧；处理办法是关掉旧标签页/重启浏览器/换无痕窗口，并**清掉 IP 地址那个书签**（IP 访问永远提示证书名称不匹配，LE 不给 IP 签证书）。另注意本机装了 Steam++（Watt Toolkit，进程 `Steam++` / `Steam++.Accelerator`）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络问题时先把它退出。
+24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 服务器 `.env` 里**没有** `MYSQL_PASSWORD`，compose 用的是默认值 `root`（即 `mysql -uroot -proot`，库名 `wechat_agent`）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`，容器内查数据用 `docker exec -it wechat-agent-mysql mysql -uroot -proot`（注意远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`）。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。
 
 ## 6. Windows / PowerShell 环境注意
 
