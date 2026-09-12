@@ -26,6 +26,13 @@ const progress = computed(() => data.value?.progress || {})
 const todayItems = computed(() => data.value?.todayItems || [])
 const records = computed(() => data.value?.records || [])
 const oidc = computed(() => data.value?.oidc || {})
+const sticking = computed(() => data.value?.sticking || { count: 0, words: [] })
+
+const stickyPreview = computed(() => {
+  const words = (sticking.value.words || []).slice(0, 6).map(word => word.spelling)
+  if (!words.length) return '没有标记为顽固的单词'
+  return words.join('、') + ((sticking.value.count || 0) > words.length ? ' 等' : '')
+})
 
 const oidcState = computed(() => {
   if (!oidc.value.configured) return { text: '未配置', tone: 'warn' }
@@ -192,6 +199,8 @@ onMounted(() => load())
                   ? '—' : fmtNum(progress.newCount) + ' / ' + fmtNum(progress.reviewCount)"
                 meta="今天已学单词构成"></StatCard>
       <StatCard label="学习时长" :value="fmtNum(progress.studyTimeMinutes) + ' 分钟'" meta="墨墨统计"></StatCard>
+      <StatCard label="顽固单词" :value="fmtNum(sticking.count)"
+                :meta="stickyPreview" :tone="sticking.count > 0 ? 'warn' : ''"></StatCard>
     </div>
 
     <section class="glass panel">

@@ -52,11 +52,16 @@ public class MaimemoService {
     private final boolean defaultPushEnabled;
     private final LocalTime defaultPushTime;
     private final int itemLimit;
+    private final int recordFetchLimit;
+    private final long stickyCacheMillis;
     private final long cacheMillis;
     private final ZoneId zone;
 
     private volatile Map<String, Object> cache;
     private volatile long cachedAtMillis;
+    /** 顽固单词单独的缓存（拉的是全量学习记录，比快照缓存更久） */
+    private volatile Map<String, Object> stickingCache;
+    private volatile long stickingCachedAtMillis;
 
     public MaimemoService(MaimemoClient client,
                           MaimemoSettingRepository settings,
@@ -68,6 +73,8 @@ public class MaimemoService {
                           @Value("${maimemo.daily-push-enabled:true}") boolean defaultPushEnabled,
                           @Value("${maimemo.daily-push-time:21:30}") String defaultPushTime,
                           @Value("${maimemo.item-limit:30}") int itemLimit,
+                          @Value("${maimemo.record-fetch-limit:1000}") int recordFetchLimit,
+                          @Value("${maimemo.sticking-cache-seconds:600}") int stickingCacheSeconds,
                           @Value("${maimemo.cache-seconds:30}") int cacheSeconds,
                           @Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.client = client;
@@ -80,6 +87,8 @@ public class MaimemoService {
         this.defaultPushEnabled = defaultPushEnabled;
         this.defaultPushTime = parseTime(defaultPushTime, LocalTime.of(21, 30));
         this.itemLimit = Math.max(5, Math.min(200, itemLimit));
+        this.recordFetchLimit = Math.max(50, Math.min(1000, recordFetchLimit));
+        this.stickyCacheMillis = Math.max(30, Math.min(3600, stickingCacheSeconds)) * 1000L;
         this.cacheMillis = Math.max(0, Math.min(600, cacheSeconds)) * 1000L;
         this.zone = parseZone(timeZone);
     }
@@ -177,7 +186,48 @@ public class MaimemoService {
         result.put("progress", progressMap(progress, items));
         result.put("todayItems", itemList(items.size() > itemLimit ? items.subList(0, itemLimit) : items));
         result.put("records", recordList(records));
+        result.put("sticking", stickingInfo(token));
         return result;
+    }
+
+    /**
+     * 顽固单词（反复忘记、被墨墨打上 STICKING 的词）。
+     *
+     * <p>接口只在**完整**学习记录里带这个标签（实测 833 条记录里有 35 个 STICKING），
+     * 只拉前面几十条基本永远看不到，所以这里单独拉一次大列表并按更长的缓存时间（默认 10 分钟）存着——
+     * 顽固词变化很慢，不必每次刷新都拉全量。
+     */
+    private Map<String, Object> stickingInfo(String token) {
+        Map<String, Object> cached = stickingCache;
+        if (cached != null && System.currentTimeMillis() - stickingCachedAtMillis < stickyCacheMillis) {
+            return cached;
+        }
+        Map<String, Object> info = new LinkedHashMap<>();
+        try {
+            List<MaimemoClient.StudyRecord> all = client.records(token, recordFetchLimit);
+            List<Map<String, Object>> words = new ArrayList<>();
+            for (MaimemoClient.StudyRecord record : all) {
+                if (record.sticking() && words.size() < 100) {
+                    Map<String, Object> word = new LinkedHashMap<>();
+                    word.put("spelling", record.spelling());
+                    word.put("lastResponse", responseText(record.lastResponse(), true));
+                    word.put("studyCount", record.studyCount());
+                    words.add(word);
+                }
+            }
+            info.put("count", words.size());
+            info.put("scanned", all.size());
+            info.put("words", words);
+        } catch (RuntimeException exception) {
+            log.warn("读取顽固单词失败: {}", exception.getMessage());
+            info.put("count", 0);
+            info.put("scanned", 0);
+            info.put("words", List.of());
+            info.put("error", exception.getMessage());
+        }
+        stickingCache = info;
+        stickingCachedAtMillis = System.currentTimeMillis();
+        return info;
     }
 
     /** Token 失效后清缓存，让下一次读取立刻重试 */
@@ -226,7 +276,7 @@ public class MaimemoService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) snapshot.get("todayItems");
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> records = (List<Map<String, Object>>) snapshot.get("records");
+        Map<String, Object> stickingInfo = (Map<String, Object>) snapshot.getOrDefault("sticking", Map.of());
 
         int finished = number(progress.get("finished"));
         int total = number(progress.get("total"));
@@ -261,18 +311,30 @@ public class MaimemoService {
             sb.append("\n");
         }
         List<String> sticking = new ArrayList<>();
-        for (Map<String, Object> record : records) {
-            if (Boolean.TRUE.equals(record.get("sticking")) && sticking.size() < 8) {
-                sticking.add(String.valueOf(record.get("spelling")));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> stickyWords = (List<Map<String, Object>>) stickingInfo.getOrDefault("words", List.of());
+        for (Map<String, Object> word : stickyWords) {
+            if (sticking.size() < 15) {
+                sticking.add(String.valueOf(word.get("spelling")));
             }
         }
         if (!sticking.isEmpty()) {
-            sb.append("顽固单词（反复忘记）：").append(String.join("、", sticking)).append("\n");
+            sb.append("顽固单词（墨墨标记为反复忘记，共 ").append(number(stickingInfo.get("count")))
+                    .append(" 个）：").append(String.join("、", sticking));
+            if (number(stickingInfo.get("count")) > sticking.size()) {
+                sb.append(" 等");
+            }
+            sb.append("\n");
+        } else {
+            sb.append("顽固单词：这次没查到（已扫描 ").append(number(stickingInfo.get("scanned")))
+                    .append(" 条学习记录）——如实说没查到，不要编单词。\n");
         }
         if (finished == 0 && total > 0) {
             sb.append("今天还没开始背。\n");
         }
-        sb.append("请用自然语言把进度讲给用户（可以顺手鼓励一句），数字照抄，不要自己加戏。");
+        sb.append("讲给用户时：进度、词表、顽固标记这些**墨墨的数据必须照抄**，不要自己加戏；"
+                + "但**单词的中文释义可以你自己给**（墨墨开放 API 不提供官方释义），给释义时按常见义项写、不确定就只说词性和大意，"
+                + "不要声称那是墨墨官方释义。");
         return sb.toString();
     }
 
@@ -442,7 +504,7 @@ public class MaimemoService {
         for (MaimemoClient.StudyRecord record : records) {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("spelling", record.spelling());
-            map.put("nextStudyDate", record.nextStudyDate());
+            map.put("nextStudyDate", localDate(record.nextStudyDate()));
             map.put("lastResponse", responseText(record.lastResponse(), true));
             map.put("studyCount", record.studyCount());
             map.put("sticking", record.sticking());
@@ -466,6 +528,24 @@ public class MaimemoService {
 
     private int number(Object value) {
         return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    /**
+     * 接口返回的是 UTC 的 ISO 时间（如 2026-09-22T16:00:00.000Z，其实就是本地 09-23 零点），
+     * 直接展示会让人以为差一天，所以统一换算成本地日期。
+     */
+    private String localDate(String iso) {
+        if (iso == null || iso.isBlank()) {
+            return "";
+        }
+        try {
+            return java.time.OffsetDateTime.parse(iso)
+                    .atZoneSameInstant(zone)
+                    .toLocalDate()
+                    .toString();
+        } catch (RuntimeException exception) {
+            return iso;
+        }
     }
 
     private static LocalTime parseTime(String value, LocalTime fallback) {

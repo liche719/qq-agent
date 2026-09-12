@@ -290,6 +290,9 @@ maimemo:
   connect-timeout-seconds: ${MAIMEMO_CONNECT_TIMEOUT_SECONDS:5}
   cache-seconds: ${MAIMEMO_CACHE_SECONDS:30}
   item-limit: ${MAIMEMO_ITEM_LIMIT:30}
+  # 顽固单词要在完整学习记录里筛（实测 833 条里才有 35 个 STICKING），所以单独拉一次大列表并单独缓存
+  record-fetch-limit: ${MAIMEMO_RECORD_FETCH_LIMIT:1000}
+  sticking-cache-seconds: ${MAIMEMO_STICKING_CACHE_SECONDS:600}
   daily-push-enabled: ${MAIMEMO_DAILY_PUSH_ENABLED:true}
   daily-push-time: ${MAIMEMO_DAILY_PUSH_TIME:21:30}
   push-scan-interval-ms: ${MAIMEMO_PUSH_SCAN_INTERVAL_MS:60000}
