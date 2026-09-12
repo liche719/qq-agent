@@ -67,7 +67,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ### 运维面板访问方式（应用自带 HTTPS，2026-09-12 定型）
 
-- **面板唯一入口**：`https://liche.cloud/`（**标准 443 端口，地址里不带端口号**；Vue 单页应用，Let's Encrypt 证书，浏览器绿锁）。`https://120.25.170.92/` 仍能打开但会提示证书名称不匹配。用户明确弃用 VPN（WireGuard/socat/wg0/51820/wireguard-data/宿主 sysctl 已全拆）与 nginx 网关（一次性容器 + 限流都没必要），**不要再加回来**。
+- **面板唯一入口**：`https://liche.cloud/`（**标准 443 端口，地址里不带端口号**；Vue 单页应用，Let's Encrypt 证书，浏览器绿锁）。**ICP 备案期间（2026-09-12 起）域名解析已暂停，暂时改用 `https://120.25.170.92/`**（证书名称不匹配，点继续访问）；备案通过后把 A 记录设回 `ENABLE` 即恢复域名访问。用户明确弃用 VPN（WireGuard/socat/wg0/51820/wireguard-data/宿主 sysctl 已全拆）与 nginx 网关（一次性容器 + 限流都没必要），**不要再加回来**。
 - 应用直接用 PEM 证书起 HTTPS，无需 keystore：compose 里 `SERVER_ADDRESS=0.0.0.0`、`SERVER_PORT=443`、`SERVER_SSL_ENABLED=true`、`SERVER_SSL_CERTIFICATE=/app/certs/server.crt`、`SERVER_SSL_CERTIFICATE_PRIVATE_KEY=/app/certs/server.key`，并把宿主机 `docker/tls/` 挂到 `/app/certs`（证书服务器侧生成、不入库；`server.key` 600、`server.crt` 644）。
 - 安全组放行 **TCP 443**（2026-09-12 由用户开通；**8443 的规则先留着不回滚时不用**，将来确认稳定可删）。手机访问同样是绿锁，不再弹"不安全"。
 - **鉴权分层**：口令经请求头 `X-Agent-Admin-Key` 由 `AdminAccessFilter` 校验（`ADMIN_REQUIRE_KEY=true` 时**这是唯一凭据**，因此不再要求来源 IP 在白名单内），账号由 `AdminSessionController` 经 `POST /api/admin/session` 校验；前端把凭据存 `sessionStorage`（勾「记住账号密码」则存 `localStorage`）。
@@ -124,7 +124,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 构建步骤用 `docker/build-push-action@v6` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（实测纯后端改动约 192 秒、含前端全量约 240 秒）。
 - 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f`。MySQL/Redis/SearXNG 及其卷不受影响。
 - 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥文件已删除，需要轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）。
-- **部署后自检**（2026-09-12 新增，同日加入域名校验）：部署完等应用就绪，然后检查「首页 200 / 前端 JS 资源 200 / 无口令 401 / 带口令 200 / 账号密码登录 200」(走 IP `https://$DEPLOY_HOST`，`curl -k`)，以及 **`https://liche.cloud/` 首页、前端资源、带口令接口三项（不加 `-k`，走真实证书链）**；任一项不符即调用告警接口推一条 QQ 消息并把流水线置红。也就是说**改坏了、或者证书过期/域名解析挂了，都会被系统自己发现并通知你**。
+- **部署后自检**（2026-09-12 新增，同日加入域名校验）：部署完等应用就绪，然后检查「首页 200 / 前端 JS 资源 200 / 无口令 401 / 带口令 200 / 账号密码登录 200」(走 IP `https://$DEPLOY_HOST`，`curl -k`)，以及 **`https://liche.cloud/` 首页、前端资源、带口令接口三项（不加 `-k`，走真实证书链）——这三项仅在该域名有解析时执行**（备案期间暂停解析时自动跳过并打印提示，解析恢复后自动重新校验，避免误报红）；任一项不符即调用告警接口推一条 QQ 消息并把流水线置红。也就是说**改坏了、或者证书过期/域名解析挂了，都会被系统自己发现并通知你**。
 - **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
 - 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
 
@@ -177,7 +177,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。
-- 遗留可选项：`/api/clawbot/*` 代码保留但已无页面入口；**ICP 备案**（用户 2026-09-12 决定要做，`.cloud` 后缀在工信部批复清单内、可备案）：完整材料清单与逐屏步骤见 `docs/ICP备案指南.md`（**注意 `.gitignore` 里有 `/docs/`，新增文档要用 `git add -f` 才会入库**），最关键的硬性条件是 **ECS 必须包年包月且剩余时长 ≥ 3 个月**（否则拿不到备案服务号）；个人备案的**网站名称禁用词**包括「个人空间/爱好者/博客/导航/工作室/论坛/平台/热线/社区/社团/网络/网站/网址/主页/资讯/作品展示」等，备注需 ≥20 字说明内容（推荐名称 `技术学习记录`）；备案期间建议暂停 A 记录或把端口临时切回 8443（DNS-01 续期不受影响），通过后恢复 `https://liche.cloud/`。
+- 遗留可选项：`/api/clawbot/*` 代码保留但已无页面入口；**ICP 备案进行中**（用户 2026-09-12 提交，`.cloud` 可备案）：材料清单与逐屏步骤见 `docs/ICP备案指南.md`（**注意 `.gitignore` 里有 `/docs/`，新增文档要用 `git add -f` 才会入库**）；个人备案网站名称禁用词见该文档第 4 节（推荐 `技术学习记录`）。
+- **备案期间的状态（2026-09-12 起）**：按管局要求"未备案不得开通网站"，`liche.cloud` 的 `A @ → 120.25.170.92` 记录已置 **`DISABLE`**（保留未删，RecordId `2098500125097357312`，恢复时改回 `ENABLE`），**面板暂时改用 `https://120.25.170.92/`**（证书名称不匹配，点继续访问）。证书自动续期不受影响（DNS-01 只加临时 TXT）。CI 自检已改成**域名无解析时跳过域名三项并打印提示**，所以这段期间的部署不会误报红。备案通过后：① A 记录恢复 `ENABLE`；② 服务器 `.env` 填 `SITE_ICP=<备案号>` 并重启容器，页脚即显示备案号（已实现并验证：`site.icp` → `GET /api/site/info` → `web/src/components/SiteFooter.vue`，未配置时整块不渲染）。
 - 本地：Docker Desktop 未启动，本地 JAR 未运行，`target/` 已删除（需要时 `mvn package` 重建）。
 
 ## 8. 凭据索引（只写位置，不写明文）
