@@ -137,6 +137,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
    - **不可用**：google / google cse / duckduckgo / brave / qwant / wikipedia / wikidata / seznam / tusksearch / wiby（超时不可达）；baidu（判验证码，引擎挂起 1 小时）、360search（跳 `qcaptcha` 页）、mojeek（验证码）、fastbot（403）、gabanza（证书错误）；**sogou 是引擎代码本身报错**（`AttributeError: resp.next_request`，与网络无关）；quark / yep / privacywall / crowdview / encyclosearch 返回空。
    - **关键机制（本次"搜索一直失败"的真正原因）**：**失效引擎和可用引擎一样要处理**——每个失效引擎都要等 3 秒 `request_timeout` 再重试，十几个叠加会把单次搜索拖到 **20 秒以上**，超过应用侧 `searxng.timeout-seconds`（默认 15s）→ 聊天里表现为"搜索一直失败"，而 SearXNG 侧只是慢。因此配置用 `use_default_settings.engines.keep_only` **只保留上面 6 个引擎**，修好后实测 **2~3 秒返回 60 多条结果**。
    - `docker/searxng/settings.yml` 是**挂载**进容器的，改完必须重启容器才生效——CI 部署步骤已加 `docker restart wechat-agent-searxng`。该文件处于 `.gitignore` 的 `/docker/searxng/` 规则下**但已被跟踪**：`git add` 会提示"被忽略"，实际仍能正常提交，用 `git hash-object <file>` 与 `git rev-parse HEAD:<path>` 对比确认即可，别被提示误导。
+   - **带出处的回答（2026-09-12 新增）**：`SearchTool` 现在会把排名靠前的 `searxng.deep-read-count`（默认 3）条结果**用 `WebPageTool.fetchTextQuietly` 抓正文**（每条 `deep-read-chars`，默认 1200 字）一并交给模型，避免只凭聚合站摘要作答；每条来源还会输出一行 `🔗 编号. 标题 — 链接`，由 `AgentLoop.appendSearchSources` **在回复结尾统一附上「参考来源」**（最多 5 条，不依赖模型记得写）；模型只需在句内用 `[编号]` 标注（提示词第 14 条已说明）。抓正文失败会静默退化为只用摘要。
 4. 容器内绑定 `127.0.0.1` 会让 docker 端口映射失效，所以 agent 用 host 网络；同时管理后台的来源 IP 校验 `ADMIN_ALLOWED_IPS`（默认 `127.0.0.1,::1`）是**精确匹配、不支持 CIDR**，host 网络下才自然放行。
 5. 不要把密码放进命令行参数：会被本机安全策略拦截，也应避免；改用交互式 SSH 或 stdin 传参。
 6. 用管道把 `.env` 写到服务器会带 UTF-8 BOM，docker compose 读取前需去掉（`sed -i '1s/^\xEF\xBB\xBF//'`）。

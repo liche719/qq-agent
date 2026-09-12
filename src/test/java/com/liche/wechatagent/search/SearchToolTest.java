@@ -16,7 +16,7 @@ class SearchToolTest {
     void limitsResultsToConfiguredMaximumOfTen() {
         SearxngClient client = mock(SearxngClient.class);
         when(client.search("query", 10, null)).thenReturn(hits(12));
-        SearchTool tool = new SearchTool(client, mock(ToolStatusService.class), 10, 10, "Asia/Shanghai");
+        SearchTool tool = new SearchTool(client, mock(WebPageTool.class), mock(ToolStatusService.class), 10, 10, 0, 1200, "Asia/Shanghai");
 
         String result = tool.searchWeb("query");
 
@@ -27,7 +27,7 @@ class SearchToolTest {
     void verifiedSearchClearlySeparatesCandidatesFromVerifiedFacts() {
         SearxngClient client = mock(SearxngClient.class);
         when(client.search("policy 2026年9月", 10, "year")).thenReturn(hits(3));
-        SearchTool tool = new SearchTool(client, mock(ToolStatusService.class), 10, 10, "Asia/Shanghai");
+        SearchTool tool = new SearchTool(client, mock(WebPageTool.class), mock(ToolStatusService.class), 10, 10, 0, 1200, "Asia/Shanghai");
 
         String result = tool.searchVerifiedWeb("policy");
 

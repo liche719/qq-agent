@@ -122,6 +122,9 @@ searxng:
   timeout-seconds: ${SEARXNG_TIMEOUT_SECONDS:15}
   connect-timeout-seconds: ${SEARXNG_CONNECT_TIMEOUT_SECONDS:5}
   max-results: ${SEARXNG_MAX_RESULTS:10}
+  # 搜索结果里排名靠前的若干条会额外抓取网页正文，回答才算"读过原文"而不是只看摘要
+  deep-read-count: ${SEARXNG_DEEP_READ_COUNT:3}
+  deep-read-chars: ${SEARXNG_DEEP_READ_CHARS:1200}
 
 document:
   max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}

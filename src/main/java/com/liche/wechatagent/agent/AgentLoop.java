@@ -167,10 +167,12 @@ public class AgentLoop {
                     history, userText, images, documents);
             Set<String> successfulTools = new LinkedHashSet<>();
             Map<String, ToolExecutionOutcome> failedTools = new java.util.LinkedHashMap<>();
+            // 成功的工具结果也留一份：回复结尾的"参考来源"要用搜索工具返回的链接
+            Map<String, ToolExecutionOutcome> toolResults = new java.util.LinkedHashMap<>();
             if (requestsCurrentTime(userText, currentTimePattern)) {
                 addMandatoryCurrentTimeResult(messages, userId, successfulTools, failedTools);
             }
-            return runToolLoop(messages, userId, successfulTools, failedTools, sink);
+            return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink);
         } finally {
             toolStatusService.unbind();
         }
@@ -194,13 +196,14 @@ public class AgentLoop {
 
     // Runs tool rounds until a final answer is available and applies the failure fallback.
     private String runToolLoop(List<ChatMessage> messages, String userId, Set<String> successfulTools,
-                               Map<String, ToolExecutionOutcome> failedTools, StreamReplySink sink) {
+                               Map<String, ToolExecutionOutcome> failedTools,
+                               Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
         List<ToolSpecification> specifications = toolRegistry.specifications();
         try {
             for (int round = 0; round < maxToolRounds; round++) {
-                String roundText = streamOneRound(messages, specifications, userId, successfulTools, failedTools);
+                String roundText = streamOneRound(messages, specifications, userId, successfulTools, failedTools, toolResults);
                 if (roundText != null) {
-                    return completeReply(roundText, successfulTools, failedTools, sink);
+                    return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
                 }
             }
         } catch (RuntimeException exception) {
@@ -209,12 +212,13 @@ public class AgentLoop {
             }
             log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
         }
-        return fallbackReply(failedTools, successfulTools, sink);
+        return fallbackReply(failedTools, successfulTools, toolResults, sink);
     }
 
     // Normalizes model text, appends deterministic notices, and delivers the final response.
     private String completeReply(String roundText, Set<String> successfulTools,
-                                 Map<String, ToolExecutionOutcome> failedTools, StreamReplySink sink) {
+                                 Map<String, ToolExecutionOutcome> failedTools,
+                                 Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
         String replyText = stripModelToolDisclosure(roundText);
         String notice = mediaToolContextService.completionNotice();
         if (!notice.isBlank()) {
@@ -222,6 +226,7 @@ public class AgentLoop {
         }
         replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames);
         String reply = appendToolFooter(replyText, successfulTools, toolDisplayNames);
+        reply = appendSearchSources(reply, toolResults);
         if (sink != null) {
             pushStreaming(sink, reply);
         }
@@ -229,7 +234,8 @@ public class AgentLoop {
     }
 
     private String fallbackReply(Map<String, ToolExecutionOutcome> failedTools,
-                                 Set<String> successfulTools, StreamReplySink sink) {
+                                 Set<String> successfulTools,
+                                 Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
         String fallback = "这次处理没有完成。";
         String notice = mediaToolContextService.completionNotice();
         if (!notice.isBlank()) {
@@ -237,6 +243,7 @@ public class AgentLoop {
         }
         fallback = appendToolFailureNotice(fallback, failedTools, toolDisplayNames);
         fallback = appendToolFooter(fallback, successfulTools, toolDisplayNames);
+        fallback = appendSearchSources(fallback, toolResults);
         if (sink != null) {
             sink.onDone(fallback);
         }
@@ -248,7 +255,8 @@ public class AgentLoop {
      * 工具调用轮执行工具并回填 messages 后返回 null；最终文本轮返回完整文本。
      */
     private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
-                                  Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools) {
+                                  Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
+                                  Map<String, ToolExecutionOutcome> toolResults) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -274,6 +282,7 @@ public class AgentLoop {
                                 if (outcome.successful()) {
                                     successfulTools.add(request.name());
                                     failedTools.remove(request.name());
+                                    toolResults.put(request.name(), outcome);
                                 } else {
                                     successfulTools.remove(request.name());
                                     failedTools.put(request.name(), outcome);
@@ -326,8 +335,49 @@ public class AgentLoop {
         return reply.stripTrailing() + "\n\n> _调用工具：" + String.join("、", names) + "_";
     }
 
-    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {
-        return appendToolFailureNotice(reply, failedTools, AgentPolicyProperties.defaultToolDisplayNames());
+    /**
+     * 把搜索工具结果里的"标题 + 链接"（由 {@code SearchTool.SOURCE_MARK} 标记）整理成
+     * 回复结尾的参考来源。由程序统一附加，不依赖模型是否记得写来源。
+     */
+    static String appendSearchSources(String reply, Map<String, ToolExecutionOutcome> toolResults) {
+        if (reply == null || reply.isBlank() || toolResults == null || toolResults.isEmpty()) {
+            return reply;
+        }
+        Set<String> sources = new LinkedHashSet<>();
+        for (Map.Entry<String, ToolExecutionOutcome> entry : toolResults.entrySet()) {
+            if (entry.getKey() == null
+                    || !entry.getKey().toLowerCase(java.util.Locale.ROOT).contains("search")) {
+                continue;
+            }
+            String content = entry.getValue() == null ? null : entry.getValue().content();
+            if (content == null || content.isBlank()) {
+                continue;
+            }
+            for (String line : content.split("\n")) {
+                String trimmed = line.strip();
+                if (trimmed.startsWith(com.liche.wechatagent.search.SearchTool.SOURCE_MARK)) {
+                    sources.add(trimmed.substring(
+                            com.liche.wechatagent.search.SearchTool.SOURCE_MARK.length()).strip());
+                }
+                if (sources.size() >= 5) {
+                    break;
+                }
+            }
+            if (sources.size() >= 5) {
+                break;
+            }
+        }
+        if (sources.isEmpty()) {
+            return reply;
+        }
+        StringBuilder footer = new StringBuilder(reply.stripTrailing()).append("\n\n> _参考来源_");
+        for (String source : sources) {
+            footer.append("\n> ").append(source);
+        }
+        return footer.toString();
+    }
+
+    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {        return appendToolFailureNotice(reply, failedTools, AgentPolicyProperties.defaultToolDisplayNames());
     }
 
     static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools,

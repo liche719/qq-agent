@@ -28,20 +28,32 @@ public class SearchTool {
     private static final Logger log = LoggerFactory.getLogger(SearchTool.class);
 
     private final SearxngClient searxngClient;
+    private final WebPageTool webPageTool;
     private final ToolStatusService statusService;
     private final int timeoutSeconds;
     private final int maxResults;
+    private final int deepReadCount;
+    private final int deepReadChars;
     private final ZoneId timeZone;
 
+    /** 每个来源后面附一行带此标记的"标题 + 链接"，供 AgentLoop 在回复结尾统一生成"参考来源"。 */
+    public static final String SOURCE_MARK = "🔗 ";
+
     public SearchTool(SearxngClient searxngClient,
+                      WebPageTool webPageTool,
                       ToolStatusService statusService,
                       @Value("${searxng.timeout-seconds:15}") int timeoutSeconds,
                       @Value("${searxng.max-results:10}") int maxResults,
+                      @Value("${searxng.deep-read-count:3}") int deepReadCount,
+                      @Value("${searxng.deep-read-chars:1200}") int deepReadChars,
                       @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.searxngClient = searxngClient;
+        this.webPageTool = webPageTool;
         this.statusService = statusService;
         this.timeoutSeconds = Math.max(1, Math.min(120, timeoutSeconds));
         this.maxResults = Math.max(1, Math.min(10, maxResults));
+        this.deepReadCount = Math.max(0, Math.min(5, deepReadCount));
+        this.deepReadChars = Math.max(300, Math.min(6000, deepReadChars));
         this.timeZone = parseZone(timeZoneId);
     }
 
@@ -135,12 +147,43 @@ public class SearchTool {
         sb.append("搜索到以下资料（最多返回 ").append(deduped.size()).append(" 条）：\n");
         int i = 1;
         for (SearxngClient.SearchHit h : deduped) {
-            sb.append(i++).append(". ").append(blankTo(h.title(), "（无标题）")).append("\n")
+            int index = i++;
+            sb.append(index).append(". ").append(blankTo(h.title(), "（无标题）")).append("\n")
                     .append(h.url()).append(sourceDescription(h.url())).append("\n")
                     .append(h.publishedDate() == null || h.publishedDate().isBlank()
                             ? "发布时间：未提供\n" : "发布时间：" + h.publishedDate().trim() + "\n")
-                    .append(truncate(blankTo(h.content(), "（无摘要）"), 150)).append("\n\n");
+                    .append(truncate(blankTo(h.content(), "（无摘要）"), 150)).append("\n")
+                    // 程序据此生成回复结尾的"参考来源"，不要删掉这一行
+                    .append(SOURCE_MARK).append(index).append(". ")
+                    .append(blankTo(h.title(), "（无标题）")).append(" — ").append(h.url()).append("\n\n");
         }
+
+        // 深入读原文：只有摘要容易被聚合站带偏，抓前几条正文后回答才有依据
+        int deep = Math.min(deepReadCount, deduped.size());
+        if (deep > 0 && webPageTool != null) {
+            StringBuilder deepSection = new StringBuilder();
+            int read = 0;
+            for (int index = 0; index < deep; index++) {
+                SearxngClient.SearchHit hit = deduped.get(index);
+                String text = webPageTool.fetchTextQuietly(hit.url(), deepReadChars);
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+                read++;
+                deepSection.append("[").append(index + 1).append("] ")
+                        .append(blankTo(hit.title(), "（无标题）")).append("\n")
+                        .append(hit.url()).append("\n")
+                        .append(text).append("\n\n");
+            }
+            if (read > 0) {
+                sb.append("【原文摘录】（已抓取排名靠前的 ").append(read)
+                        .append(" 条正文，内容有截断，仅供核对事实）\n")
+                        .append(deepSection).append("\n");
+            }
+        }
+
+        sb.append("【回答要求】优先依据上面的原文摘录作答；引用某条资料时在句末用 [编号] 标注（例如 [1]）；")
+                .append("参考来源列表由程序在回复结尾统一附加，正文不必自己再列一遍。");
         return sb.toString().trim();
     }
 

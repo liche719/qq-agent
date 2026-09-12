@@ -159,6 +159,64 @@ public class WebPageTool {
         }
     }
 
+    /**
+     * 供其它工具复用（搜索的"深入读原文"）：静默抓取正文。
+     * 失败一律返回 {@code null}，不推送状态、不抛异常——抓不到就退化为只用搜索摘要。
+     */
+    public String fetchTextQuietly(String url, int maxChars) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        int limit = Math.max(256, Math.min(20_000, maxChars));
+        try {
+            URI current = urlValidator.validate(url);
+            for (int redirects = 0; redirects <= maxRedirects; redirects++) {
+                Request request = new Request.Builder()
+                        .url(current.toString())
+                        .header("User-Agent", userAgent)
+                        .header("Accept", "text/html,text/plain,application/json;q=0.9,*/*;q=0.1")
+                        .get()
+                        .build();
+                try (Response response = client.newCall(request).execute()) {
+                    if (response.isRedirect()) {
+                        String location = response.header("Location");
+                        if (location == null || location.isBlank()) {
+                            return null;
+                        }
+                        current = urlValidator.validate(current.resolve(location).toString());
+                        continue;
+                    }
+                    if (!response.isSuccessful() || response.body() == null) {
+                        return null;
+                    }
+                    String contentType = response.header("Content-Type", "").toLowerCase();
+                    if (!contentType.startsWith("text/") && !contentType.contains("json")) {
+                        return null;
+                    }
+                    String text = extractPlainText(contentType, readBody(response));
+                    if (text == null || text.isBlank()) {
+                        return null;
+                    }
+                    String compact = text.replaceAll("\\s*\\n\\s*", "\n").replaceAll("[ \\t]{2,}", " ").strip();
+                    return compact.length() <= limit ? compact : compact.substring(0, limit) + "…";
+                }
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+        return null;
+    }
+
+    /** 与 {@link #extractText} 同一套清洗逻辑，但只返回纯正文（不含"网页/标题"包装）。 */
+    private String extractPlainText(String contentType, String body) {
+        if (contentType.contains("html")) {
+            var document = Jsoup.parse(body);
+            document.select("script, style, noscript, svg, nav, footer, header, aside").remove();
+            return document.body() == null ? "" : document.body().text();
+        }
+        return body;
+    }
+
     private String extractText(String url, String contentType, String body) {
         String text;
         String title = "";
