@@ -19,6 +19,7 @@ import org.quartz.TriggerBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -51,7 +52,11 @@ public class ScheduledTaskService {
 
     private final ScheduledTaskRepository repository;
     private final ScheduledTaskParseService parseService;
-    private final AgentOrchestrator orchestrator;
+    /**
+     * 用 ObjectProvider 延迟取 AgentOrchestrator：它间接依赖命令注册表（/schedules），
+     * 而命令处理器又依赖本服务，直接注入会形成 Bean 循环依赖。
+     */
+    private final ObjectProvider<AgentOrchestrator> orchestratorProvider;
     private final List<WeChatChannel> channels;
     private final UserProfileRepository profileRepository;
     private final UserLogService userLogService;
@@ -72,7 +77,7 @@ public class ScheduledTaskService {
     @Autowired
     public ScheduledTaskService(ScheduledTaskRepository repository,
                                 ScheduledTaskParseService parseService,
-                                AgentOrchestrator orchestrator,
+                                ObjectProvider<AgentOrchestrator> orchestratorProvider,
                                 List<WeChatChannel> channels,
                                 UserProfileRepository profileRepository,
                                 UserLogService userLogService,
@@ -83,7 +88,7 @@ public class ScheduledTaskService {
                                 @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.repository = repository;
         this.parseService = parseService;
-        this.orchestrator = orchestrator;
+        this.orchestratorProvider = orchestratorProvider;
         this.channels = channels;
         this.profileRepository = profileRepository;
         this.userLogService = userLogService;
@@ -270,6 +275,10 @@ public class ScheduledTaskService {
         current.setUpdatedAt(LocalDateTime.now(zone));
         repository.save(current);
         try {
+            AgentOrchestrator orchestrator = orchestratorProvider.getIfAvailable();
+            if (orchestrator == null) {
+                throw new IllegalStateException("Agent 运行时不可用");
+            }
             String messageId = "scheduled-" + current.getId() + "-" + UUID.randomUUID();
             String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId, current.getInstruction()));
             String text = reply == null || reply.isBlank() ? "（这次没有拿到结果）" : reply.strip();
