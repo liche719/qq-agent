@@ -145,14 +145,14 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 14. **经 stdin 传给 `bash` 的远程脚本里不能直接用 `docker exec -i`**：它会读走 stdin（也就是脚本剩下的部分），导致脚本在后面某行静默中断。要么 `< /dev/null`，要么把整段 SQL 用 heredoc（heredoc 会把该命令的 stdin 换成 here-doc，反而正常）。
 15. 后端 `AdminDashboardController.userList()` 用 `String.valueOf(u.getLastSeenAt())`，空值会序列化成**字符串 `"null"`**，前端按字符串排序时 `"null"` 会排到最前（`'n' > '2'`）。前端 `labels.js` 已把 `"null"/"undefined"/"NaN"` 当空值处理，用户列表也只用合法日期参与排序。
 16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` 与 `*@im.wechat`），用户已于 2026-09-12 要求清空，**已删除并留全库备份** `/root/wechat-agent-backup-20260912015146.sql.gz`（服务器上，98KB，已 chmod 600）。删除时用的条件：`last_channel IS NULL AND (user_id LIKE 'wx\_%' OR user_id LIKE '%@im.wechat')`；模拟器测试账号 `sim-user-qq` 同日一并删除。
-17. **服务器旧镜像会累积**（2026-09-12 已根治）：Docker 镜像不可变，CI 每次部署 load 一个新 tag 的镜像，旧的**不会自动消失**；原来的 `docker image prune -f` 只删悬空镜像（无 tag 的中间层），带 tag 的 `wechat-agent:<sha>` 永远不算悬空，于是攒了 11 个 × 431MB。现在部署步骤里加了一句「按创建时间只保留最新两个 tag」，`workflow_dispatch` 手动跑同样生效。回滚方式：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
+17. **服务器旧镜像会累积**（已根治）：`docker image prune -f` 只删悬空镜像，带 tag 的 `wechat-agent:<sha>` 永远不算悬空（曾攒了 11 个 × 431MB）。部署步骤现在「按创建时间只保留最新两个 tag」，`workflow_dispatch` 同样生效。回滚：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
 18. **数据卷 ≠ 备份**：`wechat-agent-infra_mysql-data` 和数据库在同一台机器、同一块云盘上（`/var/lib/docker/volumes/`）。卷只能扛「容器重装」，扛不住误删（例如我们删 17 个微信用户那种操作）、扛不住误迁移、也扛不住机器/云盘故障。`mysqldump` 出来的 dump 才是备份，**不要因为「有卷」就删掉备份**；更强的做法是定期导出后加密传到异地。
 19. 服务器上的旧 `.env.bak-*` 会带着历史口令，**只留最近 1 个**用于回滚即可（2026-09-12 已清理到只剩最新那份）。
 20. **容器 json-file 日志默认不轮转**：docker 的 json-file 驱动如果没有 `max-size`，容器 stdout 会无限增长（Spring Boot 的 root appender 同时挂控制台，所以每条日志都会落一份）。4 个服务已统一配 `logging.options: {max-size: 10m, max-file: 3}`（每个容器最多 30MB）。应用自身的文件日志由 logback 按 30 天轮转，但它写在**容器内**（没有挂卷），容器重建就没了 —— 面板「日志」页读的就是它。
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='<AccessKeyId>'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删了、其实是解析问题——本次就为这个白折腾了一轮。acme.sh 自身用 shell `source` 读该文件，带引号无影响。Python 读时务必 `.strip().strip("'").strip('"')`。
-22. **新注册域名会先被注册局 `client hold`**（阿里云实名认证通过前）：此期间公网 DNS 是 NXDOMAIN，DNS-01 的 `_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」重试**（实测空转 10 分钟以上不停），所以自动签发脚本必须用 `timeout 900` 之类包住，别让它挂着。另外 hold 解除后解析还有约 5 分钟负缓存：TXT 刚加好时可能短暂查不到，等一下就会通过。实测时间线：注册 19:29(UTC) → 次日 06:40 左右 hold 才消失。
+22. **新注册域名会先被注册局 `client hold`**（实名认证通过前）：此期间公网 DNS 是 NXDOMAIN、`_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」空转**（实测 10 分钟不停），所以自动签发脚本必须用 `timeout 900` 包住。hold 解除后解析还有约 5 分钟负缓存，等一会儿就会通过（实测：注册 19:29 UTC → 次日 06:40 左右解除）。
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」（提示语是"您与此网站之间建立的连接不安全 / 请勿在此网站上输入任何敏感信息…"），**与服务器无关**。判定方法：`tools/ui-verify/check_security.py`（真实 Chromium 直连、不忽略证书错误）——直连正常就说明是浏览器侧；处理办法是关掉旧标签页/重启浏览器/换无痕窗口，并**清掉 IP 地址那个书签**（IP 访问永远提示证书名称不匹配，LE 不给 IP 签证书）。另注意本机装了 Steam++（Watt Toolkit，进程 `Steam++` / `Steam++.Accelerator`）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络问题时先把它退出。
-24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 服务器 `.env` 里**没有** `MYSQL_PASSWORD`，compose 用的是默认值 `root`（即 `mysql -uroot -proot`，库名 `wechat_agent`）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`，容器内查数据用 `docker exec -it wechat-agent-mysql mysql -uroot -proot`（注意远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`）。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 想端到端测指令/回复链路（本机不方便发 QQ 消息时）：把服务器 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 并重建容器——QQ 通道由 `QQ_ENABLED` 独立控制**不会被顶掉**；然后带管理员口令 `POST /api/sim/send {"userId":"sim-xxx","content":"…"}`（同步返回回复，`/api/sim/replies` 查推送），测完把模式改回 `disabled`、**删掉测试用户在各表的行**。注意 compose 只把 `environment:` 里列出的变量传进容器：`WECHAT_CHANNEL_MODE` 是 2026-09-12 才补上的 passthrough，之前改 `.env` 根本不生效（表现为 `/api/sim/*` 一直 404）。
+24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 连库口令是随机的（坑 53），`-uroot -proot` **已失效**——口令在服务器 `/opt/wechat-agent-infra/.env` 的 `MYSQL_ROOT_PASSWORD`。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`；远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 想端到端测指令/回复链路（本机不方便发 QQ 消息时）：把服务器 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 并重建容器——QQ 通道由 `QQ_ENABLED` 独立控制**不会被顶掉**；然后带管理员口令 `POST /api/sim/send {"userId":"sim-xxx","content":"…"}`（同步返回回复，`/api/sim/replies` 查推送），测完把模式改回 `disabled`、**删掉测试用户在各表的行**。注意 compose 只把 `environment:` 里列出的变量传进容器：`WECHAT_CHANNEL_MODE` 是 2026-09-12 才补上的 passthrough，之前改 `.env` 根本不生效（表现为 `/api/sim/*` 一直 404）。
 25. **中文文本指令是"整串别名"匹配**：`CommandRegistry` 原来只认完全相等的串（如「结束陪练」），写成「陪练 英语」这种"指令+参数"会**静默落到大模型**（看起来像功能生效了，其实只是模型自己在临场演，`user_profile.coach_mode` 一行都没写）。2026-09-12 已改成：整串不是别名时**退回按首词识别、余下作为参数**；`HelpHandler` 的指令清单是**写死的**（避免与 Registry 循环依赖），加新指令必须同时改它，否则 `/help` 里看不到。
 26. **墨墨开放 API 的三个特点**（2026-09-12 接入时实测）：① 个人 access token 在**墨墨 App** 里生成、**有效期只有一天左右**，过期返回 401——所以别把它当成长期密钥写死，本项目把 Token 存进 `maimemo_setting` 表并**优先于环境变量**，用户在面板「背单词」页粘贴即可；② 官方**限流**（10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次），面板自动刷新很快，必须带缓存（本项目 30 秒）；③ 接口只给"今日完成/总数"，**新学与复习要自己按今日单词列表拆**，列表没取全就不能拿条数当复习数。另外 `Spring Data Redis` 会对 id 为 String 的 JPA 仓库报 "Could not safely identify store assignment"（本项目不用 Redis 仓库，已在 `application.yml` 里 `spring.data.redis.repositories.enabled: false` 关掉）。
 27. **模型"每轮都要调工具"不牢靠**：面试陪练第一版实测模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）。凡是"每轮都必须记账"的场景，**要在提示词里把动作顺序写死并前置**（"先调工具、再说话，顺序不能反"），并在工具描述里再强调一次；只写"每轮都要调用"不够。
@@ -162,7 +162,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
    - 排查这类问题别只看"最新一行"，要用「id 递增时 created_at 是否出现倒退 8 小时的拐点」定位受影响区间；本文档第 5 节第 30 条的投递通道问题也要一起看，两者都是"环境变了、历史数据没跟着变"。
 30. **主动消息的投递通道会过期**（2026-09-12 踩到）：提醒/主动关怀/定时任务都按 `user_profile.last_channel` 投递（不猜通道是为了避免投错平台），但排障时用模拟器发过消息就会把它写成 `simulator`，回到生产后**所有主动消息静默失败**。现在统一走 `channel/ProactiveDelivery`：记录通道不可用时，**仅当"支持主动消息的非模拟器通道恰好只有一个"才改用它**（多个可用通道仍旧不猜、记 WARN）。排查这类问题先看日志里的 `记录的通道 ... 不可用`。
 31. **手工 `delete from QRTZ_*` 会因外键约束删不干净**：`QRTZ_TRIGGERS` 有子表（`QRTZ_CRON_TRIGGERS`/`QRTZ_SIMPLE_TRIGGERS`/`QRTZ_BLOB_TRIGGERS`/`QRTZ_FIRED_TRIGGERS`），顺序必须是子表 → `QRTZ_TRIGGERS` → `QRTZ_JOB_DETAILS`，否则删不掉（而且会被 `2>/dev/null` 藏住报错）。正常删任务请走面板/接口（`ScheduledTaskService.cancel` 会连调度一起删）。
-32. **CI 的「Upload image and deployment files」可能长时间卡住**（2026-09-12 遇到：卡了 25 分钟，正常只要 1~2 分钟，后面那条运行一直 pending）。这不是代码问题——先确认服务器侧正常（`df -h` 才 29%、负载 0、面板 200），然后 **`gh run cancel <id>` 取消卡住的与排队的运行，再 `gh workflow run deploy-remote.yml --ref main` 重新派发**：换一个 runner 立刻就好了（重派那条 4 分钟跑完）。别傻等，也别怀疑自己改坏了。
+32. **CI 的「Upload image and deployment files」可能长时间卡住**（遇到过一次卡 25 分钟，正常 1~2 分钟）。不是代码问题：确认服务器侧正常后，**`gh run cancel <id>` 取消卡住与排队的运行，再 `gh workflow run deploy-remote.yml --ref main` 重新派发**——换 runner 立刻就好。别傻等，也别怀疑自己改坏了。
 33. **验证"面板自动刷新"要用内容比对，不能用气泡数量**：聊天窗口是固定 50 条的页面（page 0），新消息进来时最旧的会被挤出去，**气泡总数可能完全不变**。正确断言是「最后一条气泡的内容/时间戳变了」，外加 `performance.timeOrigin` 未变（证明没有整页刷新）。另外定时任务是**异步执行**的，模型调用可能近一分钟才写库，等待窗口至少给 90~120 秒，否则会误判成"没刷新"（本次就先误判了一次）。
 34. **`AdminAccessFilter` 用未解码 URI 判断路径 = 整站口令可绕过**（2026-09-13 全量代码审查发现，**最严重的一条**）：`shouldNotFilter` 用的 `request.getRequestURI()` 拿的是**原始未解码** URI，而 Spring MVC 用**解码后**的路径匹配 handler，两者错位 → 公网 `curl 'https://<host>/api/adm%69n/overview'` 既不匹配保护前缀（过滤器直接跳过）又命中 `/api/admin/**` 的 handler，**无口令返回全站数据**（还能写墨墨 Token、以任意 userId 建定时任务、发告警）。已改成 `getServletPath()`（解码后）判断，并把过滤器从"前缀反选"改成 **fail-closed 白名单**：除 `PUBLIC_PATHS`（`/api/site/info`、`/api/health`、`/api/maimemo/oauth/callback`）之外的 `/api/**` 一律要口令——今后新增接口默认受保护。CI 自检已加一条「编码路径也应被拒 401」。
 35. **公开回调页不能直接拼查询参数**：`/api/maimemo/oauth/callback` 是**公网免口令**的，原来把 `error` / `error_description` / 异常文案直接拼进 `text/html` → 同源 XSS，脚本能读走 `localStorage['admin.auth']`（里面就是面板唯一凭据）。已修：文案一律 `HtmlUtils.htmlEscape` + 响应加 `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`；**OIDC 的 `state` 由"两边都有才比"改成必填**（否则任何拿到 client_id 的人都能用自己账号的 code 把服务端绑成他的账号）；上游错误响应体只进日志、不回显给匿名调用方。
@@ -193,6 +193,15 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     - **坑 ②：`MYSQL_PASSWORD` 这个变量以前同时是"应用的密码"和"mysql 服务的 root 密码"**，直接改会让**健康检查**用新口令去 ping 而库里还是旧的 → mysql 变 unhealthy → agent 的 `depends_on: service_healthy` 直接不让启动。现在 compose 里拆成三个变量：`MYSQL_ROOT_PASSWORD`（mysql 服务 + 健康检查）、`MYSQL_APP_USER` / `MYSQL_APP_PASSWORD`（agent）。**换口令的正确顺序**：先在库里 `CREATE USER`/`ALTER USER` → **立刻用新口令验证能连**（不过就别往下走）→ 再写 `.env` → 再 `docker compose up -d`（用 `AGENT_IMAGE=$(docker inspect wechat-agent-java -f '{{.Config.Image}}')` 传当前 tag，否则 compose 会去 pull 不存在的 `wechat-agent:latest`）。
     - **仍未做**：`read_only: true`（应用要写 `/app/{logs,backup,stored-media}` 三个挂载目录和 `/tmp`，需要额外配 tmpfs 并逐个验证）与镜像 `USER 10001`（那三个宿主机目录现在是 root:700，得先 chown 到 10001 否则应用写不了日志/备份）。这两项属于"收益明确、但改动面更大"，留作下一步。
 
+54. **通道健壮性（2026-09-13 做完）：重复消息 / 主动配额 / 入站刷屏**——三件事一起改，都在 `QqChannel` 及其两个新类里。
+    - **被动发送失败的降级重发原来是无条件的**（`sendPassive` 的 catch 里直接再发一条主动消息）。危险的是"**结果未知**"的失败：读超时、连接中断、5xx —— 请求可能已经送达，再发一条就是用户收到两条一模一样的消息。现在按"这次到底有没有发出去"分三种：① 响应体里带消息 id（QQ 其实发出去了，只是响应报错）→ 先 `deleteMessage` 撤掉它再重发；② **4xx**（msg_id 失效 / 被动窗口过期 / 令牌失效 / 限频）＝服务端**明确拒收**，重发安全（顺带救回"token 被另一个实例顶掉 401"的场景，`recordApiError` 会作废本地 token，重试时拿到新的）；③ 其余（超时/中断/5xx）→ **不重发**，被动回复直接返回 `true`（让 `AgentOrchestrator` 不要再走标准回复路径，否则等于又发一遍），并累加 `sendResultUnknown` 计数（面板可见）。**代价**：极少数情况下用户会少收到一条——这是刻意选的，比刷两条好。
+    - **流式回复有同样的坑，也已修**：正常回复走 `stream_messages`。最终帧失败时原来会 `removeIncompleteStream` 撤掉半截消息、再让 orchestrator 补一条完整回复；但**拿不到 `stream_msg_id` 时（第一帧就超时）根本撤不掉**，QQ 侧可能已经显示了半截内容 → 用户看到"半截 + 完整"两条。现在 `removeIncompleteStream` 返回"是否**确认**清干净"，清不干净且这一帧是"结果未知"失败时，按已发出处理（`state.done = true`，抑制补发）。
+    - **主动消息日额度账本**：`QqProactiveQuota`（Redis `qq:proactive:<yyyy-MM-dd>`，TTL 2 天）只统计**不带 msg_id 的消息**；面板「QQ 通道」页显示「今日主动消息 n 条（未设上限/上限 n）」，每条主动发送的日志里也带计数。`QQ_PROACTIVE_DAILY_LIMIT`（默认 0 = 不限）配成正数后，超限**直接放弃发送并记 WARN**。Redis 异常不影响发消息（只记一条 WARN，面板显示"不可用"）。
+    - **入站按用户限流**：`QqInboundRateLimiter`（固定窗口），`QQ_INBOUND_RATE_LIMIT_PER_MINUTE`（默认 20，0 = 关闭）。超限时**只回一条礼貌提示**（走被动回复、不占主动配额），其余静默丢弃并累加 `inboundRateLimited`。目的是防"用户连点刷屏"把每用户串行队列、模型额度和记忆提取全占满。
+    - **顺带修掉的浪费**：`handleC2cMessage` 原来**先处理「继续」再记被动窗口**，于是长回复的每一页都走主动消息（白耗主动配额，配额用光后分页直接发不出去）。现在先 `rememberReplyWindow` 再处理「继续」。
+    - **两个新键已在 compose 里透传**（坑 36）；同时补上了 `QQ_API_CONNECT_TIMEOUT_SECONDS`/`QQ_API_READ_TIMEOUT_SECONDS` 的透传——**这两个是"造出结果未知的发送失败"的唯一办法**（把读超时临时改小），不透传就没法验证上面第 ①/③ 条。
+    - **验证状态**：限流器的判定序列用一次性 harness 跑过（`ALLOW×n → 一次 NOTIFY → DROP`、窗口到点重置、`limit=0` 全放行、`prune`/`clear`、按用户隔离，全 PASS；harness 在临时目录里，不入库）；部署后自检绿、面板新指标齐全（`inboundRateLimitPerMinute=20`、`proactiveToday`、`sendResultUnknown=0`）；**账本端到端实测过**：`POST /api/admin/actions/alerts/notify` 触发一条真主动消息 → 日志 `send(proactive) ... 今日主动 1 条`、Redis `qq:proactive:2026-09-13 = 1`（TTL 172797s）、面板 `proactiveToday=1`。**"结果未知不重发"这一步是代码审查 + 日志留痕级别，未在真实超时下复现。**
+
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -213,7 +222,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **备份已落到宿主机**（`/opt/wechat-agent-infra/backup/<yyyymmdd>/user-*/state.json`），2026-09-13 实测真的写出文件；`stored-media` 与 `logs` 同样已持久化（原来三者都在容器可写层，每次部署即清空，见坑 38）。
 - **CI 自验证**：push `main` → 构建 → 部署 → 部署后自检（首页/前端资源/无口令 401/编码路径 401 由 runner 走 IP 直连，**带口令的两项在服务器本机 127.0.0.1 执行**，域名证书校验只在域名真解析到本机时才跑）。三个 action 已钉到 commit SHA，主机指纹由 Secret `DEPLOY_HOST_KEY` 固定（不再 `ssh-keyscan`）。旧镜像只保留两个 tag。
 - 本轮修掉的关键问题（细节见第 5 节 34~49 条）：编码路径绕过整站口令、公开回调同源 XSS、`/api/health` 泄露遥测、生产跑 `local` profile、备份/媒体/日志丢在容器层、截断多一字符撞列长、`touchDelivery` 覆盖并发字段、记忆提取窗口被工具记录占满、墨墨归属 fail-open、副作用工具默认可重试…… 前端在真实 Chromium 下 **`全部通过`**。
-- **明确未做（需要时再排）**：① 基础设施加固（MySQL `root/root`、Redis 无口令、容器 root + host 网络、无 `cap_drop`/`no-new-privileges`）；② 通道健壮性（被动失败**无条件**降级重发 → 可能收到两条；主动消息**没有配额账本** → 额度耗尽时静默丢；入站**没有按用户限流**）；③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER` 降为 docker 组成员）；④ SearXNG `secret_key` 出仓库；⑤ `isGatewayConnected` 的**自愈**（现在只做到"假在线能被发现并告警"，不会主动重连）；⑥ 墨墨回调的 IP 限流（等真要开 OIDC 时一起加）；⑦ `ScheduledTaskService.execute()` 仍用旧快照整行 save（"执行中点暂停 → 结果写回把 `enabled` 改回 true"这个场景还在）；⑧ 时区历史修正的迁移脚本未入库（SQL 与判定方法见坑 29）。
+- **本轮（09-13 凌晨）已完成**：① 基础设施加固（坑 53）；② 通道健壮性（坑 54：不再重复消息 / 主动消息账本 / 入站限流）；⑤ 网关半开连接自愈（坑 51）。
+- **仍未做（需要时再排）**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER` 降为 docker 组成员）；④ SearXNG `secret_key` 出仓库；⑥ 墨墨回调的 IP 限流（等真要开 OIDC 时一起加）；⑦ `ScheduledTaskService.execute()` 仍用旧快照整行 save（"执行中点暂停 → 结果写回把 `enabled` 改回 true"这个场景还在）；⑧ 时区历史修正的迁移脚本未入库（SQL 与判定方法见坑 29）；⑨ 容器 `read_only` + 镜像非 root 用户（坑 53 末）。
 - 本地：Docker Desktop 未启动、本地 JAR 未运行（本机 JAR 与远程容器**共用同一个 QQ AppID，不要同时启动**）。
 
 ## 8. 凭据索引
@@ -224,20 +234,16 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格式，其他 harness 读不到），因此本文件是唯一可迁移的记忆载体；如需更多细节可回头检索这些 jsonl。
 
-## 10. 工作区结构（2026-09-12 二次整理，约 59MB）
+## 10. 工作区结构（约 59MB）
 
 ```
 C:\Users\33721\Desktop\wechat-agent\
-├─ AGENTS.md                    工作区记忆入口
-├─ DS-HARNESS-PROMPT.md         用户给 AI 的初始提示词
-├─ tools\ui-verify\             面板端到端验证工具（脚本 + README + 最新一轮截图 v9-*.png）
-├─ .git-ca\                     导出的系统根证书，**git push 依赖它，不能删**
-└─ wechat-agent-java\           git 仓库（源码、配置、AGENTS.md 完整记忆）
-   └─ web\node_modules\ (~53MB) 前端依赖，`npm install` 可重建（保留了，方便随时构建前端）
+├─ AGENTS.md            工作区记忆入口
+├─ DS-HARNESS-PROMPT.md 用户给 AI 的初始提示词
+├─ tools\ui-verify\     面板端到端验证工具（脚本 + README + 截图；看 README.md）
+├─ .git-ca\             导出的系统根证书，**git push 依赖它，不能删**
+└─ wechat-agent-java\   git 仓库（源码、配置、AGENTS.md 完整记忆；web\node_modules 约 53MB，可 npm install 重建）
 ```
 
-- 已删除（2026-09-12 二次整理）：`wechat-agent-java\target\`（94.6MB，`mvn package` 可重建）、`wechat-agent-java\logs\`（5.5MB 本地跑 JAR 的日志）、`.trash\`（2.6MB 的 research 打包）、旧两轮验证截图（v8-* 与 light/dark 主题那轮）。
-- 第一次整理（同日更早）删除：`research/`、`wechat-agent-java/{tmp,backup,stored-media}`、工作区根 `logs/`、空的 `docker/`、`.ui-test/`（并入 `tools/ui-verify`）。
-- `backup/`、`stored-media/`、`logs/`、`tmp/` 都是**本地跑 JAR 时生成**的，远程服务器各有独立一份；以后本地调试完顺手删。
-- 服务器侧同步清理（2026-09-12）：acme.sh 源码目录、一次性「等实名」看守脚本、签发日志、`/tmp` 临时文件；**保留** `~/.acme.sh`、`/root/issue-liche-cloud.sh`、自签证书备份、数据库全库备份。
-- 验证面板跑法见 `tools\ui-verify\README.md`（含排查"浏览器说不安全"的 `check_security.py`）。
+- 整理时删掉的都是可重建物（`target/`、本地 `logs/`、`research/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，远程服务器各有独立一份，本地调试完顺手删。
+
