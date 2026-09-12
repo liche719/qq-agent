@@ -134,22 +134,41 @@ async function openUser(user) {
   await loadChatPage(0)
 }
 
-/** 接口按时间倒序返回，这里翻成正序；往后翻页拿到的是更早的消息，插到前面 */
-async function loadChatPage(page) {
+function nearBottom(box) {
+  return !box || box.scrollHeight - box.scrollTop - box.clientHeight < 48
+}
+
+/**
+ * 接口按时间倒序返回，这里翻成正序；往后翻页拿到的是更早的消息，插到前面。
+ * merge=true 是自动刷新用的：保留已经翻出来的更早消息，只把新出现的追加到末尾，
+ * 并且不打断当前滚动位置（正在翻旧消息时不要把人拽到底部）。
+ */
+async function loadChatPage(page, merge = false) {
   if (!current.value || loadingChat.value) return
   loadingChat.value = true
+  const box = chatBox.value
+  const stick = nearBottom(box)
+  const previousTop = box ? box.scrollTop : 0
   try {
     const data = await api('/users/' + encodeURIComponent(current.value.userId)
       + '?page=' + page + '&size=' + PAGE_SIZE)
     const batch = (data.conversations || []).slice().reverse()
-    messages.value = page === 0 ? batch : batch.concat(messages.value)
-    loadedPages.value = page + 1
-    hasMore.value = (data.conversations || []).length === PAGE_SIZE
+    if (merge && page === 0 && loadedPages.value > 1) {
+      const known = new Set(messages.value.map(message => message.id))
+      const fresh = batch.filter(message => message.id === undefined || !known.has(message.id))
+      if (fresh.length) messages.value = messages.value.concat(fresh)
+    } else {
+      messages.value = page === 0 ? batch : batch.concat(messages.value)
+      loadedPages.value = page + 1
+      hasMore.value = (data.conversations || []).length === PAGE_SIZE
+    }
+    // 记忆与提醒也在同一个响应里，跟着一起刷新
     detail.value = data
     error.value = ''
     if (page === 0) {
       await nextTick()
-      scrollToBottom()
+      if (merge && !stick && box) box.scrollTop = previousTop
+      else scrollToBottom()
     }
   } catch (caught) {
     error.value = caught.message
@@ -167,7 +186,13 @@ function loadEarlier() {
   loadChatPage(loadedPages.value)
 }
 
-watch(() => props.tick, () => loadUsers())
+/** 自动刷新：用户列表 + 当前打开用户的记录（聊天、长期记忆、提醒任务） */
+function refreshCurrent() {
+  loadUsers()
+  if (current.value) loadChatPage(0, true)
+}
+
+watch(() => props.tick, refreshCurrent)
 onMounted(() => loadUsers())
 </script>
 

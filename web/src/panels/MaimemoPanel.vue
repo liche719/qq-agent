@@ -20,6 +20,8 @@ const pushEnabled = ref(true)
 const pushTime = ref('21:30')
 const authUrl = ref('')
 const callbackInput = ref('')
+/** 用户正在改推送设置时，自动刷新不要把手输的内容冲掉 */
+const formTouched = ref(false)
 
 const status = computed(() => data.value?.status || '')
 const progress = computed(() => data.value?.progress || {})
@@ -120,6 +122,7 @@ async function load() {
 }
 
 function syncForm() {
+  if (formTouched.value) return
   pushEnabled.value = Boolean(data.value?.push?.enabled)
   pushTime.value = data.value?.push?.time || '21:30'
 }
@@ -268,10 +271,10 @@ onMounted(() => load())
       <InfoGrid :rows="pushRows"></InfoGrid>
       <div class="toolbar">
         <label class="check" style="margin-top: 0">
-          <input type="checkbox" v-model="pushEnabled">
+          <input type="checkbox" v-model="pushEnabled" @change="formTouched = true">
           <span>{{ pushEnabled ? '已开启每日推送' : '已关闭每日推送' }}</span>
         </label>
-        <input v-model="pushTime" type="time" step="60" aria-label="推送时间">
+        <input v-model="pushTime" type="time" step="60" aria-label="推送时间" @change="formTouched = true">
         <button class="btn btn-sm" :disabled="busy === 'push-settings'" @click="savePush">保存设置</button>
         <button class="btn btn-sm" :disabled="busy === 'push-now'"
                 @click="run('push-now', '/maimemo/push/now', undefined, '已推送')">立即推送一次</button>

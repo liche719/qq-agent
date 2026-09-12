@@ -82,8 +82,13 @@ async function refresh(force = false) {
   busy.value = true
   try {
     overview.value = await api('/overview')
-    history.value = await api('/metrics/history?limit=90')
+    // tick 一成功就推进：各页签靠它重载自己的数据，不能因为趋势图接口失败就整体不刷新
     tick.value += 1
+    try {
+      history.value = await api('/metrics/history?limit=90')
+    } catch (ignored) {
+      /* 趋势图失败不影响其它页签刷新 */
+    }
     errorText.value = null
     stopped.value = false
     lastSuccess.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
