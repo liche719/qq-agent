@@ -138,6 +138,18 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - 已验证（无凭据状态）：`/oidc` 状态接口、`authorize-url` 未配置时优雅报错、公开回调页渲染（缺 code / 带 error 两种情况）、原 Token 方式不受影响；**真正的授权换 token 要等用户拿到 client_id/secret 后实测**。
 - **QQ 里背单词（用户 2026-09-12 决定：暂不做，继续用墨墨 App）**。原因是实测限制：开放 API **没有提交复习结果的接口**（`study/submit_study_response`、`study/review` 均 404 `common_not_found`），也**不提供官方释义**（`interpretations`/`phrases`/`notes` 只返回你自己在云词本里建的内容）；唯一能反向影响墨墨的写操作是 `study/advance_study`（把词提前拉回今日任务）与 `study/add_words`。所以 QQ 侧的复习**只能存我们自己的库、不会算进墨墨 App 的进度**——用户选择不做。若以后要做，设计方向是：墨墨出词表 + QQ 三档自评（认识/模糊/忘记）+ 自建间隔重复调度 + 「忘记」的词用 `advance_study` 拉回墨墨。
 
+### 定时任务（到点真的去做事，2026-09-12 新增）
+
+- **用户提出「现在没有定时任务，只有定时提醒」**，所以补齐了这一块。区别写在提示词第 20 条里，模型必须分清：
+  - **定时提醒**（`parseReminder`）：到点**发一句话**，内容在创建时就定死了；
+  - **定时任务**（`createScheduledTask`）：到点**重新跑一遍完整 Agent**（可搜索、可读记忆、可调用工具）再把结果发回来，所以"每天早上把天气发我"必须走这条。
+- 入口：聊天自然语言（工具 `ScheduledTaskTool`：create/list/setEnabled/cancel/runNow）、`/schedules` 命令（列出/暂停/恢复/立即执行/删除，别名 定时任务/查看定时任务/我的定时任务）、面板「定时任务」页签（可新建、启停、立即执行、删除，并显示每个任务上次的结果）。
+- 结构：`schedule/` 包 —— `ScheduledTask`（表 `scheduled_task`：title/instruction/cron/enabled/nextRunAt/lastRunAt/status/lastResult/lastError/runCount）、`ScheduledTaskRepository`、`ScheduledTaskParseService`（LLM 把原话解析成 标题+执行指令+Cron，Cron 必填且必须是 6 段）、`ScheduledTaskService`（创建/列出/启停/删除/立即执行 + Quartz 调度）、`ScheduledTaskJob`（Quartz 入口）、`BuiltinScheduleService`（面板用的**系统内置任务清单**）。
+- **执行链路**：Quartz 到点 → `ScheduledTaskJob` → `ScheduledTaskService.execute` → `orchestrator.onInboundSync(InboundMessage.text(...))` 跑一遍 Agent → 结果推给用户（`ProactiveDelivery`）→ 写回 status/lastResult/nextRunAt/runCount。调度复用现有 Quartz（JDBC 持久化）+ 新任务组 `scheduled-tasks`，**不需要改表结构**；启动时 `ApplicationReadyEvent` 会把库里启用的任务重新同步进调度器（容器重建后自愈）。
+- **手动执行放后台线程**：`runNow` 不直接同步跑，因为它是从一次对话里被调用的，嵌套调用 `onInboundSync` 会打乱 MDC/userScope 与工具尾注上下文。
+- 面板「定时任务」页还列出**系统内置**在跑的东西：墨墨每日推送（每天 21:30、上次推送日期）、主动关怀复盘（每天 20:30、开启用户数）、数据库备份（`backup.cron`）、Quartz 提醒/定时任务两组的**真实下次触发时间**，以及告警检查/关怀扫描/背单词扫描/提醒恢复/记忆归档/生命周期/指标采样这些固定周期任务（Spring 不暴露 `@Scheduled` 的下次执行时间，所以这些如实标"—"，只显示频率）。
+- 配置：`SCHEDULED_ENABLED`、`SCHEDULED_MAX_PER_USER`（默认 10）、`SCHEDULED_RESULT_MAX_CHARS`；已加进 compose 的 environment 透传。
+
 ### 运维告警推送（2026-09-12 新增）
 
 - `alert` 包里的 `AlertNotifier` 每 60 秒检查一次：QQ 网关是否断开、MySQL/Redis/Quartz 是否可用、磁盘可用空间是否低于阈值（默认 2GB）、堆内存是否超过阈值（默认 85%）。
@@ -191,6 +203,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 25. **中文文本指令是"整串别名"匹配**：`CommandRegistry` 原来只认完全相等的串（如「结束陪练」），写成「陪练 英语」这种"指令+参数"会**静默落到大模型**（看起来像功能生效了，其实只是模型自己在临场演，`user_profile.coach_mode` 一行都没写）。2026-09-12 已改成：整串不是别名时**退回按首词识别、余下作为参数**；`HelpHandler` 的指令清单是**写死的**（避免与 Registry 循环依赖），加新指令必须同时改它，否则 `/help` 里看不到。
 26. **墨墨开放 API 的三个特点**（2026-09-12 接入时实测）：① 个人 access token 在**墨墨 App** 里生成、**有效期只有一天左右**，过期返回 401——所以别把它当成长期密钥写死，本项目把 Token 存进 `maimemo_setting` 表并**优先于环境变量**，用户在面板「背单词」页粘贴即可；② 官方**限流**（10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次），面板自动刷新很快，必须带缓存（本项目 30 秒）；③ 接口只给"今日完成/总数"，**新学与复习要自己按今日单词列表拆**，列表没取全就不能拿条数当复习数。另外 `Spring Data Redis` 会对 id 为 String 的 JPA 仓库报 "Could not safely identify store assignment"（本项目不用 Redis 仓库，已在 `application.yml` 里 `spring.data.redis.repositories.enabled: false` 关掉）。
 27. **模型"每轮都要调工具"不牢靠**：面试陪练第一版实测模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）。凡是"每轮都必须记账"的场景，**要在提示词里把动作顺序写死并前置**（"先调工具、再说话，顺序不能反"），并在工具描述里再强调一次；只写"每轮都要调用"不够。
+28. **Bean 循环依赖会让整个应用起不来**（2026-09-12 定时任务上线时踩到，CI 自检因此报「首页 000」、容器反复重启）：`ScheduledTaskService → AgentOrchestrator → CommandRegistry → SchedulesHandler → ScheduledTaskService`。Spring Boot 3 默认禁止循环引用，**直接注入就会启动失败**。凡是"服务被工具/命令依赖、自己又要用 AgentOrchestrator"的场景，用 `ObjectProvider<AgentOrchestrator>` 延迟取（`getIfAvailable()`），执行时再解析。
+29. **容器 JVM 默认时区是 UTC，会让所有 Cron 偏 8 小时**（2026-09-12 发现并修）：`new CronExpression(...)`、`CronScheduleBuilder.cronSchedule(...)` 以及 Spring 的 `@Scheduled(cron=...)` **都按 JVM 默认时区解释**。容器没设 TZ 时，"每天 8 点"会在本地 **16 点**跑、备份的 `0 0 3 * * ?` 会在 11 点跑、面板显示的下次执行也差 8 小时。修法两层：① compose 里给 agent 加 `TZ: Asia/Shanghai`（一旦生效，`LocalDateTime` 的 JDBC 读写也不再偏移——之前 DB 里存的本地时间看起来比应用早 8 小时，就是 UTC 默认时区 + `hibernate.jdbc.time_zone` 组合出来的）；② 代码里所有 Cron 计算**显式指定时区**（`CronScheduleBuilder.inTimeZone(...)`、`CronExpression.setTimeZone(...)`），别依赖默认值。验证方式：建一个 `0 0 23 * * ?` 的任务，确认「面板显示的下次执行 / DB 里的 next_run_at / `QRTZ_TRIGGERS.NEXT_FIRE_TIME` 换算出的本地时间」三处一致。
+30. **主动消息的投递通道会过期**（2026-09-12 踩到）：提醒/主动关怀/定时任务都按 `user_profile.last_channel` 投递（不猜通道是为了避免投错平台），但排障时用模拟器发过消息就会把它写成 `simulator`，回到生产后**所有主动消息静默失败**。现在统一走 `channel/ProactiveDelivery`：记录通道不可用时，**仅当"支持主动消息的非模拟器通道恰好只有一个"才改用它**（多个可用通道仍旧不猜、记 WARN）。排查这类问题先看日志里的 `记录的通道 ... 不可用`。
+31. **手工 `delete from QRTZ_*` 会因外键约束删不干净**：`QRTZ_TRIGGERS` 有子表（`QRTZ_CRON_TRIGGERS`/`QRTZ_SIMPLE_TRIGGERS`/`QRTZ_BLOB_TRIGGERS`/`QRTZ_FIRED_TRIGGERS`），顺序必须是子表 → `QRTZ_TRIGGERS` → `QRTZ_JOB_DETAILS`，否则删不掉（而且会被 `2>/dev/null` 藏住报错）。正常删任务请走面板/接口（`ScheduledTaskService.cancel` 会连调度一起删）。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -205,10 +221,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 20:20）
+## 7. 当前状态（2026-09-12 21:30）
 
-- 远程 `wechat-agent-java` 运行中，**应用自带 HTTPS 监听 `0.0.0.0:443`（标准端口），证书是 Let's Encrypt 签发给 `liche.cloud` 的有效证书**；`status=UP`、QQ 通道 `UP`。
-- **面板入口：`https://liche.cloud/`（不带端口号、绿锁）**。Vue 单页应用，**7 个页签（总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 用户与记忆 / 日志）**→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92/` 仍能打开，但会提示证书名称不匹配。
+- 远程 `wechat-agent-java` 运行中，**应用自带 HTTPS 监听 `0.0.0.0:443`（标准端口），证书是 Let's Encrypt 签发给 `liche.cloud` 的有效证书**；`status=UP`、QQ 通道 `UP`。**容器已固定 `TZ=Asia/Shanghai`**（见坑 29）。
+- **面板入口：`https://liche.cloud/`（不带端口号、绿锁）**。Vue 单页应用，**8 个页签（总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志）**→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92/` 仍能打开，但会提示证书名称不匹配。
 - 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
 - 公网暴露面：**22（SSH）、443（面板）**；8443 的安全组规则暂时保留（回滚备用，应用已不再监听），8080 / 51820 / 51821 均未开。内存占用平稳。
 - 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **370**（本人为主）、`reminder_task` 14、`user_work_memory` 49、`user_core_memory` 17；`interview_round` 与 `maimemo_setting` 为 2026-09-12 新建表（验证后已清空/仅留推送设置）。微信与模拟器残留保持清空。
@@ -216,6 +232,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **墨墨背单词**已上线并端到端验证：面板「背单词」页读得到今日进度、Token 可在页面保存/清除（存 `maimemo_setting`，优先于环境变量）、`POST /maimemo/push/now` 实测推送到本人 QQ 成功（`sent=true`）、QQ 聊天里两种不同说法都会调用工具取真实数据；每日 21:30 自动推送已启用（日期记在 `last_push_date`）。Token 目前写在服务器 `.env` 的 `MAIMEMO_API_TOKEN`。
 - **墨墨 OIDC（长期免维护）代码已就绪，等用户凭据**：`MaimemoOidcService` + 公开回调 `/api/maimemo/oauth/callback` + 面板「长期授权」区块（生成授权链接 / 粘贴回调 / 断开）。已验证未配置状态下的全部路径（状态接口、优雅报错、回调页渲染、原 Token 方式不受影响）。**下一步（备案通过后由用户做）**：在 `open.maimemo.com/app` 创建后端应用（主页与回调都用 `https://liche.cloud`，回调填 `https://liche.cloud/api/maimemo/oauth/callback`，权限勾学习数据 + offline_access）→ 把 client_id/secret 写进服务器 `.env` 的 `MAIMEMO_OIDC_*` 并重建容器 → 面板点「生成授权链接」走一遍授权。
 - **QQ 里背单词：用户 2026-09-12 决定不做**（开放 API 不能提交复习结果、也不给官方释义，QQ 侧复习无法回写墨墨进度），继续用墨墨 App，本项目只做进度查询 + 每日推送。
+- **定时任务已上线并端到端验证**：自然语言「每天早上 8 点把今天的天气发我」→ 模型调用 `createScheduledTask` → LLM 解析出 Cron `0 0 8 * * ?` 落库；定点任务实测在指定分钟准时触发、真的跑了一遍 Agent（调 `getCurrentTime`）、把结果推送到本人 QQ（`status=SUCCESS`、无 lastError）；面板「定时任务」页列出 12 条内置任务与用户任务；测试任务已清理（`scheduled_task` 与 `scheduled-tasks` 调度组都为空）。**同时修掉两个会全局出问题的 bug**：Bean 循环依赖（应用起不来）与容器 JVM 时区 UTC（Cron 差 8 小时）。
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。
