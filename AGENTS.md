@@ -91,7 +91,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **架构**：前端是独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，无 UI 框架），只通过 JSON 接口与后端通信；后端只提供 `/api/admin/*` 与静态入口。构建产物输出到 `src/main/resources/static/`，由 Dockerfile 的 node 阶段在打包镜像时生成，**部署就是 agent 这一个容器**（没有额外网关）。
 - **本地开发**：`cd web && npm install`；`npm run dev`（Vite 5173，已把 `/api` 代理到 `http://127.0.0.1:8080`）。改完样式或组件必须 `npm run build`（直接写进后端 static 目录）才会进 jar。
-- **目录结构**：`web/src/views/`（LoginView、DashboardView）、`web/src/panels/`（Overview / Qq / Tasks / Users / Logs 五个页签）、`web/src/components/`（StatCard、StatusPill、InfoGrid、DataTable、JsonBlock、ChartBars）、`web/src/{api,auth,labels,router}.js`，以及**集中承载全部视觉规范的 `web/src/style.css`**。
+- **目录结构**：`web/src/views/`（LoginView、DashboardView）、`web/src/panels/`（Overview / Qq / Llm / Maimemo / Tasks / Users / Logs 七个页签）、`web/src/components/`（StatCard、StatusPill、InfoGrid、DataTable、JsonBlock、ChartBars）、`web/src/{api,auth,labels,router}.js`，以及**集中承载全部视觉规范的 `web/src/style.css`**。
 - **路由**：`createWebHashHistory`（`/#/login`、`/#/dashboard`），因此网关只需放行固定路径、不需要服务端 rewrite。
 - **视觉（2026-09-12 按用户要求改成白色主调）**：白到浅蓝的极淡渐变底 + 极淡冷色网格（`body::before`：120px，竖线略清晰、横线更淡、交点小圆点，mask 向外淡出）；面板是**白色半透明玻璃**（`rgba(255,255,255,.58~.84)` 渐变 + `backdrop-filter: blur(20px) saturate(150%)` + 22px 圆角 + 白色描边 + 极淡外圈 `--ring`）；**强调色只用「淡蓝 → 白」渐变**（`#cfe0ff → #fff`，用在主按钮、选中页签、用户气泡、图表柱），蓝色不铺面积；状态色为柔和的绿/琥珀/红。改视觉只动 `web/src/style.css`。
 - **文案**：界面不出现英文状态词，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。`labels.js` 是唯一的状态词典，新增状态值改那里。
@@ -109,14 +109,26 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   ```
   （本机调试用同目录 `spa_server.py` 起代理、不设 `SPA_BASE`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
-### 陪练模式（英语 / 面试，2026-09-12 新增）
+### 面试陪练（只保留面试，2026-09-12 改版；英语陪练已删除）
 
-- QQ 里发指令切换：`陪练 英语`、`陪练 面试`、`结束陪练`；也支持 `/practice english|interview|off`（`/help` 会自动列出）。
-- **自然语言同样能进**（2026-09-12 补）：`tool/PracticeTool` 提供了 `startPractice(mode)` / `stopPractice()` 两个工具，提示词第 18 条要求模型在用户说"陪我练练英语/你当面试官问我"时**必须调用工具进入模式**，而不是自己临时扮演（临时扮演不持久、规则不稳定）。工具已注册进 `ToolRegistry` 的构造列表（**新工具必须加进那个 List，否则不会被暴露给模型**），显示名加在 `AgentPolicyProperties.DEFAULT_TOOL_DISPLAY_NAMES`（尾注会显示"进入陪练/退出陪练"）。
-- **实现要点：不动用户人设**。只在 `user_profile.coach_mode` 记一个模式（`english` / `interview`，`null`=关闭），由 `agent/CoachPresets.withMode(人设, 模式)` 在 `AgentOrchestrator.invokeAgent` 里把该模式的"额外要求"追加到系统提示词末尾——所以退出即原样恢复，用户自己设的人设一个字都没改。
-- 模式提示词都在 `agent/CoachPresets.java`：英语陪练＝"英语对话 + 每轮只纠 1~3 处最影响表达的错 + 用一个问题把对话推下去"；面试陪练＝"一次只问一个问题 + 追问细节 + 每 3~5 轮给结构化反馈与评分"。
-- `coach_mode` 列由 `ddl-auto: update` 自动创建（容器跑的正是 local profile）；**已在服务器上手工 ALTER 过**，换成 `production` profile（`validate`）时必须先手动加列，否则启动即报错。
-- 这一项**没有 QQ 菜单按钮**：自定义菜单已经占满 10 项、QQ 侧有数量上限，硬加可能让整个菜单配置失败，所以只能发文字（`CommandRegistry` 里加了中文别名：陪练 / 开始陪练 / 英语陪练 / 面试陪练 / 结束陪练）。
+- 定位：**不是"换个人设聊天"，而是有题库、有评分卡、有复盘报告的一次模拟面试**。用户当时说"陪练模式没什么用"，所以去掉了只加一致性的英语陪练，改成能留下数据的面试模拟。
+- 进入/退出：QQ 发 `陪练 面试`、`陪练 Java 后端 3 年`（岗位会带进提示词）、`结束陪练`；也支持 `/practice interview|off`。**中文指令带参数**靠 `CommandRegistry` 的"整串别名不匹配就按首词识别、余下当参数"（`/help` 里的清单是写死的，加指令必须同步改 `HelpHandler`）。
+- **自然语言同样能进**：`tool/InterviewTool` 的 `startInterviewPractice(role)` / `recordInterviewRound(...)` / `endInterviewPractice()`，提示词第 18 条要求模型在用户说"你当面试官陪我练练""模拟一下面试"时**必须调用工具进入模式**，而不是临时扮演；工具必须写进 `ToolRegistry` 的构造列表，显示名加在 `AgentPolicyProperties.DEFAULT_TOOL_DISPLAY_NAMES`。
+- **不动用户人设**：只在 `user_profile` 记 `coach_mode`(interview) / `coach_session_id` / `coach_role`，由 `agent/CoachPresets.withMode(人设, 模式)` 在 `AgentOrchestrator.invokeAgent` 里把模式要求（含整个题库与评分观察点）追加到系统提示词末尾，退出即原样恢复。
+- 数据落库：`interview/` 包 —— `InterviewRound`(表 `interview_round`：题类/题目/回答要点/四维分数/反馈) + `InterviewBank`(6 个题类：自我介绍、项目深挖、技术基础、系统设计、行为面试、反问环节，每类带评分观察点) + `InterviewService`(**复盘报告由程序按记录生成**：轮数、各维度均分、最弱项、未覆盖题类、下次重点；不靠模型记忆)。
+- **踩过的坑**：模型会在长回复里"忘了先记分"（第一版实测第 2 轮没写进库）。修法是**把顺序写死并前置**——"每轮必须先调用 recordInterviewRound，再写反馈，顺序不能反，漏记等于这轮没练"，工具描述里也强调"在写反馈之前先调用"。改完实测 2/2 轮都记账。
+- `/help` 与 `PracticeHandler` 的用法文案都要跟着改；这一项**没有 QQ 菜单按钮**（菜单已占满 10 项，QQ 侧有上限）。
+
+### 墨墨背单词开放 API 接入（2026-09-12 新增）
+
+- 用途：QQ 里直接问「我今天背了多少单词 / 还剩多少没刷」→ 查真实进度回答；每天到点（默认 21:30）推一条今日进度；面板新增「背单词」页签。
+- **接口**：`https://open.maimemo.com/open/api/v1/*`，`Authorization: Bearer <个人 access token>`，响应统一 `{success, data, errors}`。用到 `study/get_study_progress`、`study/get_today_items`、`study/query_study_records`（还有 `add_words`/`advance_study`/云词本 CRUD，暂未接）。官方限流：**10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次**，所以服务层带 30 秒缓存（面板自动刷新与聊天追问都走缓存）。
+- **Token 从哪来**：墨墨 App 里的「开放 API」入口生成，**页面显示的有效期只有一天左右**，过期后接口返回 401（实测：有效的 token 能直接拿到 `progress`）。因此设计了**面板内更新**：`maimemo_setting` 表（键值表）存 Token，**数据库里的值优先于环境变量**，粘贴保存即生效、不用登录服务器；清空则回落到 `MAIMEMO_API_TOKEN`。Token 失效时聊天工具会明说"去面板更新"，每日推送也会推一条失效提醒（而不是装作没事）。
+- **代码结构**：`maimemo/` 包 —— `MaimemoClient`(HTTP+错误翻译，401 抛 `MaimemoAuthException`)、`MaimemoService`(Token 管理/缓存/快照/文案)、`MaimemoPushService`(每日扫描 + 立即推送)、`MaimemoSetting`+Repository；`tool/MaimemoTool`(聊天工具 `getMaimemoStudyProgress`)；`controller/AdminMaimemoController`(`GET /api/admin/maimemo/overview`、`POST /refresh|/token|/push/settings|/push/now`)；前端 `web/src/panels/MaimemoPanel.vue`（页签「背单词」）。
+- **自然语言识别交给模型**（用户明确要求）：工具只提供能力，描述里写清典型说法，**不做任何关键词硬编码**；提示词第 19 条要求先取数据再回答、禁止凭印象编数字。实测两种说法（"我今天背了多少单词？还差多少没背完？"、"墨墨那边我今天还剩多少没刷"）都会调用工具。
+- 推送目标复用 `ALERT_QQ_OPENID`（用户本人的 openid）；QQ 主动消息有额度限制，推送"尽力而为"，失败只记日志，**面板状态才是准的**。每天只推一次（日期记在 `maimemo_setting.last_push_date`），面板有开关与时间设置 + 「立即推送一次」。
+- 接口只给"今日完成/总数"，**新学与复习的拆分要靠今日单词列表自己算**：列表没取全（`total` 大于拉取条数）时不能拿列表长度当复习数——所以按 `max(item-limit, total)` 拉取算拆分，面板只展示前 `item-limit` 条，取不全就显示 `—`。
+- 配置项：`MAIMEMO_ENABLED`、`MAIMEMO_API_TOKEN`、`MAIMEMO_DAILY_PUSH_ENABLED`、`MAIMEMO_DAILY_PUSH_TIME`、`MAIMEMO_TIMEOUT_SECONDS`、`MAIMEMO_CACHE_SECONDS`；compose 的 `environment` 里必须列出来（只传列出的变量）。
 
 ### 运维告警推送（2026-09-12 新增）
 
@@ -169,6 +181,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」（提示语是"您与此网站之间建立的连接不安全 / 请勿在此网站上输入任何敏感信息…"），**与服务器无关**。判定方法：`tools/ui-verify/check_security.py`（真实 Chromium 直连、不忽略证书错误）——直连正常就说明是浏览器侧；处理办法是关掉旧标签页/重启浏览器/换无痕窗口，并**清掉 IP 地址那个书签**（IP 访问永远提示证书名称不匹配，LE 不给 IP 签证书）。另注意本机装了 Steam++（Watt Toolkit，进程 `Steam++` / `Steam++.Accelerator`）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络问题时先把它退出。
 24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 服务器 `.env` 里**没有** `MYSQL_PASSWORD`，compose 用的是默认值 `root`（即 `mysql -uroot -proot`，库名 `wechat_agent`）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`，容器内查数据用 `docker exec -it wechat-agent-mysql mysql -uroot -proot`（注意远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`）。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 想端到端测指令/回复链路（本机不方便发 QQ 消息时）：把服务器 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 并重建容器——QQ 通道由 `QQ_ENABLED` 独立控制**不会被顶掉**；然后带管理员口令 `POST /api/sim/send {"userId":"sim-xxx","content":"…"}`（同步返回回复，`/api/sim/replies` 查推送），测完把模式改回 `disabled`、**删掉测试用户在各表的行**。注意 compose 只把 `environment:` 里列出的变量传进容器：`WECHAT_CHANNEL_MODE` 是 2026-09-12 才补上的 passthrough，之前改 `.env` 根本不生效（表现为 `/api/sim/*` 一直 404）。
 25. **中文文本指令是"整串别名"匹配**：`CommandRegistry` 原来只认完全相等的串（如「结束陪练」），写成「陪练 英语」这种"指令+参数"会**静默落到大模型**（看起来像功能生效了，其实只是模型自己在临场演，`user_profile.coach_mode` 一行都没写）。2026-09-12 已改成：整串不是别名时**退回按首词识别、余下作为参数**；`HelpHandler` 的指令清单是**写死的**（避免与 Registry 循环依赖），加新指令必须同时改它，否则 `/help` 里看不到。
+26. **墨墨开放 API 的三个特点**（2026-09-12 接入时实测）：① 个人 access token 在**墨墨 App** 里生成、**有效期只有一天左右**，过期返回 401——所以别把它当成长期密钥写死，本项目把 Token 存进 `maimemo_setting` 表并**优先于环境变量**，用户在面板「背单词」页粘贴即可；② 官方**限流**（10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次），面板自动刷新很快，必须带缓存（本项目 30 秒）；③ 接口只给"今日完成/总数"，**新学与复习要自己按今日单词列表拆**，列表没取全就不能拿条数当复习数。另外 `Spring Data Redis` 会对 id 为 String 的 JPA 仓库报 "Could not safely identify store assignment"（本项目不用 Redis 仓库，已在 `application.yml` 里 `spring.data.redis.repositories.enabled: false` 关掉）。
+27. **模型"每轮都要调工具"不牢靠**：面试陪练第一版实测模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）。凡是"每轮都必须记账"的场景，**要在提示词里把动作顺序写死并前置**（"先调工具、再说话，顺序不能反"），并在工具描述里再强调一次；只写"每轮都要调用"不够。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -183,13 +197,15 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 16:20）
+## 7. 当前状态（2026-09-12 20:20）
 
 - 远程 `wechat-agent-java` 运行中，**应用自带 HTTPS 监听 `0.0.0.0:443`（标准端口），证书是 Let's Encrypt 签发给 `liche.cloud` 的有效证书**；`status=UP`、QQ 通道 `UP`。
-- **面板入口：`https://liche.cloud/`（不带端口号、绿锁）**。Vue 单页应用，6 个页签（总览 / QQ 通道 / 模型与搜索 / 任务 / 用户与记忆 / 日志）→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92/` 仍能打开，但会提示证书名称不匹配。
+- **面板入口：`https://liche.cloud/`（不带端口号、绿锁）**。Vue 单页应用，**7 个页签（总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 用户与记忆 / 日志）**→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92/` 仍能打开，但会提示证书名称不匹配。
 - 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
 - 公网暴露面：**22（SSH）、443（面板）**；8443 的安全组规则暂时保留（回滚备用，应用已不再监听），8080 / 51820 / 51821 均未开。内存占用平稳。
-- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **348**（本人为主）、`reminder_task` **14**、`user_work_memory` 49、`user_core_memory` 17、`operation_log` 67。微信与模拟器残留已清空。
+- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **370**（本人为主）、`reminder_task` 14、`user_work_memory` 49、`user_core_memory` 17；`interview_round` 与 `maimemo_setting` 为 2026-09-12 新建表（验证后已清空/仅留推送设置）。微信与模拟器残留保持清空。
+- **面试陪练**已上线并端到端验证（自然语言进模式 → 逐轮评分入库 → 「结束陪练」出程序生成的复盘报告 → 模式自动清除），英语陪练已删除。
+- **墨墨背单词**已上线并端到端验证：面板「背单词」页读得到今日进度（当日实测 0/124）、Token 可在页面保存/清除（存 `maimemo_setting`，优先于环境变量）、`POST /maimemo/push/now` 实测推送到本人 QQ 成功（`sent=true`）、QQ 聊天里两种不同说法都会调用工具取真实数据；每日 21:30 自动推送已启用（当天已推过一次，日期记在 `last_push_date`）。Token 目前写在服务器 `.env` 的 `MAIMEMO_API_TOKEN`（面板保存的值优先）。
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。
@@ -206,6 +222,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（现为 `rootlcw`）与 `ADMIN_API_KEY`（600）；明文只由用户保存 |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key` / `SAVED_Ali_Secret`）；用户可在 RAM 控制台随时禁用 |
+| 墨墨背单词个人 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`（600），或运维面板「背单词」页保存进 `maimemo_setting` 表（后者优先）；token 在墨墨 App「开放 API」里生成，**有效期约一天** |
 | 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
 
 ## 9. 历史会话
