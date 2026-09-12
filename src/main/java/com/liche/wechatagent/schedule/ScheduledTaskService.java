@@ -333,6 +333,7 @@ public class ScheduledTaskService {
         CronTrigger trigger = TriggerBuilder.newTrigger()
                 .withIdentity("scheduled-trigger-" + task.getId(), GROUP)
                 .withSchedule(CronScheduleBuilder.cronSchedule(cron)
+                        .inTimeZone(java.util.TimeZone.getTimeZone(zone))
                         .withMisfireHandlingInstructionDoNothing())
                 .forJob(job)
                 .build();

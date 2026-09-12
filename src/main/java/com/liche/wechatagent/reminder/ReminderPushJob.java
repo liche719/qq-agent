@@ -150,6 +150,8 @@ public class ReminderPushJob extends QuartzJobBean {
             }
             CronExpression expression = new CronExpression(cron);
             ZoneId zone = zone();
+            // 显式指定时区：容器 JVM 默认是 UTC，不指定会把「每天 8 点」算成当地 16 点
+            expression.setTimeZone(java.util.TimeZone.getTimeZone(zone));
             Date next = expression.getNextValidTimeAfter(Date.from(LocalDateTime.now(zone)
                     .atZone(zone).toInstant()));
             if (next != null) {

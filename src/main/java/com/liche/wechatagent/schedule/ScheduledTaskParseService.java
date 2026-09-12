@@ -87,7 +87,7 @@ public class ScheduledTaskParseService {
         return value.split("\\s+").length < 6 ? "0 " + value : value;
     }
 
-    /** 下一次执行时间（面板展示用） */
+    /** 下一次执行时间（面板展示用）。**必须显式指定时区**：CronExpression 默认用 JVM 默认时区，容器里是 UTC。 */
     public static LocalDateTime nextRun(String cron, ZoneId zone) {
         String normalized = normalizeCron(cron);
         if (normalized == null) {
@@ -95,6 +95,7 @@ public class ScheduledTaskParseService {
         }
         try {
             CronExpression expression = new CronExpression(normalized);
+            expression.setTimeZone(java.util.TimeZone.getTimeZone(zone));
             java.util.Date next = expression.getNextValidTimeAfter(new java.util.Date());
             return next == null ? null : LocalDateTime.ofInstant(next.toInstant(), zone);
         } catch (java.text.ParseException | RuntimeException exception) {

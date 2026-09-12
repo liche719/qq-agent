@@ -20,6 +20,9 @@ services:
       SERVER_SSL_CERTIFICATE: /app/certs/server.crt
       SERVER_SSL_CERTIFICATE_PRIVATE_KEY: /app/certs/server.key
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      # JVM 默认时区必须是本地时区：Quartz 的 Cron 表达式与 Spring @Scheduled(cron) 都按 JVM 默认时区解析，
+      # 容器默认是 UTC，会让「每天 8 点」实际在本地 16 点跑。
+      TZ: Asia/Shanghai
       # 通道模式：disabled（只跑 QQ）/ simulator（本地或排障用的假通道，可调 /api/sim/*）。
       # 注意 compose 只传 environment 里列出的变量——以前没有这一行，改服务器 .env 根本进不了容器。
       WECHAT_CHANNEL_MODE: ${WECHAT_CHANNEL_MODE:-disabled}

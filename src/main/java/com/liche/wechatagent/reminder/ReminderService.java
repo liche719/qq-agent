@@ -256,6 +256,7 @@ public class ReminderService {
                         .withIdentity("trigger-" + task.getId(), GROUP)
                         .startAt(startAt)
                         .withSchedule(CronScheduleBuilder.cronSchedule(normalizeCron(task.getCron()))
+                                .inTimeZone(java.util.TimeZone.getTimeZone(zone))
                                 .withMisfireHandlingInstructionDoNothing())
                         .forJob(job)
                         .build();
