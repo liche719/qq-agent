@@ -31,15 +31,15 @@ public class InterviewService {
     private final UserService userService;
     private final ZoneId zone;
 
+    /**
+     * **只能有一个构造器**：类里有多个构造器、又没有 {@code @Autowired} 标注时，
+     * Spring 会去找无参构造 → 启动直接失败（`No default constructor found`，容器会一直重启）。
+     */
     public InterviewService(InterviewRoundRepository repository, UserService userService,
                             @org.springframework.beans.factory.annotation.Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.repository = repository;
         this.userService = userService;
         this.zone = parseZone(timeZoneId);
-    }
-
-    public InterviewService(InterviewRoundRepository repository, UserService userService) {
-        this(repository, userService, "Asia/Shanghai");
     }
 
     private static ZoneId parseZone(String value) {
