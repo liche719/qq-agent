@@ -73,6 +73,10 @@ services:
       MAIMEMO_OIDC_CLIENT_ID: ${MAIMEMO_OIDC_CLIENT_ID:-}
       MAIMEMO_OIDC_CLIENT_SECRET: ${MAIMEMO_OIDC_CLIENT_SECRET:-}
       MAIMEMO_OIDC_REDIRECT_URI: ${MAIMEMO_OIDC_REDIRECT_URI:-}
+      # 数据库备份：默认每天 03:00。**要验证备份真的能跑，就得能改这个 cron**——
+      # 不透传的话改 .env 不生效（同第 36 条坑），只能等到凌晨三点才知道有没有坏。
+      BACKUP_CRON: ${BACKUP_CRON:-0 0 3 * * ?}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro
