@@ -59,8 +59,10 @@ jobs:
 
       - name: Load image and update only Java service
         run: |
+          # 顺带重启 SearXNG：它的配置是挂载进去的 settings.yml，容器不会热加载，
+          # 改了配置只有重启才生效（重启只影响几秒内的搜索请求）。
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "set -eu; mkdir -p /opt/wechat-agent-infra/docker/searxng; docker load < /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; cd /opt/wechat-agent-infra; AGENT_IMAGE=wechat-agent:${GITHUB_SHA} docker compose -f docker-compose.remote.yml up -d --no-build agent; docker image prune -f; docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' | sort -r | tail -n +3 | cut -d'|' -f2 | xargs -r docker rmi -f 2>/dev/null || true; rm -f /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; docker compose -f docker-compose.remote.yml ps agent; docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'"
+            "set -eu; mkdir -p /opt/wechat-agent-infra/docker/searxng; docker load < /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; cd /opt/wechat-agent-infra; AGENT_IMAGE=wechat-agent:${GITHUB_SHA} docker compose -f docker-compose.remote.yml up -d --no-build agent; docker restart wechat-agent-searxng; docker image prune -f; docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' | sort -r | tail -n +3 | cut -d'|' -f2 | xargs -r docker rmi -f 2>/dev/null || true; rm -f /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; docker compose -f docker-compose.remote.yml ps agent; docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'"
 
       # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
       - name: Smoke check deployed panel

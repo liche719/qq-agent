@@ -1,12 +1,27 @@
 # Read the documentation before extending the defaults:
 # https://docs.searxng.org/admin/settings/
 #
-# 远程服务器外网搜索配置：
-# - 关闭反爬限流（后端直接调用 JSON API）
-# - 显式启用 json 输出格式（默认只允许 html）
-# - 同时启用常用国际和国内搜索引擎，由 SearXNG 按可用性聚合结果
+# 远程服务器搜索配置（2026-09-12 按实测重做）
+#
+# 这台机器是阿里云大陆机房 IP，逐引擎实测（见 AGENTS.md 第 5 节）：
+#   ✗ 不可达 / 超时：google、google cse、duckduckgo、brave、qwant、wikipedia、wikidata、seznam、tusksearch、wiby
+#   ✗ 被反爬拦：baidu（验证码，挂起 1 小时）、360search（跳验证码页）、mojeek（验证码）、fastbot（403）、gabanza（证书错误）
+#   ✗ 引擎代码本身报错：sogou（AttributeError: resp.next_request）
+#   ✗ 返回空：bing 走 www.bing.com 时解析不到结果（这里改成国内可用的 cn.bing.com 再试）、quark、yep、privacywall、crowdview、encyclosearch
+#   ✓ 可用：yandex、naver、resulthunter、searchmysite（中文查询均有结果）、mwmbl（英文索引）
+#
+# 关键点：**关掉失效引擎和启用可用引擎一样重要**——每个失效引擎都要等 3 秒超时重试，
+# 十几个加起来会把单次搜索拖到 20 秒以上，超过应用侧的 15 秒读超时，最终表现就是"搜索一直失败"。
 
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      - yandex
+      - naver
+      - resulthunter
+      - searchmysite
+      - mwmbl
+      - bing
 
 server:
   secret_key: "au3YAZnq1wPU6lmytCOJ7R1boCpGOuE"
@@ -19,23 +34,17 @@ search:
     - json
 
 engines:
-  - name: google
+  - name: yandex
     disabled: false
-  - name: duckduckgo
+  - name: naver
     disabled: false
-  - name: wikipedia
+  - name: resulthunter
     disabled: false
-  - name: brave
+  - name: searchmysite
     disabled: false
-  - name: startpage
+  - name: mwmbl
     disabled: false
-  - name: qwant
-    disabled: false
+  # www.bing.com 会 302 到 cn.bing.com，直接指向它避免解析不到结果
   - name: bing
     disabled: false
-  - name: baidu
-    disabled: false
-  - name: sogou
-    disabled: false
-  - name: 360search
-    disabled: false
+    base_url: https://cn.bing.com
