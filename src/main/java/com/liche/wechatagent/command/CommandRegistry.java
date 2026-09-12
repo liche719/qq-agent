@@ -47,6 +47,11 @@ public class CommandRegistry {
                 case "关闭自动记忆" -> "memory";
                 case "删除记忆" -> "memory";
                 case "设置助手人设" -> "set-prompt";
+                case "陪练" -> "practice";
+                case "开始陪练" -> "practice";
+                case "英语陪练" -> "practice";
+                case "面试陪练" -> "practice";
+                case "结束陪练" -> "practice";
                 case "开启每日复盘" -> "care";
                 case "开启每周复盘" -> "care";
                 case "关闭主动关怀" -> "care";
@@ -56,6 +61,13 @@ public class CommandRegistry {
                 args = trimmed.contains("关闭") ? "off" : trimmed.equals("删除记忆") ? "forget" : "on";
             } else if (name.equals("care")) {
                 args = trimmed.contains("每日") ? "daily" : trimmed.contains("每周") ? "weekly" : "off";
+            } else if (name.equals("practice")) {
+                args = switch (trimmed) {
+                    case "英语陪练" -> "english";
+                    case "面试陪练" -> "interview";
+                    case "结束陪练" -> "off";
+                    default -> "";
+                };
             }
         }
         CommandHandler handler = handlers.get(name);

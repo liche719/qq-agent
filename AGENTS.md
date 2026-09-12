@@ -109,6 +109,14 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   ```
   （本机调试用同目录 `spa_server.py` 起代理、不设 `SPA_BASE`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
 
+### 陪练模式（英语 / 面试，2026-09-12 新增）
+
+- QQ 里发指令切换：`陪练 英语`、`陪练 面试`、`结束陪练`；也支持 `/practice english|interview|off`（`/help` 会自动列出）。
+- **实现要点：不动用户人设**。只在 `user_profile.coach_mode` 记一个模式（`english` / `interview`，`null`=关闭），由 `agent/CoachPresets.withMode(人设, 模式)` 在 `AgentOrchestrator.invokeAgent` 里把该模式的"额外要求"追加到系统提示词末尾——所以退出即原样恢复，用户自己设的人设一个字都没改。
+- 模式提示词都在 `agent/CoachPresets.java`：英语陪练＝"英语对话 + 每轮只纠 1~3 处最影响表达的错 + 用一个问题把对话推下去"；面试陪练＝"一次只问一个问题 + 追问细节 + 每 3~5 轮给结构化反馈与评分"。
+- `coach_mode` 列由 `ddl-auto: update` 自动创建（容器跑的正是 local profile）；**已在服务器上手工 ALTER 过**，换成 `production` profile（`validate`）时必须先手动加列，否则启动即报错。
+- 这一项**没有 QQ 菜单按钮**：自定义菜单已经占满 10 项、QQ 侧有数量上限，硬加可能让整个菜单配置失败，所以只能发文字（`CommandRegistry` 里加了中文别名：陪练 / 开始陪练 / 英语陪练 / 面试陪练 / 结束陪练）。
+
 ### 运维告警推送（2026-09-12 新增）
 
 - `alert` 包里的 `AlertNotifier` 每 60 秒检查一次：QQ 网关是否断开、MySQL/Redis/Quartz 是否可用、磁盘可用空间是否低于阈值（默认 2GB）、堆内存是否超过阈值（默认 85%）。
@@ -158,7 +166,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='LTAI5t…'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删了、其实是解析问题——本次就为这个白折腾了一轮。acme.sh 自身用 shell `source` 读该文件，带引号无影响。Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名会先被注册局 `client hold`**（阿里云实名认证通过前）：此期间公网 DNS 是 NXDOMAIN，DNS-01 的 `_acme-challenge` TXT 查不到，acme.sh 会**一直循环「Not valid yet」重试**（实测空转 10 分钟以上不停），所以自动签发脚本必须用 `timeout 900` 之类包住，别让它挂着。另外 hold 解除后解析还有约 5 分钟负缓存：TXT 刚加好时可能短暂查不到，等一下就会通过。实测时间线：注册 19:29(UTC) → 次日 06:40 左右 hold 才消失。
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」（提示语是"您与此网站之间建立的连接不安全 / 请勿在此网站上输入任何敏感信息…"），**与服务器无关**。判定方法：`tools/ui-verify/check_security.py`（真实 Chromium 直连、不忽略证书错误）——直连正常就说明是浏览器侧；处理办法是关掉旧标签页/重启浏览器/换无痕窗口，并**清掉 IP 地址那个书签**（IP 访问永远提示证书名称不匹配，LE 不给 IP 签证书）。另注意本机装了 Steam++（Watt Toolkit，进程 `Steam++` / `Steam++.Accelerator`）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络问题时先把它退出。
-24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 服务器 `.env` 里**没有** `MYSQL_PASSWORD`，compose 用的是默认值 `root`（即 `mysql -uroot -proot`，库名 `wechat_agent`）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`，容器内查数据用 `docker exec -it wechat-agent-mysql mysql -uroot -proot`（注意远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`）。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。
+24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 服务器 `.env` 里**没有** `MYSQL_PASSWORD`，compose 用的是默认值 `root`（即 `mysql -uroot -proot`，库名 `wechat_agent`）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`，容器内查数据用 `docker exec -it wechat-agent-mysql mysql -uroot -proot`（注意远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`）。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 想端到端测指令/回复链路（本机不方便发 QQ 消息时）：临时把服务器 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 并重启——QQ 通道由 `QQ_ENABLED` 独立控制，**不会被顶掉**；然后带管理员口令 `POST /api/sim/send {"userId":"sim-xxx","content":"…"}`（同步返回回复），测完把模式改回 `disabled` 并删掉测试用户的数据。
 
 ## 6. Windows / PowerShell 环境注意
 

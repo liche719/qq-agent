@@ -61,6 +61,23 @@ public class UserService {
         userLogService.record(userId, "SET_PROMPT", Map.of("personaLength", newPersona.trim().length()));
     }
 
+    /** /陪练：设置或清除陪练模式（english / interview，null 或空表示关闭）；人设本身不动。 */
+    public void setCoachMode(String userId, String coachMode) {
+        UserProfile profile = get(userId);
+        String normalized = coachMode == null || coachMode.isBlank()
+                ? null : coachMode.trim().toLowerCase(java.util.Locale.ROOT);
+        profile.setCoachMode(normalized);
+        profile.setUpdatedAt(java.time.LocalDateTime.now());
+        userProfileRepository.save(profile);
+        userLogService.record(userId, normalized == null ? "COACH_MODE_OFF" : "COACH_MODE_ON",
+                Map.of("mode", normalized == null ? "" : normalized));
+    }
+
+    /** 当前陪练模式；null 表示未开启 */
+    public String coachMode(String userId) {
+        return get(userId).getCoachMode();
+    }
+
     public boolean isMemoryEnabled(String userId) {
         return !Boolean.FALSE.equals(get(userId).getMemoryEnabled());
     }

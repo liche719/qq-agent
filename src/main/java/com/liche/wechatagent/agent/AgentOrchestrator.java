@@ -406,7 +406,9 @@ public class AgentOrchestrator {
         String agentText = quotePrompt(content, batch.quotedContent()) + mediaToolContextService.promptSection();
         List<String> allImages = new java.util.ArrayList<>(batch.images());
         allImages.addAll(batch.quotedImages());
-        return agentLoop.chat(userId, batch.botId(), batch.channel(), profile.getPersona(), memory.coreSection(),
+        // 陪练模式只追加一段额外要求，用户自己的人设保持不动
+        return agentLoop.chat(userId, batch.botId(), batch.channel(),
+                CoachPresets.withMode(profile.getPersona(), profile.getCoachMode()), memory.coreSection(),
                 memory.workSection(), history, agentText, allImages, documents, sink);
     }
 

@@ -35,6 +35,13 @@ public class UserProfile {
     @Column(length = 16)
     private String proactiveCareCadence = "WEEKLY";
 
+    /**
+     * 陪练模式：null=关闭；english=英语陪练；interview=面试陪练。
+     * 由 /陪练 指令切换；开启时给系统提示词追加一段该模式的专属要求，人设本身不动。
+     */
+    @Column(length = 32)
+    private String coachMode;
+
     private LocalDateTime nextCareAt;
 
     private LocalDateTime lastCareAt;
