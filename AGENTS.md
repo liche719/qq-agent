@@ -137,6 +137,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - 关键值都存在 `maimemo_setting` 表（`oidc_refresh_token`/`oidc_access_token`/`oidc_access_expires_at`/`oidc_subject`…），`POST /api/admin/maimemo/oidc/disconnect` 可一键断开。**client_secret 只在服务器 `.env`，违反官方规则会被停用应用。**
   - 已验证（无凭据状态）：`/oidc` 状态接口、`authorize-url` 未配置时优雅报错、公开回调页渲染（缺 code / 带 error 两种情况）、原 Token 方式不受影响；**真正的授权换 token 要等用户拿到 client_id/secret 后实测**。
 - **QQ 里背单词（用户 2026-09-12 决定：暂不做，继续用墨墨 App）**。原因是实测限制：开放 API **没有提交复习结果的接口**（`study/submit_study_response`、`study/review` 均 404 `common_not_found`），也**不提供官方释义**（`interpretations`/`phrases`/`notes` 只返回你自己在云词本里建的内容）；唯一能反向影响墨墨的写操作是 `study/advance_study`（把词提前拉回今日任务）与 `study/add_words`。所以 QQ 侧的复习**只能存我们自己的库、不会算进墨墨 App 的进度**——用户选择不做。若以后要做，设计方向是：墨墨出词表 + QQ 三档自评（认识/模糊/忘记）+ 自建间隔重复调度 + 「忘记」的词用 `advance_study` 拉回墨墨。
+- **用户隔离（2026-09-12 用户专门问过，逐条核过）**：定时任务/面试陪练/提醒/媒体工具全部按当前会话用户过滤（工具拿 `ToolStatusService.currentUserId()`，它由 `AgentOrchestrator` 在处理线程上绑定；定时任务的取消/启停/立即执行都先 `requireOwned`）。**墨墨是唯一的单账号接口**——Token 属于某一个人的墨墨账号，所以加了归属绑定：`maimemo.owner-user-id`（留空回落 `ALERT_QQ_OPENID`），非本人问背单词会被 `MaimemoTool` 明确拒绝；面板「背单词」页会显示"绑定的账号"。实测：`sim-outsider` 问进度得到拒答、本人得到真实数据。
+- **顽固单词（2026-09-12 用户真机用法驱动的修复）**：用户在 QQ 里自建了「墨墨顽固词推送」任务（每天 20:00），第一版跑出来说"拿不到顽固词"——原因是 `query_study_records` 只在**完整**列表里带 STICKING 标签（实测 833 条记录里有 35~42 个），而我们只拉了 `item-limit`(30) 条。现在 `MaimemoService.stickingInfo()` 单独用 `record-fetch-limit`(1000) 拉全量、筛出 STICKING，单独缓存 `sticking-cache-seconds`(600)；面板多了「顽固单词」卡片，聊天摘要里**最多列 60 个**。另外接口返回的 `next_study_date` 是 UTC ISO（`...T16:00:00.000Z` 其实就是本地次日零点），已统一换算成本地日期再展示。**释义仍由模型自己给**（API 不提供），摘要里明确要求"墨墨的数据照抄、中文意思你可以自己给，但不要声称是墨墨官方释义"。
 
 ### 定时任务（到点真的去做事，2026-09-12 新增）
 
@@ -233,6 +235,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **墨墨 OIDC（长期免维护）代码已就绪，等用户凭据**：`MaimemoOidcService` + 公开回调 `/api/maimemo/oauth/callback` + 面板「长期授权」区块（生成授权链接 / 粘贴回调 / 断开）。已验证未配置状态下的全部路径（状态接口、优雅报错、回调页渲染、原 Token 方式不受影响）。**下一步（备案通过后由用户做）**：在 `open.maimemo.com/app` 创建后端应用（主页与回调都用 `https://liche.cloud`，回调填 `https://liche.cloud/api/maimemo/oauth/callback`，权限勾学习数据 + offline_access）→ 把 client_id/secret 写进服务器 `.env` 的 `MAIMEMO_OIDC_*` 并重建容器 → 面板点「生成授权链接」走一遍授权。
 - **QQ 里背单词：用户 2026-09-12 决定不做**（开放 API 不能提交复习结果、也不给官方释义，QQ 侧复习无法回写墨墨进度），继续用墨墨 App，本项目只做进度查询 + 每日推送。
 - **定时任务已上线并端到端验证**：自然语言「每天早上 8 点把今天的天气发我」→ 模型调用 `createScheduledTask` → LLM 解析出 Cron `0 0 8 * * ?` 落库；定点任务实测在指定分钟准时触发、真的跑了一遍 Agent（调 `getCurrentTime`）、把结果推送到本人 QQ（`status=SUCCESS`、无 lastError）；面板「定时任务」页列出 12 条内置任务与用户任务；测试任务已清理（`scheduled_task` 与 `scheduled-tasks` 调度组都为空）。**同时修掉两个会全局出问题的 bug**：Bean 循环依赖（应用起不来）与容器 JVM 时区 UTC（Cron 差 8 小时）。
+- **用户隔离已逐条核过并验证**：定时任务/面试/提醒/媒体按会话用户过滤；**墨墨加上了归属绑定**（`maimemo.owner-user-id`，留空回落 `ALERT_QQ_OPENID`），实测非本人问进度被拒答、本人拿到真实数据。面板「背单词」页会显示绑定的账号。
+- **用户在 QQ 里自建了定时任务「墨墨顽固词推送」（每晚 20:00，id=5，属他自己的数据，不要删）**：它暴露了"顽固单词只拉了 30 条记录所以查不到"，已修（见墨墨小节）；`POST /api/admin/scheduled/5/run` 实测跑通并把 42 个顽固词 + 释义推送到他 QQ。
 - CI 现在是自验证的：部署后自动检查页面/鉴权/登录接口，失败会推 QQ 并置红；旧镜像只保留两个；纯文档改动不触发构建。
 - 告警已上线（`ALERT_ENABLED=true` → 本人的 openid），已实测推送成功（测试告警 + 自定义 notify 各一次）。
 - **域名/证书/端口（已完成）**：`liche.cloud` 已注册、实名通过、A 记录生效，**Let's Encrypt 证书已签发并装入容器，应用监听 443，面板走 `https://liche.cloud/`（不带端口）绿锁**；acme.sh 每天 06:55 自动检查续期（到期前 60 天重签并自动重启容器）。CI 自检已改为验证不带端口的域名地址。整个流程全自动，用户无需再操作。

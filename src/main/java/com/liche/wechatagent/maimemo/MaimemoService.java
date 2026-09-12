@@ -314,7 +314,7 @@ public class MaimemoService {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> stickyWords = (List<Map<String, Object>>) stickingInfo.getOrDefault("words", List.of());
         for (Map<String, Object> word : stickyWords) {
-            if (sticking.size() < 15) {
+            if (sticking.size() < 60) {
                 sticking.add(String.valueOf(word.get("spelling")));
             }
         }
