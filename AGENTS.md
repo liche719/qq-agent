@@ -188,7 +188,11 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     - 顺带实测数据：QQ 沙箱网关在 `183.60.15.26` / `119.147.3.206` / `27.39.88.2` 之间漂（CDN）；`ss` 里显示的 IPv4-mapped IPv6 写法（`[::ffff:1.2.3.4]`）**不能直接喂给 iptables**，要先用 `grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'` 剥出来。
 52. **别用 `[regex]::Replace` 往文档里插含 `$` 的代码片段**（2026-09-13 我把 AGENTS.md 写坏了一次）：.NET 的替换串里 `$1`/`$4` 是捕获组引用、`$'` 是"匹配之后的全部内容"、反引号-dollar 是"匹配之前的内容"。我插入的说明里带着 `awk '{print $4}'`、`grep -v '^443$'` 这类片段，于是 `$'` 把**第 6、7 节整段复制进正文**、`$4` 变成空，文件从 57KB 涨到 81KB 且被切断。**结论**：往 Markdown 里插代码或含 `$` 的文本，用 `edit` 工具（literal 替换）或 `String.Replace`，别用 `[regex]::Replace` 的字符串重载。**发现文档坏了的第一件事是回滚**：`git checkout <上一个好提交> -- AGENTS.md`（本次回滚到 `0ce9b38`，一次就修好）。
 
-## 6. Windows / PowerShell 环境注意
+53. **生产凭据加固（2026-09-13 做完）+ 两个必须知道的坑**：现状 = 应用用**独立账号** `wechat_app`（只授 `wechat_agent.*`）、MySQL root 口令已轮换成随机值、Redis 已 `--requirepass`、agent 容器 `cap_drop: [ALL]` + `cap_add: [NET_BIND_SERVICE]` + `no-new-privileges`。四项随机口令（`MYSQL_APP_PASSWORD`/`MYSQL_ROOT_PASSWORD`/`REDIS_PASSWORD`）**只在服务器 `.env`（600）**，由脚本用 `openssl rand -hex 24` 现场生成、从不外传、也从不打印。
+    - **坑 ①（这个把我打挂了一次）：应用连 MySQL 看到的来源 IP 不是 127.0.0.1，而是 docker 网桥网关 `172.22.0.1`。** 因为 mysql 只绑 `127.0.0.1:3306`，应用经**宿主上的 docker-proxy** 转进去，MySQL 记录到的客户端是网桥地址。所以只建 `'wechat_app'@'127.0.0.1'`/`'localhost'` 会 `Access denied for user 'wechat_app'@'172.22.0.1'`，应用启动即 `Unable to determine Dialect without JDBC metadata`（= 连不上库）。**正确做法**：同时建 `'wechat_app'@'172.%'`。用 `172.%` 而不是 `%` 是留一层保险——万一以后有人把 3306 暴露出去，`%` 就变成全开。`root@'%'` 之所以一直能用，正是因为有这个通配。
+    - **坑 ②：`MYSQL_PASSWORD` 这个变量以前同时是"应用的密码"和"mysql 服务的 root 密码"**，直接改会让**健康检查**用新口令去 ping 而库里还是旧的 → mysql 变 unhealthy → agent 的 `depends_on: service_healthy` 直接不让启动。现在 compose 里拆成三个变量：`MYSQL_ROOT_PASSWORD`（mysql 服务 + 健康检查）、`MYSQL_APP_USER` / `MYSQL_APP_PASSWORD`（agent）。**换口令的正确顺序**：先在库里 `CREATE USER`/`ALTER USER` → **立刻用新口令验证能连**（不过就别往下走）→ 再写 `.env` → 再 `docker compose up -d`（用 `AGENT_IMAGE=$(docker inspect wechat-agent-java -f '{{.Config.Image}}')` 传当前 tag，否则 compose 会去 pull 不存在的 `wechat-agent:latest`）。
+    - **仍未做**：`read_only: true`（应用要写 `/app/{logs,backup,stored-media}` 三个挂载目录和 `/tmp`，需要额外配 tmpfs 并逐个验证）与镜像 `USER 10001`（那三个宿主机目录现在是 root:700，得先 chown 到 10001 否则应用写不了日志/备份）。这两项属于"收益明确、但改动面更大"，留作下一步。
+
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
