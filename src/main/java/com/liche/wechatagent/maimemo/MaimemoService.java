@@ -45,6 +45,8 @@ public class MaimemoService {
     private final MaimemoClient client;
     private final MaimemoSettingRepository settings;
     private final MaimemoOidcService oidcService;
+    private final com.liche.wechatagent.config.AlertProperties alertProperties;
+    private final String configuredOwnerUserId;
     private final boolean enabled;
     private final String envToken;
     private final boolean defaultPushEnabled;
@@ -59,6 +61,8 @@ public class MaimemoService {
     public MaimemoService(MaimemoClient client,
                           MaimemoSettingRepository settings,
                           MaimemoOidcService oidcService,
+                          com.liche.wechatagent.config.AlertProperties alertProperties,
+                          @Value("${maimemo.owner-user-id:}") String ownerUserId,
                           @Value("${maimemo.enabled:true}") boolean enabled,
                           @Value("${maimemo.api-token:}") String envToken,
                           @Value("${maimemo.daily-push-enabled:true}") boolean defaultPushEnabled,
@@ -69,6 +73,8 @@ public class MaimemoService {
         this.client = client;
         this.settings = settings;
         this.oidcService = oidcService;
+        this.alertProperties = alertProperties;
+        this.configuredOwnerUserId = ownerUserId == null ? "" : ownerUserId.trim();
         this.enabled = enabled;
         this.envToken = envToken == null ? "" : envToken.trim();
         this.defaultPushEnabled = defaultPushEnabled;
@@ -97,6 +103,7 @@ public class MaimemoService {
         result.put("tokenUpdatedAt", tokenUpdatedAt());
         result.put("push", pushState());
         result.put("oidc", oidcService.status());
+        result.put("ownerUserId", ownerUserId());
 
         if (!enabled) {
             result.put("status", STATUS_DISABLED);
@@ -176,6 +183,27 @@ public class MaimemoService {
     /** Token 失效后清缓存，让下一次读取立刻重试 */
     public void invalidate() {
         cachedAtMillis = 0L;
+    }
+
+    /**
+     * 墨墨账号的归属用户（openid）。
+     *
+     * <p>墨墨是**单账号**接口：Token 属于某一个人的墨墨账号，所以这套数据只属于这一个人。
+     * 优先用 {@code maimemo.owner-user-id}，没配就回落到运维告警里配置的本人 openid；
+     * 两者都为空时返回空字符串（表示没有绑定，任何人都可用——只适合单用户部署）。
+     */
+    public String ownerUserId() {
+        if (!configuredOwnerUserId.isBlank()) {
+            return configuredOwnerUserId;
+        }
+        String openid = alertProperties == null ? "" : alertProperties.getQqOpenid();
+        return openid == null ? "" : openid.trim();
+    }
+
+    /** 这个用户是否有权查看墨墨数据 */
+    public boolean isMaimemoOwner(String userId) {
+        String owner = ownerUserId();
+        return owner.isBlank() || owner.equals(userId);
     }
 
     /** 聊天工具用的文本摘要：只讲用户关心的进度与待办 */

@@ -62,6 +62,9 @@ const tokenRows = computed(() => {
     ['Token 来源', data.value?.tokenSource || '—'],
     ['当前 Token', data.value?.tokenHint || '（未配置）'],
     ['Token 更新时间', data.value?.tokenUpdatedAt || '—'],
+    ['绑定的账号', data.value?.ownerUserId
+      ? data.value.ownerUserId + '（只有这个用户能查背单词数据）'
+      : '未绑定（任何用户都能查，仅适合单用户部署）'],
     ['每次读取', data.value?.checkedAt ? '数据时间 ' + data.value.checkedAt : '—']
   ]
   return rows

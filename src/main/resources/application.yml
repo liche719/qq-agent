@@ -283,6 +283,8 @@ scheduled:
 maimemo:
   enabled: ${MAIMEMO_ENABLED:true}
   api-token: ${MAIMEMO_API_TOKEN:}
+  # 墨墨是单账号接口：只有这个用户（openid）能查它的数据；留空时回落到 alert.qq-openid
+  owner-user-id: ${MAIMEMO_OWNER_USER_ID:}
   base-url: ${MAIMEMO_BASE_URL:https://open.maimemo.com/open/api/v1}
   timeout-seconds: ${MAIMEMO_TIMEOUT_SECONDS:10}
   connect-timeout-seconds: ${MAIMEMO_CONNECT_TIMEOUT_SECONDS:5}

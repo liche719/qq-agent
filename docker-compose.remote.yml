@@ -57,6 +57,7 @@ services:
       # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
       MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}
+      MAIMEMO_OWNER_USER_ID: ${MAIMEMO_OWNER_USER_ID:-}
       MAIMEMO_DAILY_PUSH_ENABLED: ${MAIMEMO_DAILY_PUSH_ENABLED:-true}
       MAIMEMO_DAILY_PUSH_TIME: ${MAIMEMO_DAILY_PUSH_TIME:-21:30}
       # OIDC 长期授权（创建"后端应用"后填这三项；回调地址要与平台登记一致）
