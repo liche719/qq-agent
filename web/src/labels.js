@@ -6,6 +6,13 @@ const DICTIONARY = {
   task: { RUNNING: '运行中', FAILED: '失败', UNKNOWN_RESULT: '结果未知', REPLY_SENT: '已回复' },
   channel: { qq: 'QQ', wechat: '微信', wechat_ilink: '微信', clawbot: '微信', simulator: '模拟器' },
   source: { operation: '操作审计', application: '应用日志' },
+  maimemo: {
+    OK: '已连接',
+    NOT_CONFIGURED: '未配置 Token',
+    UNAUTHORIZED: 'Token 失效',
+    ERROR: '读取失败',
+    DISABLED: '未启用'
+  },
   level: { INFO: '信息', WARN: '警告', ERROR: '错误' },
   action: { QQ_RECONNECT: '触发 QQ 重连', TASK_RETRY: '重试任务', CACHE_CLEANUP: '清理缓存' }
 }

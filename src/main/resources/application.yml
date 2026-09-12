@@ -267,6 +267,21 @@ backup:
   conversation-limit: ${BACKUP_CONVERSATION_LIMIT:10000}
   change-log-limit: ${BACKUP_CHANGE_LOG_LIMIT:5000}
 
+# 墨墨背单词开放 API（个人 Token 在墨墨 App「开放 API」里生成，有效期很短；
+# 面板「背单词」页保存的 Token 会写进数据库并优先于这里的 MAIMEMO_API_TOKEN）
+maimemo:
+  enabled: ${MAIMEMO_ENABLED:true}
+  api-token: ${MAIMEMO_API_TOKEN:}
+  base-url: ${MAIMEMO_BASE_URL:https://open.maimemo.com/open/api/v1}
+  timeout-seconds: ${MAIMEMO_TIMEOUT_SECONDS:10}
+  connect-timeout-seconds: ${MAIMEMO_CONNECT_TIMEOUT_SECONDS:5}
+  cache-seconds: ${MAIMEMO_CACHE_SECONDS:30}
+  item-limit: ${MAIMEMO_ITEM_LIMIT:30}
+  daily-push-enabled: ${MAIMEMO_DAILY_PUSH_ENABLED:true}
+  daily-push-time: ${MAIMEMO_DAILY_PUSH_TIME:21:30}
+  push-scan-interval-ms: ${MAIMEMO_PUSH_SCAN_INTERVAL_MS:60000}
+  push-initial-delay-ms: ${MAIMEMO_PUSH_INITIAL_DELAY_MS:60000}
+
 logging:
   file:
     path: logs

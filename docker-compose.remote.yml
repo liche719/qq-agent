@@ -48,6 +48,11 @@ services:
       ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-30}
       # ICP 备案号（备案通过后填这里，页面底部会显示并链接工信部；留空则完全不显示）
       SITE_ICP: ${SITE_ICP:-}
+      # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
+      MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
+      MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}
+      MAIMEMO_DAILY_PUSH_ENABLED: ${MAIMEMO_DAILY_PUSH_ENABLED:-true}
+      MAIMEMO_DAILY_PUSH_TIME: ${MAIMEMO_DAILY_PUSH_TIME:-21:30}
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro

@@ -28,6 +28,7 @@ public class AgentPolicyProperties {
             Map.entry("startInterviewPractice", "开始面试陪练"),
             Map.entry("recordInterviewRound", "记录本轮评分"),
             Map.entry("endInterviewPractice", "结束陪练并复盘"),
+            Map.entry("getMaimemoStudyProgress", "查询背单词进度"),
             Map.entry("saveImportantMedia", "保存文件"),
             Map.entry("inspectRecentUnstoredMedia", "查看刚才的媒体"),
             Map.entry("listStoredMedia", "查找已保存文件"),
