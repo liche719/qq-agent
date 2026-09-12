@@ -2,7 +2,11 @@ package com.liche.wechatagent.memory;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface UserWorkMemoryRepository extends JpaRepository<UserWorkMemory, Long> {
@@ -25,4 +29,9 @@ public interface UserWorkMemoryRepository extends JpaRepository<UserWorkMemory, 
     /** 所有出现过工作记忆的用户（用于周期归档扫描） */
     @org.springframework.data.jpa.repository.Query("SELECT DISTINCT u.userId FROM UserWorkMemory u")
     List<String> findDistinctUserIds();
+
+    /** 只更新使用时间这一列，避免整实体回写把并发修改的状态列（archived 等）冲掉 */
+    @Modifying
+    @Query("update UserWorkMemory memory set memory.lastUsedAt = :now where memory.id in :ids")
+    int updateLastUsedAt(@Param("ids") List<Long> ids, @Param("now") LocalDateTime now);
 }

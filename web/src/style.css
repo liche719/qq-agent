@@ -394,8 +394,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chat-hint { text-align: center; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
 
 /* ---------- Markdown 渲染（聊天回复 / 长期记忆 / 任务结果）---------- */
-/* 气泡本身是 pre-wrap，Markdown 已经带好换行，这里要把继承的空格处理还原 */
-.bubble .text .md { white-space: normal; }
+/* MarkdownText 的根元素就是 .md，而 Vue 会把外部 class 合并到同一个根元素上，
+   所以在气泡里 .md 和 .text 是**同一个元素**——选择器必须写成 .text.md。
+   这里要把气泡继承下来的 white-space: pre-wrap 还原成 normal：marked 输出的块级标签之间本来就带换行，
+   pre-wrap 会把那些换行也渲染出来，行距被撑成两倍。 */
+.bubble .text.md { white-space: normal; }
 .md { font-size: 14px; line-height: 1.7; word-break: break-word; }
 .md > *:first-child { margin-top: 0; }
 .md > *:last-child { margin-bottom: 0; }
@@ -555,19 +558,28 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   .chat { max-height: 58vh; padding: 14px 10px; }
   .bubble .text { max-width: 88%; }
 
-  /* 表格转卡片：靠 data-label 显示列名 */
+  /* 表格转卡片：靠 data-label 显示列名。**只作用于 DataTable**（.table-wrap）——
+     原来这几条是无作用域的，把模型回复/记忆卡片里的 Markdown 表格也一起拆成了卡片。 */
   .table-wrap { border: 0; background: none; overflow: visible; }
-  table { min-width: 0; display: block; }
-  thead { display: none; }
-  tbody { display: grid; gap: 10px; }
-  tbody tr {
+  .table-wrap table { min-width: 0; display: block; }
+  .table-wrap thead { display: none; }
+  .table-wrap tbody { display: grid; gap: 10px; }
+  .table-wrap tbody tr {
     display: block; padding: 7px 3px;
     border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-solid);
   }
-  tbody td { display: flex; gap: 10px; border: 0; padding: 8px 13px; align-items: flex-start; }
-  tbody td::before { content: attr(data-label); flex: 0 0 78px; padding-top: 2px; color: var(--muted); font-size: 12.5px; }
-  tbody tr:hover td { background: transparent; }
+  .table-wrap tbody td { display: flex; gap: 10px; border: 0; padding: 8px 13px; align-items: flex-start; }
+  .table-wrap tbody td::before { content: attr(data-label); flex: 0 0 78px; padding-top: 2px; color: var(--muted); font-size: 12.5px; }
+  .table-wrap tbody tr:hover td { background: transparent; }
   .wide { max-width: none; }
+
+  /* Markdown 表格保持真表格，只允许横向滚动 */
+  .md table { display: table; overflow-x: auto; }
+  .md thead { display: table-header-group; }
+  .md tbody { display: table-row-group; }
+  .md tbody tr { display: table-row; padding: 0; border: 0; background: none; }
+  .md tbody td { display: table-cell; padding: 6px 10px; border: 1px solid var(--line); }
+  .md tbody td::before { content: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

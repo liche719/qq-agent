@@ -3,7 +3,19 @@ const DICTIONARY = {
   app: { UP: '正常', DEGRADED: '降级', DOWN: '异常' },
   qq: { UP: '正常', DOWN: '异常', DISABLED: '未启用' },
   dep: { UP: '正常', DOWN: '异常', STANDBY: '待机' },
-  task: { RUNNING: '运行中', FAILED: '失败', UNKNOWN_RESULT: '结果未知', REPLY_SENT: '已回复', SUCCESS: '已成功', IDLE: '未执行' },
+  task: {
+    RUNNING: '运行中',
+    FAILED: '失败',
+    UNKNOWN_RESULT: '结果未知',
+    REPLY_SENT: '已回复',
+    SUCCESS: '已成功',
+    IDLE: '未执行',
+    // 提醒任务（ReminderTask）也有自己的状态取值，文案与后端一致
+    PENDING: '待执行',
+    COMPLETED: '已推送',
+    CANCELLED: '已取消',
+    EXPIRED: '已过期，未补发'
+  },
   channel: { qq: 'QQ', wechat: '微信', wechat_ilink: '微信', clawbot: '微信', simulator: '模拟器' },
   source: { operation: '操作审计', application: '应用日志' },
   maimemo: {
@@ -14,12 +26,27 @@ const DICTIONARY = {
     DISABLED: '未启用'
   },
   level: { INFO: '信息', WARN: '警告', ERROR: '错误' },
-  action: { QQ_RECONNECT: '触发 QQ 重连', TASK_RETRY: '重试任务', CACHE_CLEANUP: '清理缓存' }
+  action: { QQ_RECONNECT: '触发 QQ 重连', TASK_RETRY: '重试任务', CACHE_CLEANUP: '清理缓存' },
+  // 长期记忆（core/work）的 MemoryStatus 取值
+  memory: {
+    ACTIVE: '生效中',
+    ARCHIVED: '已归档',
+    SUPERSEDED: '已被取代',
+    PENDING: '待生效',
+    EXPIRED: '已过期',
+    DELETED: '已删除',
+    COMPLETED: '已完成'
+  },
+  // 情景记忆的 MemoryStatus 取值
+  episodic: { ACTIVE: '生效中', ARCHIVED: '已归档', SUPERSEDED: '已被取代' }
 }
 
 export function zh(group, value) {
   if (value === undefined || value === null || value === '') return '—'
-  return (DICTIONARY[group] && DICTIONARY[group][value]) || String(value)
+  const text = String(value)
+  // 后端用 String.valueOf(null) 会产出字符串 "null"，这些也统一当空值
+  if (text === 'null' || text === 'undefined' || text === 'NaN') return '—'
+  return (DICTIONARY[group] && DICTIONARY[group][text]) || text
 }
 
 export function toneOf(value) {

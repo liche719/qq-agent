@@ -27,8 +27,9 @@ public class ScheduledTaskTool {
             + "（例如「每天早上 8 点把今天的天气发我」「每周一帮我汇总上周聊过的重点」「每天晚上 9 点提醒我复盘今天的进度并给建议」）。"
             + "参数 description 传用户的原话。"
             + "注意：如果只是到点提醒一句话、不需要你做事，应该用 parseReminder 而不是这个工具。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult createScheduledTask(String description) {
         String userId = requireCurrentUser();
         return ToolBusinessResult.success(scheduledTaskService.createFromDescription(userId, description));
@@ -45,8 +46,9 @@ public class ScheduledTaskTool {
 
     @Tool(value = "暂停或恢复一个定时任务。参数 taskId 是任务 ID（先用 listScheduledTasks 查），"
             + "enabled 传 true 表示恢复执行、false 表示暂停。用户说「停掉/别再跑了/恢复那个定时任务」时调用。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult setScheduledTaskEnabled(Long taskId, Boolean enabled) {
         String userId = requireCurrentUser();
         boolean value = enabled == null || enabled;
@@ -55,8 +57,9 @@ public class ScheduledTaskTool {
 
     @Tool(value = "删除一个定时任务（不可恢复）。参数 taskId 是任务 ID（先用 listScheduledTasks 查）。"
             + "用户明确说「删掉/取消这个定时任务」时调用；只是暂时不想跑请用 setScheduledTaskEnabled 暂停。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true, destructive = true,
-            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, destructive = true,
+            retryable = false, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult cancelScheduledTask(Long taskId) {
         String userId = requireCurrentUser();
         return ToolBusinessResult.success(scheduledTaskService.cancel(userId, taskId));
@@ -64,8 +67,9 @@ public class ScheduledTaskTool {
 
     @Tool(value = "立刻执行一次某个定时任务（不影响原定计划）。参数 taskId 是任务 ID。"
             + "用户说「现在就跑一下那个定时任务」「先试一次」时调用。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult runScheduledTaskNow(Long taskId) {
         String userId = requireCurrentUser();
         return ToolBusinessResult.success(scheduledTaskService.runNow(userId, taskId));

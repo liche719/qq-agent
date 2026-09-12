@@ -159,11 +159,16 @@ public class MaimemoOidcService {
             }
         }
         String savedState = value(KEY_STATE);
-        if (!savedState.isBlank() && stateExpired()) {
+        // state 必须校验：这个回调是**公网匿名可达**的，只校验"如果两边都有才比"等于没校验——
+        // 任何拿到 client_id（授权链接里就有）的人都能用自己墨墨账号的 code 把服务端绑成他的账号。
+        if (savedState.isBlank()) {
+            throw new IllegalArgumentException("没有进行中的授权，请回到面板点「生成授权链接」再完成一次授权");
+        }
+        if (stateExpired()) {
             throw new IllegalArgumentException("这次授权链接已超过 30 分钟，请重新点击「生成授权链接」");
         }
-        if (!savedState.isBlank() && !state.isBlank() && !savedState.equals(state)) {
-            throw new IllegalArgumentException("state 不匹配（可能不是本次发起的授权），请重新点击「生成授权链接」");
+        if (state.isBlank() || !savedState.equals(state)) {
+            throw new IllegalArgumentException("state 不匹配（可能不是本次发起的授权），请粘贴浏览器跳转后地址栏里的**整条**地址");
         }
 
         JsonNode token = requestToken(Map.of(
@@ -298,15 +303,19 @@ public class MaimemoOidcService {
                     .retrieve()
                     .body(String.class);
         } catch (org.springframework.web.client.RestClientResponseException exception) {
+            // 上游响应体只进日志：这个异常文案会渲染到**匿名可达**的回调页上，回显上游内容等于把内部细节交出去
+            log.warn("墨墨授权接口返回 {}：{}", exception.getStatusCode().value(),
+                    brief(exception.getResponseBodyAsString()));
             throw new RuntimeException("墨墨授权接口返回 " + exception.getStatusCode().value()
-                    + "：" + brief(exception.getResponseBodyAsString()));
+                    + "，请检查 client_id / client_secret / 回调地址是否与平台登记的一致");
         } catch (RuntimeException exception) {
             throw new RuntimeException("墨墨授权接口不可达：" + exception.getMessage());
         }
         try {
             return objectMapper.readTree(json == null ? "{}" : json);
         } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
-            throw new RuntimeException("墨墨授权接口返回解析失败：" + brief(json));
+            log.warn("解析墨墨授权接口响应失败：{}", brief(json));
+            throw new RuntimeException("墨墨授权接口返回了无法解析的内容，请稍后重试");
         }
     }
 

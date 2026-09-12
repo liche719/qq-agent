@@ -133,12 +133,15 @@ public class ReminderService {
         if (pending == null) {
             return null;
         }
+        String normalizedCron = normalizeCronValue(repeatCron);
+        // 重复提醒每次触发后 triggerAt 都会前移到下一次，只比较内容与 cron 才能识别出同一条每日提醒
+        boolean repeating = normalizedCron != null;
         return pending.stream()
                 .filter(task -> task != null
                         && Objects.equals(task.getContent(), content)
-                        && Objects.equals(task.getTriggerAt(), triggerAt)
+                        && (repeating || Objects.equals(task.getTriggerAt(), triggerAt))
                         && Objects.equals(task.getPrewarmMinutes(), prewarmMinutes)
-                        && Objects.equals(normalizeCronValue(task.getCron()), normalizeCronValue(repeatCron)))
+                        && Objects.equals(normalizeCronValue(task.getCron()), normalizedCron))
                 .findFirst()
                 .orElse(null);
     }
@@ -559,6 +562,8 @@ public class ReminderService {
     private void updateNextRecurringTime(ReminderTask task) {
         try {
             CronExpression expression = new CronExpression(normalizeCron(task.getCron()));
+            // 显式指定时区：CronExpression 按 JVM 默认时区解释表达式，不写就会跟着环境漂
+            expression.setTimeZone(java.util.TimeZone.getTimeZone(zone));
             Date next = expression.getNextValidTimeAfter(Date.from(now().atZone(zone).toInstant()));
             if (next != null) {
                 task.setTriggerAt(LocalDateTime.ofInstant(next.toInstant(), zone));

@@ -29,8 +29,8 @@ const TABS = [
 const INTERVALS = [5000, 10000, 30000, 60000, 0]
 
 const router = useRouter()
-const tab = ref(readSetting('admin.tab', 'overview'))
-const interval = ref(Number(readSetting('admin.interval', '10000')))
+const tab = ref(readTab())
+const interval = ref(readInterval())
 const overview = ref(null)
 const history = ref([])
 const tick = ref(0)
@@ -60,6 +60,18 @@ function writeSetting(key, value) {
   }
 }
 
+/** 刷新间隔必须是下拉框里给出的那几个值，localStorage 被改坏时不能让它变成 NaN（会变成每毫秒一次的忙循环） */
+function readInterval() {
+  const value = Number(readSetting('admin.interval', '10000'))
+  return INTERVALS.includes(value) ? value : 10000
+}
+
+/** 页签必须是 TABS 里的 key，非法值会让所有页签都不匹配、只剩空壳 */
+function readTab() {
+  const value = readSetting('admin.tab', 'overview')
+  return TABS.some(item => item.key === value) ? value : 'overview'
+}
+
 const status = computed(() => overview.value?.status || '')
 const qqStatus = computed(() => overview.value?.qq || '')
 const memoryCount = computed(() => ['coreMemories', 'workMemories', 'episodes']
@@ -84,10 +96,13 @@ async function refresh(force = false) {
     overview.value = await api('/overview')
     // tick 一成功就推进：各页签靠它重载自己的数据，不能因为趋势图接口失败就整体不刷新
     tick.value += 1
-    try {
-      history.value = await api('/metrics/history?limit=90')
-    } catch (ignored) {
-      /* 趋势图失败不影响其它页签刷新 */
+    // 趋势图只有「总览」页签在用，其他页签不请求；失败也不清空已有数据，避免切回总览时闪一下空白
+    if (tab.value === 'overview') {
+      try {
+        history.value = await api('/metrics/history?limit=60')
+      } catch (ignored) {
+        /* 趋势图失败不影响其它页签刷新 */
+      }
     }
     errorText.value = null
     stopped.value = false

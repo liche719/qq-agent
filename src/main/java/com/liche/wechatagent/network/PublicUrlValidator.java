@@ -56,9 +56,18 @@ public class PublicUrlValidator {
         byte[] bytes = address.getAddress();
         if (address instanceof Inet6Address) {
             int first = Byte.toUnsignedInt(bytes[0]);
-            return (first & 0xfe) == 0xfc
-                    || (first == 0x20 && Byte.toUnsignedInt(bytes[1]) == 0x01
-                    && Byte.toUnsignedInt(bytes[2]) == 0x0d && Byte.toUnsignedInt(bytes[3]) == 0xb8);
+            // **只放行全局单播 2000::/3**，其余整段拒绝。这一刀同时挡住几类"能绕回内网"的地址：
+            // fc00::/7（ULA）、fe80::/10（链路本地）、::ffff:x.x.x.x（IPv4 映射，first 不是 0x20）、
+            // 64:ff9b::/96（NAT64，可写 [64:ff9b::7f00:1] 打到 127.0.0.1）、2002::/16（6to4，内嵌 IPv4）。
+            if ((first & 0xe0) != 0x20) {
+                return true;
+            }
+            int second = Byte.toUnsignedInt(bytes[1]);
+            if (second == 0x02) {
+                return true;
+            }
+            return first == 0x20 && second == 0x01
+                    && Byte.toUnsignedInt(bytes[2]) == 0x0d && Byte.toUnsignedInt(bytes[3]) == 0xb8;
         }
         int first = Byte.toUnsignedInt(bytes[0]);
         int second = Byte.toUnsignedInt(bytes[1]);
@@ -72,8 +81,11 @@ public class PublicUrlValidator {
                 || (first == 192 && second == 168)
                 || (first == 192 && second == 0)
                 || (first == 192 && second == 0 && third == 2)
+                || (first == 192 && second == 88 && third == 99)
                 || (first == 198 && (second == 18 || second == 19))
                 || (first == 198 && second == 51 && third == 100)
-                || (first == 203 && second == 0 && third == 113);
+                || (first == 203 && second == 0 && third == 113)
+                // 240.0.0.0/4 保留段（含 255.255.255.255 广播）：224~239 已被 isMulticastAddress 覆盖
+                || first >= 240;
     }
 }

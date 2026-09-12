@@ -44,7 +44,9 @@ class ConversationMemoryServiceTest {
                 List.of("m1"), LocalDateTime.of(2026, 9, 1, 10, 1), null);
         ConversationMemory foreign = new ConversationMemory("u2", "user", "e3", "其他用户",
                 List.of("m3"), LocalDateTime.of(2026, 9, 1, 10, 3), null);
-        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class)))
+        // 提取窗口现在只查 user/assistant 行（工具调用以 system 角色写两条记录，不能占掉窗口），
+        // 但仍然保留 foreign 行来验证"仓库就算返回别人的行也不会被用"
+        when(repository.findByUserIdAndRoleInOrderByCreatedAtDesc(eq("u1"), any(), any(Pageable.class)))
                 .thenReturn(List.of(newest, foreign, oldest));
         ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
 

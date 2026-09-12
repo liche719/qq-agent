@@ -250,10 +250,15 @@ public class MaimemoService {
         return openid == null ? "" : openid.trim();
     }
 
-    /** 这个用户是否有权查看墨墨数据 */
+    /**
+     * 这个用户是否有权查看墨墨数据。
+     *
+     * <p>**必须 fail-closed**：没有配置归属人时不能返回 true，否则"谁都是机主"，
+     * 任何用户都能读到机主的真实学习数据。没配就是谁都不给，并在面板上提示去配置。
+     */
     public boolean isMaimemoOwner(String userId) {
         String owner = ownerUserId();
-        return owner.isBlank() || owner.equals(userId);
+        return !owner.isBlank() && owner.equals(userId);
     }
 
     /** 聊天工具用的文本摘要：只讲用户关心的进度与待办 */

@@ -31,6 +31,8 @@ public class ConversationMemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationMemoryService.class);
     private static final Pattern RETRIEVAL_TERM = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
+    /** 记忆提取只看用户与机器人的对话行；工具调用的 system 行（call + result）不参与提取 */
+    private static final List<String> EXTRACTION_ROLES = List.of("user", "assistant");
     private final ConversationMemoryRepository repository;
     private final int extractionLimit;
     private final int retrievalLimit;
@@ -112,8 +114,9 @@ public class ConversationMemoryService {
             return List.of();
         }
         try {
-            List<ConversationMemory> source = repository.findByUserIdOrderByCreatedAtDesc(userId,
-                    PageRequest.of(0, Math.max(2, Math.min(extractionLimit, limit))));
+            // 只取 user/assistant 行：工具调用会以 system 角色写两条记录，不能占掉提取窗口
+            List<ConversationMemory> source = repository.findByUserIdAndRoleInOrderByCreatedAtDesc(userId,
+                    EXTRACTION_ROLES, PageRequest.of(0, Math.max(2, Math.min(extractionLimit, limit))));
             List<ConversationMemory> records = new ArrayList<>(source == null ? List.of() : source);
             Collections.reverse(records);
             return records.stream()

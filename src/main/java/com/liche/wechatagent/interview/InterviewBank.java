@@ -96,6 +96,9 @@ public final class InterviewBank {
             return null;
         }
         String value = raw.strip();
+        if (value.isEmpty()) {
+            return null;
+        }
         for (String category : QUESTIONS.keySet()) {
             if (category.equals(value) || category.contains(value) || value.contains(category)) {
                 return category;

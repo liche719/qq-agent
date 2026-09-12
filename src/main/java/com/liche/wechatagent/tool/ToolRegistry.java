@@ -92,6 +92,11 @@ public class ToolRegistry {
                 ToolExecutionPolicy policy = m.getAnnotation(ToolExecutionPolicy.class);
                 entries.put(name, new ToolEntry(name, spec, tool, m, policy));
                 ToolPolicySnapshot snapshot = ToolPolicySnapshot.from(policy);
+                // 声明了"需要确认"却没说确认参数是哪个，validateConfirmation 会直接 return——
+                // 等于挂了一道永不生效的门。发现这种组合要吵出来，别让它再悄悄出现。
+                if (snapshot.requiresConfirmation() && snapshot.confirmationParameter().isBlank()) {
+                    log.warn("工具 {} 声明 requiresConfirmation 但没给 confirmationParameter，确认校验不会生效（要么补参数，要么去掉声明）", name);
+                }
                 log.info("注册工具: {} -> {}#{} class={} sideEffect={} destructive={} confirmation={} confirmationParameter={} retryable={} risk={}",
                         name, tool.getClass().getSimpleName(), m.getName(), snapshot.executionClass(),
                         snapshot.hasSideEffect(), snapshot.destructive(), snapshot.requiresConfirmation(),

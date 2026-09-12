@@ -12,7 +12,6 @@ import java.util.Set;
 import java.util.List;
 import java.util.LinkedHashMap;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import java.util.stream.Collectors;
 
 /** Durable, user-scoped lifecycle state for asynchronous agent executions. */
 @Component
@@ -32,6 +31,8 @@ public class AgentTaskStateStore {
             return redis.call('HGETALL', state)
             """, List.class);
     private final StringRedisTemplate redis;
+    private static final String INDEX_KEY = "agent:tasks:index";
+
     private final Duration ttl;
 
     public AgentTaskStateStore(StringRedisTemplate redis,
@@ -97,8 +98,12 @@ public class AgentTaskStateStore {
             var updated = new java.util.HashMap<>(values);
             updated.put("updatedAt", Instant.now().toString());
             redis.opsForHash().putAll(key, updated);
-            redis.opsForSet().add("agent:tasks:index", taskId);
+            redis.opsForSet().add(INDEX_KEY, taskId);
             redis.expire(key, ttl);
+            // 索引本身也要有过期时间：任务 hash 会自然过期，但 Set 成员不会，
+            // 索引于是无限增长（每条入站消息都往里加一个成员，要等下次重启才清理）。
+            // 每次写入续一次期是安全的——索引过期时，比它更早写入的任务 hash 必然都已过期。
+            redis.expire(INDEX_KEY, ttl);
         } catch (RuntimeException ignored) {
             // Redis availability must not prevent the live reply path.
         }
@@ -116,10 +121,23 @@ public class AgentTaskStateStore {
     public Set<String> findByStatus(String status) {
         if (status == null || status.isBlank()) return Set.of();
         try {
-            var ids = redis.opsForSet().members("agent:tasks:index");
+            var ids = redis.opsForSet().members(INDEX_KEY);
             if (ids == null) return Set.of();
-            return ids.stream().filter(id -> status.equals(redis.opsForHash().get("agent:task:" + id, "status")))
-                    .collect(Collectors.toUnmodifiableSet());
+            Set<String> matched = new java.util.LinkedHashSet<>();
+            Set<String> expired = new java.util.LinkedHashSet<>();
+            for (String id : ids) {
+                Object value = redis.opsForHash().get("agent:task:" + id, "status");
+                if (value == null) {
+                    // 任务 hash 已经过期：顺手把索引里的陈旧成员摘掉，避免索引只增不减
+                    expired.add(id);
+                } else if (status.equals(value)) {
+                    matched.add(id);
+                }
+            }
+            if (!expired.isEmpty()) {
+                redis.opsForSet().remove(INDEX_KEY, expired.toArray());
+            }
+            return Set.copyOf(matched);
         } catch (RuntimeException ignored) {
             return Set.of();
         }
@@ -127,7 +145,7 @@ public class AgentTaskStateStore {
 
     public Set<String> findTaskIds() {
         try {
-            Set<String> ids = redis.opsForSet().members("agent:tasks:index");
+            Set<String> ids = redis.opsForSet().members(INDEX_KEY);
             return ids == null ? Set.of() : Set.copyOf(ids);
         } catch (RuntimeException ignored) { return Set.of(); }
     }
@@ -158,13 +176,13 @@ public class AgentTaskStateStore {
     @PostConstruct
     public void markInterruptedTasks() {
         try {
-            var taskIds = redis.opsForSet().members("agent:tasks:index");
+            var taskIds = redis.opsForSet().members(INDEX_KEY);
             if (taskIds == null) return;
             for (String taskId : taskIds) {
                 String taskKey = "agent:task:" + taskId;
                 Object status = redis.opsForHash().get(taskKey, "status");
                 if (status == null) {
-                    redis.opsForSet().remove("agent:tasks:index", taskId);
+                    redis.opsForSet().remove(INDEX_KEY, taskId);
                     continue;
                 }
                 if ("RUNNING".equals(status)) {

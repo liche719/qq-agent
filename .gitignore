@@ -23,6 +23,18 @@ application-local.yml
 /tmp/
 /docker/searxng/
 /docs/
+# 证书私钥与服务端生成的 TLS 材料：绝不入库
+/docker/tls/
+*.key
+*.pem
+*.crt
+*.p12
+*.jks
+# 全库 dump / 备份
+*.sql
+*.sql.gz
+*.dump
+!deploy/**/*.sql
 
 # 前端工程（Vue 3 + Vite）
 /web/node_modules/

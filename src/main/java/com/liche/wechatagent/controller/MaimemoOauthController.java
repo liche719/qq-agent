@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.util.HtmlUtils;
 
 /**
  * 墨墨 OIDC 授权的回调入口（浏览器直接访问，因此**不能**要求管理员口令）。
@@ -48,6 +49,13 @@ public class MaimemoOauthController {
         }
     }
 
+    /**
+     * 渲染结果页。
+     *
+     * <p>{@code error} / {@code error_description} 都是**公网匿名可控的查询参数**，而这个页面与面板
+     * 同源——直接拼进 HTML 就是一个同源 XSS，脚本能读走面板凭据（`admin.auth` 里的
+     * `X-Agent-Admin-Key`，那是生产唯一凭据）。所以：文案一律 HTML 转义，并加 CSP 把脚本能力关掉。
+     */
     private ResponseEntity<String> page(boolean ok, String message) {
         String title = ok ? "授权成功" : "授权失败";
         String color = ok ? "#1f8a4c" : "#b3261e";
@@ -61,7 +69,11 @@ public class MaimemoOauthController {
                 <h1 style="margin:0 0 12px;font-size:20px;color:%s">%s</h1>
                 <p style="margin:0;line-height:1.7;font-size:14.5px;color:#4a5262">%s</p>
                 </div></body></html>
-                """.formatted(title, color, title, message);
-        return ResponseEntity.ok(html);
+                """.formatted(title, color, title, HtmlUtils.htmlEscape(message == null ? "" : message));
+        return ResponseEntity.ok()
+                .header("Content-Security-Policy",
+                        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+                .contentType(MediaType.TEXT_HTML)
+                .body(html);
     }
 }

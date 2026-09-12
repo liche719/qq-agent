@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -24,13 +25,29 @@ public class InterviewService {
 
     private static final int MIN_SCORE = 1;
     private static final int MAX_SCORE = 5;
+    private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final InterviewRoundRepository repository;
     private final UserService userService;
+    private final ZoneId zone;
 
-    public InterviewService(InterviewRoundRepository repository, UserService userService) {
+    public InterviewService(InterviewRoundRepository repository, UserService userService,
+                            @org.springframework.beans.factory.annotation.Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.repository = repository;
         this.userService = userService;
+        this.zone = parseZone(timeZoneId);
+    }
+
+    public InterviewService(InterviewRoundRepository repository, UserService userService) {
+        this(repository, userService, "Asia/Shanghai");
+    }
+
+    private static ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return DEFAULT_ZONE;
+        }
     }
 
     /** 开始一次练习：写入陪练模式、生成 session、记录岗位；返回给模型转述的开场白。 */
@@ -42,7 +59,7 @@ public class InterviewService {
         if (!normalizedRole.isEmpty()) {
             sb.append("本次岗位：").append(normalizedRole).append("。");
         }
-        sb.append("\n题库：" ).append(String.join(" / ", InterviewBank.categories()))
+        sb.append("\n题库：").append(String.join(" / ", InterviewBank.categories()))
                 .append("。规则：一次只问一个问题，等对方答完再反馈；每轮给出四个维度 1~5 分并调用 recordInterviewRound 记进评分卡；"
                         + "6~10 轮为宜。现在用一句话确认已开始，然后问第一题（建议从「自我介绍」或根据岗位最相关的一类开始）。");
         return sb.toString();
@@ -75,7 +92,7 @@ public class InterviewService {
         round.setScoreDepth(clamp(scoreDepth));
         round.setScoreDelivery(clamp(scoreDelivery));
         round.setFeedback(trim(feedback, 800));
-        round.setCreatedAt(LocalDateTime.now());
+        round.setCreatedAt(LocalDateTime.now(zone));
         repository.save(round);
 
         List<InterviewRound> all = repository.findByUserIdAndSessionIdOrderBySeqAsc(userId, sessionId);
@@ -175,12 +192,6 @@ public class InterviewService {
         return sb.toString();
     }
 
-    /** 为面板/接口提供的最近练习记录（按轮次倒序）。 */
-    public List<InterviewRound> recentRounds(String userId, int limit) {
-        List<InterviewRound> all = repository.findTop50ByUserIdOrderByCreatedAtDesc(userId);
-        return all.size() <= limit ? all : all.subList(0, limit);
-    }
-
     private String adviceFor(String dimension) {
         return switch (dimension) {
             case "内容完整度" -> "每题至少给一个具体数字或例子（做了什么、提升了多少），别停在「参与了」。";
@@ -250,12 +261,13 @@ public class InterviewService {
         return Math.max(MIN_SCORE, Math.min(MAX_SCORE, score));
     }
 
+    /** 截断到 max 字符以内——省略号也占一位，否则会超出列宽（question=600 / answerSummary=1200 / feedback=800）导致整轮记不进去 */
     private String trim(String text, int max) {
         if (text == null) {
             return null;
         }
         String value = text.strip();
-        return value.length() <= max ? value : value.substring(0, max) + "…";
+        return value.length() <= max ? value : value.substring(0, max - 1) + "…";
     }
 
     private String shorten(String text) {

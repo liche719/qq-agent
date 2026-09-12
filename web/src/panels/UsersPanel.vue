@@ -31,6 +31,9 @@ const chatBox = ref(null)
 const detail = ref(null)
 const loadingDetail = ref(false)
 
+/** 请求序号：上一次请求还没回来时用户可能已经点了别的用户，靠它丢弃过期响应 */
+let chatSeq = 0
+
 /** 后端可能把空的 lastSeenAt 序列化成字符串 "null"，只认真正的日期，其余排到最后 */
 const activity = row => {
   const value = String(row.lastSeenAt || '')
@@ -86,7 +89,7 @@ const memorySections = computed(() => {
   }
 
   pushList('coreMemories', '核心记忆', source.coreMemories, item => ({
-    meta: '重要度 ' + (item.importance ?? '—') + ' · ' + (item.status || ''),
+    meta: '重要度 ' + (item.importance ?? '—') + ' · ' + zh('memory', item.status),
     text: item.content,
     metaRight: fmtTime(item.updatedAt)
   }))
@@ -96,7 +99,7 @@ const memorySections = computed(() => {
     metaRight: fmtTime(item.updatedAt)
   }))
   pushList('episodicMemories', '情景记忆', source.episodicMemories, item => ({
-    meta: (item.title || '情景') + (item.status ? ' · ' + item.status : ''),
+    meta: (item.title || '情景') + (item.status ? ' · ' + zh('episodic', item.status) : ''),
     text: item.summary,
     metaRight: fmtTime(item.occurredAt)
   }))
@@ -112,12 +115,12 @@ const reminders = computed(() => {
   const items = detail.value?.reminders
   if (!Array.isArray(items) || !items.length) return ''
   return items.map(item => '· ' + fmtTime(item.triggerAt) + '  ' + (item.content || '')
-    + (item.cron ? '（重复：' + item.cron + '）' : '') + '  [' + (item.status || '') + ']').join('\n')
+    + (item.cron ? '（重复：' + item.cron + '）' : '') + '  [' + zh('task', item.status) + ']').join('\n')
 })
 
 async function loadUsers() {
   try {
-    users.value = await api('/users')
+    users.value = (await api('/users')) || []
     error.value = ''
   } catch (caught) {
     error.value = caught.message
@@ -144,15 +147,20 @@ function nearBottom(box) {
  * 并且不打断当前滚动位置（正在翻旧消息时不要把人拽到底部）。
  */
 async function loadChatPage(page, merge = false) {
-  if (!current.value || loadingChat.value) return
+  if (!current.value) return
+  const userId = current.value.userId
+  const seq = ++chatSeq
   loadingChat.value = true
   const box = chatBox.value
   const stick = nearBottom(box)
   const previousTop = box ? box.scrollTop : 0
   try {
-    const data = await api('/users/' + encodeURIComponent(current.value.userId)
+    const data = await api('/users/' + encodeURIComponent(userId)
       + '?page=' + page + '&size=' + PAGE_SIZE)
-    const batch = (data.conversations || []).slice().reverse()
+    // 期间可能已经切到别的用户、或者又发了一次请求，过期响应一律丢弃，不能写进当前状态
+    if (seq !== chatSeq) return
+    if (!current.value || current.value.userId !== userId) return
+    const batch = ((data && data.conversations) || []).slice().reverse()
     if (merge && page === 0 && loadedPages.value > 1) {
       const known = new Set(messages.value.map(message => message.id))
       const fresh = batch.filter(message => message.id === undefined || !known.has(message.id))
@@ -160,7 +168,7 @@ async function loadChatPage(page, merge = false) {
     } else {
       messages.value = page === 0 ? batch : batch.concat(messages.value)
       loadedPages.value = page + 1
-      hasMore.value = (data.conversations || []).length === PAGE_SIZE
+      hasMore.value = batch.length === PAGE_SIZE
     }
     // 记忆与提醒也在同一个响应里，跟着一起刷新
     detail.value = data
@@ -171,6 +179,7 @@ async function loadChatPage(page, merge = false) {
       else scrollToBottom()
     }
   } catch (caught) {
+    if (seq !== chatSeq) return
     error.value = caught.message
   } finally {
     loadingChat.value = false

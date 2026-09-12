@@ -20,6 +20,9 @@ const items = ref([])
 const error = ref('')
 const busy = ref(false)
 
+/** 请求序号：自动刷新和手动筛选/翻页可能同时在飞，先发的后返回会覆盖后发的正确结果 */
+let seq = 0
+
 const columns = [
   { label: '任务', key: 'taskId', mono: true },
   { label: '状态', tag: row => ({ text: zh('task', row.status), tone: taskTone(String(row.status)) }) },
@@ -29,6 +32,7 @@ const columns = [
 ]
 
 async function load(reset = false) {
+  const my = ++seq
   if (reset) page.value = 0
   busy.value = true
   error.value = ''
@@ -38,9 +42,11 @@ async function load(reset = false) {
       + '&failureReason=' + encodeURIComponent(failureReason.value)
       + '&query=' + encodeURIComponent(query.value)
       + '&page=' + page.value + '&size=' + PAGE_SIZE)
-    items.value = data.items || []
-    total.value = Number(data.total) || 0
+    if (my !== seq) return
+    items.value = data?.items || []
+    total.value = Number(data?.total) || 0
   } catch (caught) {
+    if (my !== seq) return
     error.value = caught.message
   } finally {
     busy.value = false

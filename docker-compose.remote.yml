@@ -19,7 +19,9 @@ services:
       SERVER_SSL_ENABLED: "true"
       SERVER_SSL_CERTIFICATE: /app/certs/server.crt
       SERVER_SSL_CERTIFICATE_PRIVATE_KEY: /app/certs/server.key
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      # 默认 production：这个 profile 是 ddl-auto=validate，不会再让 Hibernate 自动改生产表。
+      # 原来默认 local（ddl-auto=update）——只要服务器 .env 忘了写这一行，实体一改就会静默动生产库结构。
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-production}
       # JVM 默认时区必须是本地时区：Quartz 的 Cron 表达式与 Spring @Scheduled(cron) 都按 JVM 默认时区解析，
       # 容器默认是 UTC，会让「每天 8 点」实际在本地 16 点跑。
       TZ: Asia/Shanghai
@@ -39,6 +41,10 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
       QQ_ENABLED: ${QQ_ENABLED:-false}
+      # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
+      # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。
+      # 默认值保持 true＝维持现状；机器人正式发布后再在服务器 .env 显式改成 false。
+      QQ_SANDBOX: ${QQ_SANDBOX:-true}
       QQ_APP_ID: ${QQ_APP_ID:-}
       QQ_CLIENT_SECRET: ${QQ_CLIENT_SECRET:-}
       ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
@@ -54,12 +60,15 @@ services:
       # 定时任务（到点执行并把结果发回）
       SCHEDULED_ENABLED: ${SCHEDULED_ENABLED:-true}
       SCHEDULED_MAX_PER_USER: ${SCHEDULED_MAX_PER_USER:-10}
+      SCHEDULED_RESULT_MAX_CHARS: ${SCHEDULED_RESULT_MAX_CHARS:-2000}
       # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
       MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}
       MAIMEMO_OWNER_USER_ID: ${MAIMEMO_OWNER_USER_ID:-}
       MAIMEMO_DAILY_PUSH_ENABLED: ${MAIMEMO_DAILY_PUSH_ENABLED:-true}
       MAIMEMO_DAILY_PUSH_TIME: ${MAIMEMO_DAILY_PUSH_TIME:-21:30}
+      MAIMEMO_TIMEOUT_SECONDS: ${MAIMEMO_TIMEOUT_SECONDS:-10}
+      MAIMEMO_CACHE_SECONDS: ${MAIMEMO_CACHE_SECONDS:-30}
       # OIDC 长期授权（创建"后端应用"后填这三项；回调地址要与平台登记一致）
       MAIMEMO_OIDC_CLIENT_ID: ${MAIMEMO_OIDC_CLIENT_ID:-}
       MAIMEMO_OIDC_CLIENT_SECRET: ${MAIMEMO_OIDC_CLIENT_SECRET:-}
@@ -67,6 +76,12 @@ services:
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro
+      # 这三个原来都在容器的可写层里：CI 每次部署都会换 tag 重建容器，于是**备份文件、
+      # 用户长期保存的媒体、容器内日志全部随容器消失**，而面板还显示"数据库备份在跑"——
+      # 唯一的离卷备份活不过一次部署。挂到宿主机（目录权限 700）。
+      - ./backup:/app/backup
+      - ./stored-media:/app/stored-media
+      - ./logs:/app/logs
     depends_on:
       mysql:
         condition: service_healthy

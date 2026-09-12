@@ -14,6 +14,9 @@ const entries = ref([])
 const error = ref('')
 const busy = ref(false)
 
+/** 请求序号：自动刷新和手动筛选可能同时在飞，先发的后返回会覆盖后发的正确结果 */
+let seq = 0
+
 const columns = [
   { label: '时间', value: row => fmtTime(row.createdAt) },
   { label: '级别 / 操作', value: row => (row.level ? zh('level', row.level) : zh('action', row.action)) },
@@ -23,11 +26,15 @@ const columns = [
 ]
 
 async function load() {
+  const my = ++seq
   busy.value = true
   try {
-    entries.value = await api('/logs?level=' + encodeURIComponent(level.value) + '&query=' + encodeURIComponent(query.value))
+    const data = await api('/logs?level=' + encodeURIComponent(level.value) + '&query=' + encodeURIComponent(query.value))
+    if (my !== seq) return
+    entries.value = data || []
     error.value = ''
   } catch (caught) {
+    if (my !== seq) return
     error.value = caught.message
   } finally {
     busy.value = false

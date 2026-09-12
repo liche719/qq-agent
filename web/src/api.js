@@ -36,13 +36,24 @@ async function request(path, { method = 'GET', body, key, onStatus } = {}) {
     error.status = response.status
     throw error
   }
-  return response.json()
+  // 204 或网关错误页都不是 JSON，直接 response.json() 会抛 SyntaxError（界面显示 "Unexpected token"）
+  const text = await response.text()
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch (ignored) {
+    throw new Error('服务端返回了无法解析的内容')
+  }
 }
 
 /** 访问面板接口：自动带上当前标签页保存的口令 */
 export function api(path, options = {}) {
   return request('/api/admin' + path, { ...options, key: auth.key }).catch(error => {
-    if (error.status === 401) clearAuth(true)
+    if (error.status === 401) {
+      clearAuth(true)
+      // api.js 不能 import router（会循环依赖），hash 路由直接改 hash 即可
+      if (window.location.hash !== '#/login') window.location.hash = '#/login'
+    }
     throw error
   })
 }

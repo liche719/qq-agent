@@ -1,5 +1,6 @@
 package com.liche.wechatagent.schedule;
 
+import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 import org.slf4j.Logger;
@@ -13,8 +14,11 @@ import org.springframework.stereotype.Component;
  * 再把结果推给用户（执行与投递逻辑都在 {@link ScheduledTaskService}，这里只负责触发）。
  *
  * <p>Quartz 通过 SpringBeanJobFactory 实例化 Job，所以用无参构造 + 字段注入。
+ * {@code @DisallowConcurrentExecution} 防止同一个任务的上一次还没跑完（Agent 链路可能跑一分钟）
+ * 下一次就又触发，两次执行会互相覆盖 lastResult/nextRunAt。
  */
 @Component
+@DisallowConcurrentExecution
 public class ScheduledTaskJob extends QuartzJobBean {
 
     private static final Logger log = LoggerFactory.getLogger(ScheduledTaskJob.class);

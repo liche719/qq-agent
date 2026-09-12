@@ -73,7 +73,7 @@ const tokenRows = computed(() => {
     ['Token 更新时间', data.value?.tokenUpdatedAt || '—'],
     ['绑定的账号', data.value?.ownerUserId
       ? data.value.ownerUserId + '（只有这个用户能查背单词数据）'
-      : '未绑定（任何用户都能查，仅适合单用户部署）'],
+      : '未配置归属人（现在谁都查不到，请在服务器 .env 配 MAIMEMO_OWNER_USER_ID 或 ALERT_QQ_OPENID）'],
     ['每次读取', data.value?.checkedAt ? '数据时间 ' + data.value.checkedAt : '—']
   ]
   return rows

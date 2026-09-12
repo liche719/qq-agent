@@ -56,7 +56,11 @@ public class ReminderTool {
     }
 
     @Tool(value = "安全调整当前用户已有的定时提醒。先解析并验证新的时间，只有新提醒成功保存和调度后才会取消旧提醒；旧提醒 ID 通过 listReminders 或提醒状态查询获得。用户说‘改成/调整到/换成’已有提醒的新时间时优先调用。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, destructive = true, requiresConfirmation = true, riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
+    // 不要声明 requiresConfirmation：它的校验依赖 confirmationParameter，而本方法没有任何令牌参数，
+    // 写了等于挂一道永不生效的门（策略层对外声称 HIGH + 需确认，实现里零强制）。真实防线是工具描述 +
+    // 系统提示词"改动前先复述给用户确认"，以及 service 侧的"新提醒成功落库后才取消旧的"。
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, destructive = true,
+            riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @NonIdempotentTool
     public ToolBusinessResult replaceReminder(Long reminderId, String description) {
         ReminderParseService.ParsedReminder parsed = parseService.parse(description);

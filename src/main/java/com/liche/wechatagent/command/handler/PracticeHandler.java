@@ -16,6 +16,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class PracticeHandler implements CommandHandler {
 
+    /** 「陪练 <词>」里表示"就练面试这个模式"的词（不是岗位） */
+    private static final java.util.Set<String> MODE_WORDS = java.util.Set.of(
+            "interview", "面试", "面试陪练", "模拟面试", "陪练", "开始陪练");
+
     private final UserService userService;
     private final InterviewService interviewService;
 
@@ -53,13 +57,21 @@ public class PracticeHandler implements CommandHandler {
                 return usage();
             }
             // 目前只有面试陪练一种模式，任何非 off 的参数都按"开始面试陪练"处理，岗位信息从参数里取
-            String role = raw.equalsIgnoreCase("interview") ? "" : raw;
-            String intro = interviewService.start(userId, role);
+            String role = isModeWord(raw) ? "" : raw;
+            interviewService.start(userId, role);
             return "好，进入「面试陪练」。我当面试官，一次问一个问题；每轮会记进评分卡，随时说「结束陪练」我给你复盘报告。"
                     + (role.isBlank() ? "\n先告诉我：投的什么岗位、几年经验、什么方向（不说也行，我按通用岗位问）。" : "\n本次岗位：" + role);
         } catch (BizException e) {
             return e.getMessage();
         }
+    }
+
+    /**
+     * 「陪练 面试」这种写法里，「面试」是模式词而不是岗位——不能当成岗位记进评分卡，
+     * 否则提示词和复盘标题会出现「本次岗位：面试」，开场也不再追问岗位。
+     */
+    private static boolean isModeWord(String raw) {
+        return MODE_WORDS.contains(raw.toLowerCase(java.util.Locale.ROOT));
     }
 
     private String usage() {

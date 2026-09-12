@@ -26,18 +26,51 @@ public class AdminAccessFilter extends OncePerRequestFilter {
         this.properties = properties;
     }
 
+    /**
+     * 明确**不需要口令**的接口：站点页脚信息、健康检查、墨墨 OIDC 回调（浏览器直接跳转过来的）。
+     * 除这几个之外的 `/api/**` 一律走鉴权——**fail-closed**：今后新增任何接口默认是受保护的，
+     * 不会像原来那样"不在三个前缀里就放行"。
+     */
+    private static final String[] PUBLIC_PATHS = {
+            "/api/site/info", "/api/health", "/api/maimemo/oauth/callback"
+    };
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        return !path.startsWith("/api/sim")
-                && !path.startsWith("/api/agent/tasks") && !path.startsWith("/api/admin");
+        String path = pathOf(request);
+        if (!path.startsWith("/api")) {
+            // 首页与前端静态资源跟鉴权无关
+            return true;
+        }
+        for (String open : PUBLIC_PATHS) {
+            if (path.equals(open)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 取**已解码**的请求路径。
+     *
+     * <p>原来用 {@code request.getRequestURI()} 判断，那是未解码的原始 URI，而 Spring MVC 用
+     * **解码后**的路径匹配 handler——两者错位意味着 `/api/adm%69n/overview` 既不匹配保护前缀
+     * （过滤器直接跳过），又能命中 `/api/admin/**` 的 handler，**等于没有口令就能读全站数据**。
+     * {@code getServletPath()} 是解码后的路径，编码变体因此回到保护范围内。
+     */
+    private static String pathOf(HttpServletRequest request) {
+        String path = request.getServletPath();
+        if (path == null || path.isEmpty()) {
+            path = request.getRequestURI();
+        }
+        return path == null ? "" : path;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         response.setContentType("application/json;charset=UTF-8");
-        boolean dashboard = request.getRequestURI().startsWith("/api/admin");
+        boolean dashboard = pathOf(request).startsWith("/api/admin");
         // 需要密钥时（生产/公网直连），密钥就是唯一凭据，不再要求来源 IP 在白名单内；
         // 本机模式（require-key=false）仍然只允许白名单来源，避免误暴露。
         if (dashboard && !properties.isRequireKey() && !isAllowedIp(request.getRemoteAddr())) {

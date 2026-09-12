@@ -60,18 +60,27 @@ public class PerUserExecutors {
         if (!globalQueueSlots.tryAcquire()) {
             return false;
         }
-        boolean accepted = queues.computeIfAbsent(userId, ignored -> new SerialQueue(workers, perUserQueueCapacity))
-                .execute(() -> {
-                    try {
-                        task.run();
-                    } finally {
-                        globalQueueSlots.release();
-                    }
-                });
-        if (!accepted) {
-            globalQueueSlots.release();
+        Runnable wrapped = () -> {
+            try {
+                task.run();
+            } finally {
+                globalQueueSlots.release();
+            }
+        };
+        // 队列可能在"取到对象"和"投递任务"之间被 removeIdleQueues 判定空闲并摘掉，
+        // 那样任务会落在孤儿队列上，而下一条消息又会建出第二个队列——
+        // "同一用户绝不并发处理"这条保证就被打破了。所以被回收就重取一个新队列。
+        for (int attempt = 0; attempt < 3; attempt++) {
+            SerialQueue queue = queues.computeIfAbsent(userId, ignored -> new SerialQueue(workers, perUserQueueCapacity));
+            if (queue.execute(wrapped)) {
+                return true;
+            }
+            if (!queue.isClosed()) {
+                break;
+            }
         }
-        return accepted;
+        globalQueueSlots.release();
+        return false;
     }
 
     public int userCount() {
@@ -84,7 +93,7 @@ public class PerUserExecutors {
 
     private void removeIdleQueues() {
         long now = System.currentTimeMillis();
-        queues.entrySet().removeIf(entry -> entry.getValue().isIdleFor(now, idleMillis));
+        queues.entrySet().removeIf(entry -> entry.getValue().closeIfIdle(now, idleMillis));
     }
 
     @PreDestroy
@@ -108,6 +117,8 @@ public class PerUserExecutors {
         private final int queueCapacity;
         private final ArrayDeque<Runnable> pending = new ArrayDeque<>();
         private boolean running;
+        /** 已被 removeIdleQueues 从 map 里摘掉：不再接受新任务，调用方要重取一个新队列 */
+        private boolean closed;
         private long lastActivityMillis = System.currentTimeMillis();
 
         private SerialQueue(ThreadPoolExecutor workers, int queueCapacity) {
@@ -116,7 +127,7 @@ public class PerUserExecutors {
         }
 
         synchronized boolean execute(Runnable task) {
-            if (pending.size() >= queueCapacity) {
+            if (closed || pending.size() >= queueCapacity) {
                 return false;
             }
             pending.add(task);
@@ -126,6 +137,19 @@ public class PerUserExecutors {
             }
             running = true;
             return scheduleNext();
+        }
+
+        synchronized boolean isClosed() {
+            return closed;
+        }
+
+        /** 与 execute() 用同一把锁，所以不存在"投递进已回收队列"的窗口 */
+        synchronized boolean closeIfIdle(long now, long idleMillis) {
+            if (closed || running || !pending.isEmpty() || now - lastActivityMillis < idleMillis) {
+                return false;
+            }
+            closed = true;
+            return true;
         }
 
         private boolean scheduleNext() {
@@ -142,6 +166,12 @@ public class PerUserExecutors {
         private void runNext() {
             Runnable next;
             synchronized (this) {
+                if (closed) {
+                    // 已不在 map 里：剩下的任务交给新队列（新队列会收到后续投递）
+                    pending.clear();
+                    running = false;
+                    return;
+                }
                 next = pending.poll();
                 if (next == null) {
                     running = false;
@@ -154,17 +184,16 @@ public class PerUserExecutors {
             } finally {
                 synchronized (this) {
                     lastActivityMillis = System.currentTimeMillis();
-                    if (pending.isEmpty()) {
+                    if (pending.isEmpty() || closed) {
                         running = false;
+                        if (closed) {
+                            pending.clear();
+                        }
                     } else {
                         scheduleNext();
                     }
                 }
             }
-        }
-
-        synchronized boolean isIdleFor(long now, long idleMillis) {
-            return !running && pending.isEmpty() && now - lastActivityMillis >= idleMillis;
         }
     }
 }

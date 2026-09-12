@@ -9,6 +9,4 @@ public interface InterviewRoundRepository extends JpaRepository<InterviewRound, 
     List<InterviewRound> findByUserIdAndSessionIdOrderBySeqAsc(String userId, String sessionId);
 
     long countByUserIdAndSessionId(String userId, String sessionId);
-
-    List<InterviewRound> findTop50ByUserIdOrderByCreatedAtDesc(String userId);
 }

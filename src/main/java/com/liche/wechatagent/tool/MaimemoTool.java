@@ -30,8 +30,9 @@ public class MaimemoTool {
             riskLevel = ToolRiskLevel.LOW, allowParallel = true)
     public ToolBusinessResult getMaimemoStudyProgress() {
         String userId = statusService.currentUserId();
-        // 墨墨是单账号接口：数据只属于绑定的那位用户，别人的进度查不到也不该给
-        if (userId != null && !userId.isBlank() && !maimemoService.isMaimemoOwner(userId)) {
+        // 墨墨是单账号接口：数据只属于绑定的那位用户，别人的进度查不到也不该给。
+        // 这里必须 fail-closed——没有用户上下文时不能当成"机主本人"把真实学习数据吐出去。
+        if (userId == null || userId.isBlank() || !maimemoService.isMaimemoOwner(userId)) {
             return ToolBusinessResult.success("墨墨背单词只绑定了机主本人的账号，我这里没有你的背单词数据。"
                     + "如果你想用自己的墨墨账号，需要在部署侧单独配置一个 Token。");
         }

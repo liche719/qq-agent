@@ -109,7 +109,13 @@ public class MemoryArchiveService {
                 changeLogRepository, mutationLock, new MemoryPolicyProperties(), threshold, batch, DEFAULT_ZONE.getId());
     }
 
-    /** 写入后立即检查（由提取器调用） */
+    /**
+     * 写入后立即检查（由提取器调用）。
+     *
+     * <p>事务边界放在这个最外层入口上：归档是"写归档记录 + 标记原始记忆 + 追加摘要"三段写入，
+     * 必须同生共死，否则中途异常会留下"原始记忆看不见、摘要也没生成"的丢失窗口。
+     */
+    @Transactional
     public void compressIfNeeded(String userId) {
         mutationLock.runExclusive(userId, () -> compressIfNeededLocked(userId));
     }

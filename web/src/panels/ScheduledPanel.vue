@@ -40,7 +40,7 @@ const builtinColumns = [
 
 function statusText(row) {
   if (!row.enabled) return '已暂停'
-  return zh('task', row.status) === '结果未知' ? '未执行' : zh('task', row.status)
+  return zh('task', row.status)
 }
 
 function statusTone(row) {

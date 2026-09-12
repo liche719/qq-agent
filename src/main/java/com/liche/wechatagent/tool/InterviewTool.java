@@ -25,8 +25,9 @@ public class InterviewTool {
     @Tool(value = "开始面试陪练（模拟面试）。用户用自然语言要求模拟面试、当面试官问他时调用"
             + "（例如「你当面试官陪我练练」「模拟一下面试」「帮我准备面试」）。role 传用户说的岗位与年限（例如「Java 后端 3 年」），没说就传空字符串。"
             + "进入后会一直生效到用户要求结束。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult startInterviewPractice(String role) {
         String userId = requireCurrentUser();
         return ToolBusinessResult.success(interviewService.start(userId, role));
@@ -49,8 +50,9 @@ public class InterviewTool {
 
     @Tool(value = "结束面试陪练并生成复盘报告。用户说不想练了/结束面试/先到这（或直接说结束陪练）时调用。"
             + "返回的复盘内容包括轮数、各维度均分、最弱项和下次重点，请把它完整转述给用户。")
-    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
     public ToolBusinessResult endInterviewPractice() {
         String userId = requireCurrentUser();
         String report = interviewService.finish(userId);

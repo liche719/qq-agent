@@ -13,6 +13,10 @@ public interface ConversationMemoryRepository extends JpaRepository<Conversation
 
     List<ConversationMemory> findByUserIdOrderByCreatedAtDesc(String userId, Pageable pageable);
 
+    /** 只取用户/机器人对话行（工具调用等 system 行不占提取窗口） */
+    List<ConversationMemory> findByUserIdAndRoleInOrderByCreatedAtDesc(String userId, List<String> roles,
+                                                                      Pageable pageable);
+
     List<ConversationMemory> findByUserIdAndContentContainingOrderByCreatedAtDesc(String userId,
                                                                                      String content,
                                                                                      Pageable pageable);

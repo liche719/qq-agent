@@ -26,15 +26,19 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 本地模拟器（开发期代替真实微信，模拟器模式下启用）：
+ * 本地模拟器（开发期代替真实微信，**只有显式配置** `wechat.channel.mode=simulator` 时才注册）：
  * POST /api/sim/send    发送一条模拟微信消息（同步返回回复）
  * GET  /api/sim/replies 查询该用户被推送的出站消息
  * GET  /api/sim/memories 查看该用户三层记忆
  * POST /api/sim/archive  手动触发归档压缩
+ *
+ * <p>{@code matchIfMissing} 必须是 false：以前"没配 mode"也算 simulator，于是任何漏传
+ * `WECHAT_CHANNEL_MODE` 的部署（本机 java -jar、以后新增的服务）都会注册这组接口——
+ * `GET /api/sim/memories?userId=<任意 openid>` 能读别人的三层记忆、`POST /api/sim/send` 能冒充任意用户跑 Agent。
  */
 @RestController
 @RequestMapping("/api/sim")
-@ConditionalOnProperty(name = "wechat.channel.mode", havingValue = "simulator", matchIfMissing = true)
+@ConditionalOnProperty(name = "wechat.channel.mode", havingValue = "simulator")
 public class SimulatorController {
 
     private final AgentOrchestrator orchestrator;

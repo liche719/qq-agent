@@ -6,6 +6,7 @@ import com.liche.wechatagent.media.StoredMediaRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -84,11 +85,14 @@ public class MemoryRetrievalService {
                 episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
     }
 
+    @Transactional
     public RetrievedMemory retrieve(String userId, String query, int coreMaxLoad, int coreMaxChars,
                                     int workMaxLoad, int workMaxChars) {
         return retrieve(userId, query, coreMaxLoad, coreMaxChars, workMaxLoad, workMaxChars, 15);
     }
 
+    /** 事务边界放在最外层入口：内部的使用时间刷新走 @Modifying 定向更新，需要事务。 */
+    @Transactional
     public RetrievedMemory retrieve(String userId, String query, int coreMaxLoad, int coreMaxChars,
                                     int workMaxLoad, int workMaxChars, int usageTouchIntervalMinutes) {
         if (!validUserId(userId)) {
@@ -515,23 +519,26 @@ public class MemoryRetrievalService {
     private void touchUsage(LocalDateTime now, List<UserCoreMemory> cores, List<UserWorkMemory> work,
                             int usageTouchIntervalMinutes) {
         LocalDateTime refreshBefore = now.minusMinutes(Math.max(1, usageTouchIntervalMinutes));
-        List<UserCoreMemory> coreUpdates = cores.stream()
+        List<Long> coreUpdates = cores.stream()
                 .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .peek(memory -> memory.setLastUsedAt(now))
+                .map(UserCoreMemory::getId)
+                .filter(id -> id != null)
                 .toList();
         if (!coreUpdates.isEmpty()) {
             try {
-                coreRepository.saveAll(coreUpdates);
+                // 定向更新一列：整实体回写会用内存旧快照覆盖掉别处刚改过的状态列
+                coreRepository.updateLastUsedAt(coreUpdates, now);
             } catch (Exception ignored) {
             }
         }
-        List<UserWorkMemory> workUpdates = work.stream()
+        List<Long> workUpdates = work.stream()
                 .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .peek(memory -> memory.setLastUsedAt(now))
+                .map(UserWorkMemory::getId)
+                .filter(id -> id != null)
                 .toList();
         if (!workUpdates.isEmpty()) {
             try {
-                workRepository.saveAll(workUpdates);
+                workRepository.updateLastUsedAt(workUpdates, now);
             } catch (Exception ignored) {
             }
         }

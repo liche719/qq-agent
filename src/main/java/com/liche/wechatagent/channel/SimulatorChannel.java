@@ -13,7 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /** 本地模拟通道：把出站消息存进 per-user outbox，供 REST 接口查询（开发期代替真实微信） */
 @Component
-@ConditionalOnProperty(name = "wechat.channel.mode", havingValue = "simulator", matchIfMissing = true)
+@ConditionalOnProperty(name = "wechat.channel.mode", havingValue = "simulator")
 public class SimulatorChannel implements WeChatChannel {
 
     private static final Logger log = LoggerFactory.getLogger(SimulatorChannel.class);

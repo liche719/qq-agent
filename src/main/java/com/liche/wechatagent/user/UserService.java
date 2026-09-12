@@ -94,7 +94,8 @@ public class UserService {
         profile.setCoachMode("interview");
         profile.setCoachSessionId(java.util.UUID.randomUUID().toString());
         if (role != null && !role.isBlank()) {
-            profile.setCoachRole(role.strip());
+            // coachRole 列宽 120：岗位是用户原话，超长会直接插不进去
+            profile.setCoachRole(trimTo(role.strip(), 120));
         }
         profile.setUpdatedAt(java.time.LocalDateTime.now());
         userProfileRepository.save(profile);
@@ -113,6 +114,11 @@ public class UserService {
         if (wasPracticing) {
             userLogService.record(userId, "INTERVIEW_END");
         }
+    }
+
+    /** 列宽兜底：LLM/用户原话可能很长，直接落库会撞列长 */
+    private static String trimTo(String value, int max) {
+        return value == null || value.length() <= max ? value : value.substring(0, max);
     }
 
     public boolean isMemoryEnabled(String userId) {

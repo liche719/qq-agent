@@ -96,7 +96,8 @@ public class ScheduledTaskService {
         this.scheduler = scheduler;
         this.enabled = enabled;
         this.maxPerUser = Math.max(1, Math.min(100, maxPerUser));
-        this.resultMaxChars = Math.max(200, Math.min(4000, resultMaxChars));
+        // 上限对齐 lastResult 的列宽（2000），配大了也写不进库
+        this.resultMaxChars = Math.max(200, Math.min(2000, resultMaxChars));
         this.zone = parseZone(timeZoneId);
     }
 
@@ -113,6 +114,7 @@ public class ScheduledTaskService {
                     schedule(task);
                     restored++;
                 }
+                clearStaleRunning(task);
                 refreshNextRun(task);
             } catch (Exception exception) {
                 log.warn("定时任务恢复失败 id={} title={}: {}", task.getId(), task.getTitle(), exception.getMessage());
@@ -152,6 +154,11 @@ public class ScheduledTaskService {
         if (instruction == null || instruction.isBlank()) {
             return "要执行什么还没说清楚。";
         }
+        // 列宽 2000：LLM 解析路径会截到 500，面板/接口直连的路径得在这里兜住，否则插入直接撞列长
+        String normalizedInstruction = instruction.strip();
+        if (normalizedInstruction.length() > 2000) {
+            normalizedInstruction = normalizedInstruction.substring(0, 2000);
+        }
         long existing = repository.countByUserId(userId);
         if (existing >= maxPerUser) {
             return "定时任务已经有 " + existing + " 个了（上限 " + maxPerUser + " 个），先删掉不用的再加。";
@@ -160,7 +167,7 @@ public class ScheduledTaskService {
         ScheduledTask task = new ScheduledTask();
         task.setUserId(userId);
         task.setTitle(safeTitle(title, instruction));
-        task.setInstruction(instruction.strip());
+        task.setInstruction(normalizedInstruction);
         task.setCron(normalizedCron);
         task.setEnabled(true);
         task.setStatus(ScheduledTask.STATUS_IDLE);
@@ -172,10 +179,11 @@ public class ScheduledTaskService {
         try {
             schedule(task);
         } catch (SchedulerException exception) {
+            log.warn("定时任务调度失败 id={}: {}", task.getId(), exception.toString());
             task.setEnabled(false);
-            task.setLastError("调度失败：" + exception.getMessage());
+            task.setLastError("调度失败");
             repository.save(task);
-            return "任务存下来了但调度失败：" + exception.getMessage();
+            return "任务存下来了，但调度器没接受它（已先置为暂停，稍后可以让我再恢复一次）。";
         }
         userLogService.record(userId, "SCHEDULED_TASK_CREATE",
                 Map.of("taskId", task.getId(), "cron", normalizedCron));
@@ -224,7 +232,15 @@ public class ScheduledTaskService {
                     schedule(task);
                 }
             } catch (SchedulerException exception) {
-                return "恢复失败：" + exception.getMessage();
+                // 调度没恢复成功就必须把 enabled 改回 false，否则面板显示"已启用 + 有下次时间"，
+                // 但调度器里根本没有这个 job，任务永远不会跑（只有下次重启的 resync 才会自愈）
+                log.warn("恢复定时任务调度失败 id={}: {}", task.getId(), exception.toString());
+                task.setEnabled(false);
+                task.setNextRunAt(null);
+                task.setLastError("恢复调度失败");
+                task.setUpdatedAt(LocalDateTime.now(zone));
+                repository.save(task);
+                return "恢复失败：调度器没有接受这个任务，已把它保持为暂停状态，稍后再试一次。";
             }
             return "已恢复「" + task.getTitle() + "」，下次 " + display(task.getNextRunAt()) + "。";
         }
@@ -250,9 +266,8 @@ public class ScheduledTaskService {
         if (task == null) {
             return "没找到这个定时任务。";
         }
-        final Long id = task.getId();
         final String title = task.getTitle();
-        runner.submit(() -> execute(repository.findById(id).orElse(null), true));
+        runner.submit(() -> execute(task, true));
         return "好，「" + title + "」现在就去跑，做完我把结果发给你。";
     }
 
@@ -283,7 +298,9 @@ public class ScheduledTaskService {
             String messageId = "scheduled-" + current.getId() + "-" + UUID.randomUUID();
             String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId, current.getInstruction()));
             String text = reply == null || reply.isBlank() ? "（这次没有拿到结果）" : reply.strip();
-            String clipped = text.length() > resultMaxChars ? text.substring(0, resultMaxChars) + "…" : text;
+            // 省略号也要算进 lastResult 的 2000 字符列宽里，否则 MySQL 严格模式会拒绝这条 update（任务会卡在 RUNNING）
+            String clipped = text.length() <= resultMaxChars
+                    ? text : text.substring(0, resultMaxChars - 1) + "…";
 
             boolean sent = sendToUser(userId, "⏰ 「" + current.getTitle() + "」\n" + text);
             current.setLastRunAt(LocalDateTime.now(zone));
@@ -293,7 +310,7 @@ public class ScheduledTaskService {
             current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
             current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
             current.setUpdatedAt(LocalDateTime.now(zone));
-            repository.save(current);
+            persist(current);
             userLogService.record(userId, "SCHEDULED_TASK_RUN",
                     Map.of("taskId", current.getId(), "sent", sent, "manual", manual));
             return "已执行「" + current.getTitle() + "」：" + text;
@@ -305,11 +322,23 @@ public class ScheduledTaskService {
             current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
             current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
             current.setUpdatedAt(LocalDateTime.now(zone));
-            repository.save(current);
+            persist(current);
             return "执行失败：" + exception.getMessage();
         } finally {
             MDC.remove("userScope");
         }
+    }
+
+    /**
+     * 写回执行结果前先确认这行还在：Agent 链路可能跑一分钟，期间用户完全可能把任务删了。
+     * 直接 save 一个已经不在库里的 detached 实体会被 merge 成 INSERT——"删掉的任务又自己回来了"。
+     */
+    private void persist(ScheduledTask task) {
+        if (task.getId() != null && !repository.existsById(task.getId())) {
+            log.info("定时任务已在执行期间被删除，本次结果不再写回 id={}", task.getId());
+            return;
+        }
+        repository.save(task);
     }
 
     /** 投递到用户最近一次说话的通道（通道过期时由 ProactiveDelivery 保守兜底） */
@@ -357,6 +386,21 @@ public class ScheduledTaskService {
             task.setNextRunAt(next);
             repository.save(task);
         }
+    }
+
+    /**
+     * 容器在「执行中」被重启会留下永远 RUNNING 的行（进程内的执行状态没了，没人再改它），
+     * 面板会一直显示"执行中"。启动时统一收口成"结果未知"，与任务状态词典里的 UNKNOWN_RESULT 对齐。
+     */
+    private void clearStaleRunning(ScheduledTask task) {
+        if (!ScheduledTask.STATUS_RUNNING.equals(task.getStatus())) {
+            return;
+        }
+        task.setStatus(ScheduledTask.STATUS_FAILED);
+        task.setLastError("执行过程中应用被重启，本次结果未知");
+        task.setUpdatedAt(LocalDateTime.now(zone));
+        repository.save(task);
+        log.info("清理上次重启遗留的执行中状态 id={}", task.getId());
     }
 
     private JobKey jobKey(Long taskId) {

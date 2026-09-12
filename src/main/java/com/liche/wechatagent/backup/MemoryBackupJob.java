@@ -190,7 +190,7 @@ public class MemoryBackupJob {
         this.zone = parseZone(timeZoneId);
     }
 
-    @Scheduled(cron = "${backup.cron:0 0 3 * * ?}")
+    @Scheduled(cron = "${backup.cron:0 0 3 * * ?}", zone = "${app.time-zone:Asia/Shanghai}")
     public void backupAll() {
         try {
             Path dayDir = checkedChild(backupDir, LocalDate.now(zone).format(DAY));
@@ -334,9 +334,8 @@ public class MemoryBackupJob {
                             Comparator.nullsLast(Comparator.naturalOrder())))
                     .toList();
         } catch (Exception exception) {
-            log.warn("备份持久化对话证据失败 userHash={} reason={}", shortHash(userId),
-                    exception.getClass().getSimpleName());
-            return List.of();
+            log.error("备份持久化对话证据失败 userHash={}", shortHash(userId), exception);
+            throw new IllegalStateException("备份对话证据失败，已中止本次备份以避免写出空备份", exception);
         }
     }
 
@@ -350,9 +349,8 @@ public class MemoryBackupJob {
                     .filter(record -> record != null && userId.equals(record.getUserId()))
                     .toList();
         } catch (Exception exception) {
-            log.warn("备份情景记忆失败 userHash={} reason={}", shortHash(userId),
-                    exception.getClass().getSimpleName());
-            return List.of();
+            log.error("备份情景记忆失败 userHash={}", shortHash(userId), exception);
+            throw new IllegalStateException("备份情景记忆失败，已中止本次备份以避免写出空备份", exception);
         }
     }
 

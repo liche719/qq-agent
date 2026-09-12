@@ -4,3 +4,32 @@ target/
 logs/
 data/
 *.log
+
+# 凭据与证书：绝不能被 COPY 进镜像层（BuildKit 的层缓存是会跟着镜像一起分发的）
+.env
+.env.*
+!.env.example
+docker/
+docker/tls/
+*.key
+*.pem
+*.crt
+*.p12
+*.jks
+
+# 运行期数据与备份（含全库 dump）
+backup/
+stored-media/
+*.sql
+*.sql.gz
+*.dump
+
+# 前端依赖：宿主是 Windows，COPY 进去会覆盖容器里 npm ci 装的 linux 依赖
+web/node_modules/
+web/dist/
+src/main/resources/static/
+
+# 文档与本机工具
+docs/
+tools/
+*.md

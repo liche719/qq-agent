@@ -109,6 +109,8 @@ public class QqChannel implements WeChatChannel {
     private final ConcurrentMap<String, AtomicLong> apiErrorsByStatus = new ConcurrentHashMap<>();
     private volatile long connectedAtMillis;
     private volatile long lastGatewayEventAtMillis;
+    /** 网关在 HELLO 里给的心跳间隔，用来判断"连接还在但已经不回话了" */
+    private volatile long heartbeatIntervalMillis;
     private volatile String lastApiError;
     @Value("${qq.command-panel-enabled:true}")
     private boolean commandPanelEnabled;
@@ -203,6 +205,7 @@ public class QqChannel implements WeChatChannel {
                 QqRuntimeProperties.DEFAULT_TOKEN_REFRESH_LEAD_MS);
         this.defaultHeartbeatMillis = bounded(policies.getDefaultHeartbeatMs(), 1_000, 600_000,
                 QqRuntimeProperties.DEFAULT_HEARTBEAT_MS);
+        this.heartbeatIntervalMillis = this.defaultHeartbeatMillis;
         this.inputNotifySeconds = bounded(policies.getInputNotifySeconds(), 1, 60,
                 QqRuntimeProperties.DEFAULT_INPUT_NOTIFY_SECONDS);
         this.markdownMaxChars = bounded(policies.getMarkdownMaxChars(), 256, 100_000,
@@ -265,7 +268,17 @@ public class QqChannel implements WeChatChannel {
 
     public boolean isGatewayConnected() {
         WebSocket current = ws;
-        return current != null && running.get();
+        if (current == null || !running.get()) {
+            return false;
+        }
+        long last = lastGatewayEventAtMillis;
+        if (last == 0) {
+            return true;
+        }
+        // 只看 ws 引用会"假在线"：半开连接 / NAT 静默丢包时 socket 还在、心跳也发得出去，
+        // 但对端已经不回任何帧了（心跳 ACK 也算帧，会刷新这个时间戳）。面板和告警原来都显示正常，
+        // 实际消息已经收不到。超过 3 个心跳周期没收到任何帧就当掉线。
+        return System.currentTimeMillis() - last < Math.max(1, heartbeatIntervalMillis) * 3;
     }
 
     public Map<String, Object> healthSnapshot() {
@@ -304,10 +317,26 @@ public class QqChannel implements WeChatChannel {
         String status = "exception";
         if (error instanceof RestClientResponseException response) {
             status = String.valueOf(response.getStatusCode().value());
+            // 401/403 说明本地这个 token 已经不认了（典型场景：本机 JAR 与容器双开抢网关，
+            // 另一个实例拿到新 token 把旧的顶掉）。原来的 ensureToken 只看时间有没有到期，
+            // 于是两次尝试都用同一个坏 token，一路失败到两小时后自然过期为止。
+            int code = response.getStatusCode().value();
+            if (code == 401 || code == 403) {
+                invalidateToken("服务端拒绝（" + code + "）");
+            }
         }
         apiErrorsByStatus.computeIfAbsent(status, ignored -> new AtomicLong()).incrementAndGet();
         String message = error == null ? "unknown" : error.getClass().getSimpleName();
         lastApiError = message.length() > 120 ? message.substring(0, 120) : message;
+    }
+
+    /** 作废本地缓存的 access_token，让下一次 ensureToken() 重新去换一个 */
+    private void invalidateToken(String reason) {
+        if (accessToken != null) {
+            log.warn("QQ access_token 已作废（{}），下次请求会重新获取", reason);
+        }
+        accessToken = null;
+        tokenExpireAtMs = 0;
     }
 
     private void reconnect() {
@@ -485,7 +514,9 @@ public class QqChannel implements WeChatChannel {
     // Handles the gateway HELLO frame and starts the heartbeat.
     private void handleHello(JsonNode node, WebSocket webSocket) {
         if (sessionId != null && lastSeq > 0) sendResume(webSocket); else sendIdentify(webSocket);
-        startHeartbeat(node.path("d").path("heartbeat_interval").asInt(defaultHeartbeatMillis));
+        int interval = node.path("d").path("heartbeat_interval").asInt(defaultHeartbeatMillis);
+        this.heartbeatIntervalMillis = interval;
+        startHeartbeat(interval);
     }
 
     // Handles gateway reconnect and invalid-session operations.

@@ -76,7 +76,10 @@ public class AdminDashboardController {
 
     @GetMapping("/overview")
     public Map<String,Object> overview() {
-        Map<String,Object> out = new LinkedHashMap<>(health.health());
+        Map<String,Object> out = new LinkedHashMap<>();
+        // 启动时间 + QQ 网关状态/计数：原来是靠 /api/health 的响应带过来的，而 /api/health 现在
+        // 公网只回"活着 + 时间"，遥测必须由带口令的这个接口自己拿
+        out.putAll(health.dashboardTelemetry());
         Runtime rt = Runtime.getRuntime();
         Map<String,Object> jvm = new LinkedHashMap<>();
         jvm.put("heapUsed", rt.totalMemory()-rt.freeMemory()); jvm.put("heapMax", rt.maxMemory());
