@@ -25,6 +25,8 @@ public class AgentPolicyProperties {
             Map.entry("cancelReminder", "取消提醒"),
             Map.entry("listReminders", "查看提醒"),
             Map.entry("getReminderStatus", "查询提醒状态"),
+            Map.entry("startPractice", "进入陪练"),
+            Map.entry("stopPractice", "退出陪练"),
             Map.entry("saveImportantMedia", "保存文件"),
             Map.entry("inspectRecentUnstoredMedia", "查看刚才的媒体"),
             Map.entry("listStoredMedia", "查找已保存文件"),

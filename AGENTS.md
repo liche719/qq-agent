@@ -112,6 +112,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ### 陪练模式（英语 / 面试，2026-09-12 新增）
 
 - QQ 里发指令切换：`陪练 英语`、`陪练 面试`、`结束陪练`；也支持 `/practice english|interview|off`（`/help` 会自动列出）。
+- **自然语言同样能进**（2026-09-12 补）：`tool/PracticeTool` 提供了 `startPractice(mode)` / `stopPractice()` 两个工具，提示词第 18 条要求模型在用户说"陪我练练英语/你当面试官问我"时**必须调用工具进入模式**，而不是自己临时扮演（临时扮演不持久、规则不稳定）。工具已注册进 `ToolRegistry` 的构造列表（**新工具必须加进那个 List，否则不会被暴露给模型**），显示名加在 `AgentPolicyProperties.DEFAULT_TOOL_DISPLAY_NAMES`（尾注会显示"进入陪练/退出陪练"）。
 - **实现要点：不动用户人设**。只在 `user_profile.coach_mode` 记一个模式（`english` / `interview`，`null`=关闭），由 `agent/CoachPresets.withMode(人设, 模式)` 在 `AgentOrchestrator.invokeAgent` 里把该模式的"额外要求"追加到系统提示词末尾——所以退出即原样恢复，用户自己设的人设一个字都没改。
 - 模式提示词都在 `agent/CoachPresets.java`：英语陪练＝"英语对话 + 每轮只纠 1~3 处最影响表达的错 + 用一个问题把对话推下去"；面试陪练＝"一次只问一个问题 + 追问细节 + 每 3~5 轮给结构化反馈与评分"。
 - `coach_mode` 列由 `ddl-auto: update` 自动创建（容器跑的正是 local profile）；**已在服务器上手工 ALTER 过**，换成 `production` profile（`validate`）时必须先手动加列，否则启动即报错。
