@@ -56,6 +56,11 @@ services:
       QQ_SANDBOX: ${QQ_SANDBOX:-true}
       QQ_APP_ID: ${QQ_APP_ID:-}
       QQ_CLIENT_SECRET: ${QQ_CLIENT_SECRET:-}
+      # 通道健壮性（compose 只传列出的变量，不加这两行改 .env 不生效——见坑 36）
+      # 入站按用户限流：每分钟超过这个条数就只回一条提示、其余丢弃（0 = 关闭）
+      QQ_INBOUND_RATE_LIMIT_PER_MINUTE: ${QQ_INBOUND_RATE_LIMIT_PER_MINUTE:-20}
+      # 主动消息每天上限（0 = 不限，只记账；面板「QQ 通道」页能看到当天发了多少条）
+      QQ_PROACTIVE_DAILY_LIMIT: ${QQ_PROACTIVE_DAILY_LIMIT:-0}
       ADMIN_REQUIRE_KEY: ${ADMIN_REQUIRE_KEY:-false}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}

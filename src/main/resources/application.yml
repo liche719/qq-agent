@@ -193,6 +193,10 @@ qq:
   max-message-chars: ${QQ_MAX_MESSAGE_CHARS:4000}
   markdown-max-chars: ${QQ_MARKDOWN_MAX_CHARS:4000}
   command-panel-enabled: ${QQ_COMMAND_PANEL_ENABLED:true}
+  # 入站按用户限流：一个用户一分钟内最多处理多少条；0 = 关闭。超限时只回一条礼貌提示，其余丢弃
+  inbound-rate-limit-per-minute: ${QQ_INBOUND_RATE_LIMIT_PER_MINUTE:20}
+  # 主动消息每天最多发多少条（0 = 不限，只记账并在面板显示）；超限后放弃发送并记 WARN
+  proactive-daily-limit: ${QQ_PROACTIVE_DAILY_LIMIT:0}
 
 wechat:
   channel:

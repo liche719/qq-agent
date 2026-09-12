@@ -20,10 +20,19 @@ const rows = computed(() => {
   const byStatus = m.apiErrorsByStatus && Object.keys(m.apiErrorsByStatus).length
     ? Object.entries(m.apiErrorsByStatus).map(([code, count]) => code + ' 共 ' + count + ' 次').join('；')
     : '无'
+  const proactiveUsed = m.proactiveToday === undefined || m.proactiveToday === null || Number(m.proactiveToday) < 0
+    ? '不可用'
+    : fmtNum(m.proactiveToday) + ' 条' + (Number(m.proactiveDailyLimit) > 0 ? '（上限 ' + fmtNum(m.proactiveDailyLimit) + ' 条）' : '（未设上限）')
+  const rateLimit = Number(m.inboundRateLimitPerMinute) > 0
+    ? fmtNum(m.inboundRateLimitPerMinute) + ' 条/分钟，已限流 ' + fmtNum(m.inboundRateLimited) + ' 条'
+    : '已关闭'
   const list = [
     ['网关状态', zh('qq', props.overview?.qq)],
     ['文本发送成功', fmtNum(m.textSendSuccess)],
     ['文本发送失败', fmtNum(m.textSendFailure)],
+    ['发送结果未知', fmtNum(m.sendResultUnknown)],
+    ['今日主动消息', proactiveUsed],
+    ['入站限流', rateLimit],
     ['媒体发送成功', fmtNum(m.mediaSendSuccess)],
     ['媒体发送失败', fmtNum(m.mediaSendFailure)],
     ['接口错误总数', fmtNum(m.apiErrors)],

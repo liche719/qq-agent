@@ -73,6 +73,10 @@ public class QqChannel implements WeChatChannel {
     private final int inputNotifySeconds;
     private final int markdownMaxChars;
     private final String userAgent;
+    /** 入站按用户限流（固定窗口）。见 {@link QqInboundRateLimiter}。 */
+    private final QqInboundRateLimiter inboundRateLimiter;
+    /** 主动消息日额度账本；仅测试用的构造器会传 null。 */
+    private final QqProactiveQuota proactiveQuota;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AgentOrchestrator orchestrator;
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -106,6 +110,10 @@ public class QqChannel implements WeChatChannel {
     private final AtomicLong gatewayFrameParseFailureCount = new AtomicLong();
     private final AtomicLong gatewayIdentifyFailureCount = new AtomicLong();
     private final AtomicLong gatewayResumeFailureCount = new AtomicLong();
+    /** 入站被限流丢弃的消息数（含那一条礼貌提示） */
+    private final AtomicLong inboundRateLimitedCount = new AtomicLong();
+    /** 发送结果未知（超时/连接中断）而按"已发出"处理的次数 */
+    private final AtomicLong sendResultUnknownCount = new AtomicLong();
     private final ConcurrentMap<String, AtomicLong> apiErrorsByStatus = new ConcurrentHashMap<>();
     private volatile long connectedAtMillis;
     private volatile long lastGatewayEventAtMillis;
@@ -156,17 +164,18 @@ public class QqChannel implements WeChatChannel {
                      @Value("${qq.max-conversation-cache-entries:2048}") int maxConversationCacheEntries,
                      @Value("${qq.max-message-cache-entries:4096}") int maxMessageCacheEntries,
                      @Lazy AgentOrchestrator orchestrator,
-                     QqRuntimeProperties runtimeProperties) {
+                     QqRuntimeProperties runtimeProperties,
+                     QqProactiveQuota proactiveQuota) {
         this(appId, clientSecret, sandbox, groupEnabled, apiConnectTimeoutSeconds, apiReadTimeoutSeconds,
                 websocketConnectTimeoutSeconds, passiveWindowMillis, typingKeepaliveMillis,
                 ephemeralCacheTtlMillis, streamStateTtlMillis, maxConversationCacheEntries,
-                maxMessageCacheEntries, orchestrator, runtimeProperties, true);
+                maxMessageCacheEntries, orchestrator, runtimeProperties, proactiveQuota, true);
     }
 
     QqChannel(String appId, String clientSecret, boolean sandbox, AgentOrchestrator orchestrator) {
         this(appId, clientSecret, sandbox, false,
                 5, 15, 10, 60 * 60 * 1000L, 50_000L, 30 * 60 * 1000L,
-                10 * 60 * 1000L, 2_048, 4_096, orchestrator, new QqRuntimeProperties(), true);
+                10 * 60 * 1000L, 2_048, 4_096, orchestrator, new QqRuntimeProperties(), null, true);
     }
 
     private QqChannel(String appId, String clientSecret, boolean sandbox, boolean groupEnabled,
@@ -175,7 +184,8 @@ public class QqChannel implements WeChatChannel {
                       long typingKeepaliveMillis, long ephemeralCacheTtlMillis,
                       long streamStateTtlMillis, int maxConversationCacheEntries,
                       int maxMessageCacheEntries, AgentOrchestrator orchestrator,
-                      QqRuntimeProperties runtimeProperties, boolean ignored) {
+                      QqRuntimeProperties runtimeProperties, QqProactiveQuota proactiveQuota,
+                      boolean ignored) {
         this.appId = appId;
         this.clientSecret = clientSecret;
         this.apiBase = sandbox ? SANDBOX_API_BASE : API_BASE;
@@ -212,6 +222,11 @@ public class QqChannel implements WeChatChannel {
                 QqRuntimeProperties.DEFAULT_MARKDOWN_MAX_CHARS);
         this.userAgent = policies.getUserAgent() == null || policies.getUserAgent().isBlank()
                 ? QqRuntimeProperties.DEFAULT_USER_AGENT : policies.getUserAgent().trim();
+        this.inboundRateLimiter = new QqInboundRateLimiter(
+                bounded(policies.getInboundRateLimitPerMinute(), 0, 100_000,
+                        QqRuntimeProperties.DEFAULT_INBOUND_RATE_LIMIT_PER_MINUTE),
+                INBOUND_RATE_WINDOW_MILLIS, this.maxConversationCacheEntries);
+        this.proactiveQuota = proactiveQuota;
         this.gatewayClient = new QqWebSocketClient(this.websocketConnectTimeoutSeconds, this.userAgent);
         this.chunkedMediaUploader = new QqChunkedMediaUploader(objectMapper, this.apiConnectTimeoutSeconds, error -> {
             chunkUploadFailureCount.incrementAndGet();
@@ -269,6 +284,13 @@ public class QqChannel implements WeChatChannel {
     /** 连续多少个心跳周期收不到**任何**帧（含心跳 ACK）就判定为半开连接 */
     private static final long SILENT_INTERVALS = 3;
 
+    /** 入站限流的窗口长度（固定窗口） */
+    private static final long INBOUND_RATE_WINDOW_MILLIS = 60_000L;
+
+    /** 入站被限流时的礼貌提示；同一个限流窗口内只发这一条 */
+    private static final String INBOUND_RATE_LIMIT_NOTICE =
+            "你发得有点快，我先一条条处理，过一会儿再发给我吧。";
+
     /**
      * 连接引用还在、心跳也发得出去，但已经很久没收到任何帧 —— 半开连接 / NAT 静默丢包的判据。
      *
@@ -312,6 +334,11 @@ public class QqChannel implements WeChatChannel {
         metrics.put("gatewayFrameParseFailure", gatewayFrameParseFailureCount.get());
         metrics.put("gatewayIdentifyFailure", gatewayIdentifyFailureCount.get());
         metrics.put("gatewayResumeFailure", gatewayResumeFailureCount.get());
+        metrics.put("inboundRateLimited", inboundRateLimitedCount.get());
+        metrics.put("inboundRateLimitPerMinute", inboundRateLimiter.limitPerWindow());
+        metrics.put("sendResultUnknown", sendResultUnknownCount.get());
+        metrics.put("proactiveToday", proactiveQuota == null ? -1L : proactiveQuota.used());
+        metrics.put("proactiveDailyLimit", proactiveQuota == null ? 0 : proactiveQuota.limit());
         metrics.put("apiErrorsByStatus", apiErrorsByStatus.entrySet().stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().get())));
         metrics.put("connectedAt", connectedAtMillis == 0 ? "" : java.time.Instant.ofEpochMilli(connectedAtMillis).toString());
@@ -661,11 +688,14 @@ public class QqChannel implements WeChatChannel {
         String content = message.content();
         if (message.bot()) { log.info("[qq] ignore bot-self msg -> {}", openid); return; }
         if (openid.isBlank()) return;
-        if (handleContinuationRequest(openid, content, data.path("id").asText(""))) return;
-        pendingPages.remove(openid);
         QqAttachmentParser.Payload payload = message.attachments();
         if (payload.empty() && content.isBlank()) { log.info("[qq] recv (empty, no attachments) -> {}", openid); return; }
+        if (!allowInbound(openid, msgId)) return;
+        // 先记住被动窗口再处理「继续」：分页回复同样是对这条 msg_id 的被动回复，
+        // 原来放在后面会让每一页都走主动消息（白耗主动配额，配额用光后分页直接发不出去）
         rememberReplyWindow(openid, msgId);
+        if (handleContinuationRequest(openid, content, data.path("id").asText(""))) return;
+        pendingPages.remove(openid);
         startTyping(openid);
         rememberReceivedMessage(openid, msgId, content, payload.images(), payload.attachments());
         log.info("[qq] inbound metadata user={} msg={} fields={}", openid, msgId, fieldNames(data));
@@ -679,6 +709,33 @@ public class QqChannel implements WeChatChannel {
         log.info("[qq] recv(image x{}, file x{}, quote={} chars/{} images) -> {}", payload.images().size(),
                 payload.attachments().size(), quote.content().length(), quote.imageUrls().size(), openid);
         orchestrator.onInbound(inbound);
+    }
+
+    /**
+     * 入站按用户限流：一个限流窗口内超过 {@code qq.inbound-rate-limit-per-minute} 条就
+     * **先礼貌回一条、再静默丢弃**其余（提示只发一次，否则提示本身成了刷屏）。
+     *
+     * <p>限流提示走 {@link #sendPassive}，算被动回复、不占主动配额。
+     * 返回 false 表示这条消息不进入 Agent。
+     */
+    private boolean allowInbound(String userId, String msgId) {
+        if (!inboundRateLimiter.enabled()) {
+            return true;
+        }
+        QqInboundRateLimiter.Decision decision = inboundRateLimiter.tryAcquire(userId, System.currentTimeMillis());
+        if (decision == QqInboundRateLimiter.Decision.ALLOW) {
+            return true;
+        }
+        inboundRateLimitedCount.incrementAndGet();
+        if (decision == QqInboundRateLimiter.Decision.NOTIFY) {
+            log.warn("[qq] 入站限流：user={} 一分钟内超过 {} 条，只回一条提示并忽略其余消息",
+                    userId, inboundRateLimiter.limitPerWindow());
+            rememberReplyWindow(userId, msgId);
+            sendPassive(userId, msgId, INBOUND_RATE_LIMIT_NOTICE, false);
+        } else {
+            log.info("[qq] 入站限流：忽略消息 user={} msg={}", userId, msgId);
+        }
+        return false;
     }
 
     private boolean handleContinuationRequest(String userId, String content, String replyToMsgId) {
@@ -787,6 +844,7 @@ public class QqChannel implements WeChatChannel {
 
     private void pruneEphemeralCaches(long now) {
         pendingPages.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
+        inboundRateLimiter.prune(now);
         lastRecvAt.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
         lastMsgIds.keySet().removeIf(conversationId -> !lastRecvAt.containsKey(conversationId));
         receivedAtByMessage.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
@@ -1200,40 +1258,107 @@ public class QqChannel implements WeChatChannel {
     }
 
     private boolean sendPassive(String userId, String replyToMsgId, String text, boolean markdown) {
+        boolean withinWindow = false;
         try {
             pruneEphemeralCaches(System.currentTimeMillis());
             ensureToken();
             String targetMsgId = replyToMsgId == null || replyToMsgId.isBlank() ? lastMsgIds.get(userId) : replyToMsgId;
             Long recvAt = replyToMsgId == null || replyToMsgId.isBlank()
                     ? lastRecvAt.get(userId) : receivedAtByMessage.get(replyCacheKey(userId, replyToMsgId));
-            boolean withinWindow = targetMsgId != null
+            withinWindow = targetMsgId != null
                     && recvAt != null
                     && (System.currentTimeMillis() - recvAt) < passiveWindowMillis;
-            rememberBotMessageId(userId, postMessage(userId, text, markdown, withinWindow ? targetMsgId : null));
-            log.info("[qq] send{} -> {} ({} chars)", withinWindow ? "(passive)" : "(proactive)", userId,
-                    text == null ? 0 : text.length());
+            if (!withinWindow) {
+                return sendProactive(userId, text, markdown);
+            }
+            rememberBotMessageId(userId, postMessage(userId, text, markdown, targetMsgId));
+            log.info("[qq] send(passive) -> {} ({} chars)", userId, text == null ? 0 : text.length());
             return true;
         } catch (Exception e) {
-            // 被动失败（msg_id 失效/限频等）→ 降级主动消息重试一次
             apiErrorCount.incrementAndGet();
             recordApiError(e);
-            String orphanMessageId = extractMessageId(e);
-            if (orphanMessageId != null && !orphanMessageId.isBlank()) {
-                deleteMessage(null, userId, orphanMessageId);
-            }
-            log.warn("[qq] passive send failed userId={}: {} → 降级主动消息", userId, e.getMessage());
-            try {
-                ensureToken();
-                rememberBotMessageId(userId, postMessage(userId, text, markdown, null));
-                log.info("[qq] send(proactive-retry) -> {} ({} chars)", userId, text == null ? 0 : text.length());
-                return true;
-            } catch (Exception e2) {
-                apiErrorCount.incrementAndGet();
-                recordApiError(e2);
-                log.warn("[qq] proactive retry failed userId={}: {}", userId, e2.getMessage());
-                return false;
-            }
+            return handleSendFailure(userId, text, markdown, withinWindow, e);
         }
+    }
+
+    /**
+     * 主动消息（不带 msg_id）：QQ 平台侧对主动消息有配额，所以这里既记账、也受
+     * {@code qq.proactive-daily-limit} 约束。超过上限时**放弃发送并记 WARN**（带当天计数），
+     * 而不是发出去等平台拒绝——那样只会得到一条看不懂的接口错误。
+     */
+    private boolean sendProactive(String userId, String text, boolean markdown) {
+        if (!proactiveQuotaAllows(userId)) {
+            return false;
+        }
+        ensureToken();
+        rememberBotMessageId(userId, postMessage(userId, text, markdown, null));
+        if (proactiveQuota != null) {
+            proactiveQuota.record();
+        }
+        log.info("[qq] send(proactive) -> {} ({} chars{})", userId, text == null ? 0 : text.length(), quotaSuffix());
+        return true;
+    }
+
+    private boolean proactiveQuotaAllows(String userId) {
+        if (proactiveQuota == null || proactiveQuota.allows()) {
+            return true;
+        }
+        log.warn("[qq] 主动消息已达当日上限（今日 {}/{}），放弃发送 user={}", proactiveQuota.used(),
+                proactiveQuota.limit(), userId);
+        return false;
+    }
+
+    /** 日志里的当天主动消息计数；账本不可用（Redis 异常）时只说明情况，不显示 "-1/0" 这种噪声 */
+    private String quotaSuffix() {
+        if (proactiveQuota == null) {
+            return "";
+        }
+        long used = proactiveQuota.used();
+        if (used < 0) {
+            return "，主动额度账本不可用";
+        }
+        int limit = proactiveQuota.limit();
+        return "，今日主动 " + used + (limit > 0 ? "/" + limit : "") + " 条";
+    }
+
+    /**
+     * 发送失败后的处置（这里修的是"同一条消息发两遍"）。
+     *
+     * <p>能不能重发，取决于**这次失败到底有没有把消息发出去**：
+     * <ul>
+     *   <li>响应体里带了消息 id：QQ 其实已经发出去了（只是响应本身报错）→ 先撤掉它，重发不会重复；</li>
+     *   <li>4xx：服务端**明确拒收**（msg_id 失效、被动窗口过期、令牌失效、限频）→ 没发出去，重发安全；</li>
+     *   <li>超时、连接中断、5xx：**结果未知**，请求可能已经送达。原来的代码在这里同样会降级重发，
+     *       于是用户收到两条一模一样的消息。现在按"已发出"处理——被动回复返回 true，让上层不要
+     *       再走标准回复路径；宁可偶尔少一条，也不要重复刷屏。次数记在 {@code sendResultUnknown} 上，面板可见。</li>
+     * </ul>
+     */
+    private boolean handleSendFailure(String userId, String text, boolean markdown, boolean wasPassive, Exception cause) {
+        String orphanMessageId = extractMessageId(cause);
+        if (!orphanMessageId.isBlank()) {
+            deleteMessage(null, userId, orphanMessageId);
+        } else if (!isDefiniteRejection(cause)) {
+            sendResultUnknownCount.incrementAndGet();
+            log.warn("[qq] {}发送结果未知（{}），不再重发以免重复 user={}{}",
+                    wasPassive ? "被动" : "主动", cause.getClass().getSimpleName(), userId, quotaSuffix());
+            return wasPassive;
+        }
+        log.warn("[qq] {}发送被拒 user={}: {} → 重发一次主动消息{}", wasPassive ? "被动" : "主动", userId,
+                cause.getMessage(), quotaSuffix());
+        try {
+            return sendProactive(userId, text, markdown);
+        } catch (Exception retryFailure) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(retryFailure);
+            log.warn("[qq] 重发失败 user={}: {}", userId, retryFailure.getMessage());
+            return false;
+        }
+    }
+
+    /** 服务端明确拒收（4xx）＝ 这条消息没有被受理，重发不会产生重复 */
+    private boolean isDefiniteRejection(Throwable error) {
+        return error instanceof RestClientResponseException response
+                && response.getStatusCode().is4xxClientError();
     }
 
     private String extractMessageId(Exception exception) {
@@ -1473,6 +1598,7 @@ public class QqChannel implements WeChatChannel {
         receivedAtByMessage.clear();
         receivedMessages.clear();
         streamStates.clear();
+        inboundRateLimiter.clear();
         WebSocket s = ws;
         if (s != null) {
             try { s.close(1000, "shutdown"); } catch (Exception ignored) { }

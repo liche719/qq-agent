@@ -14,6 +14,7 @@ public class QqRuntimeProperties {
     public static final int DEFAULT_HEARTBEAT_MS = 45_000;
     public static final int DEFAULT_INPUT_NOTIFY_SECONDS = 60;
     public static final int DEFAULT_MARKDOWN_MAX_CHARS = 4_000;
+    public static final int DEFAULT_INBOUND_RATE_LIMIT_PER_MINUTE = 20;
 
     private String userAgent = DEFAULT_USER_AGENT;
     private String reconnectBackoffMs = DEFAULT_RECONNECT_BACKOFF_MS;
@@ -23,6 +24,11 @@ public class QqRuntimeProperties {
     private int defaultHeartbeatMs = DEFAULT_HEARTBEAT_MS;
     private int inputNotifySeconds = DEFAULT_INPUT_NOTIFY_SECONDS;
     private int markdownMaxChars = DEFAULT_MARKDOWN_MAX_CHARS;
+
+    /** 入站按用户限流（每分钟条数）；0 = 关闭。防止刷屏把每用户串行队列与模型额度占满。 */
+    private int inboundRateLimitPerMinute = DEFAULT_INBOUND_RATE_LIMIT_PER_MINUTE;
+    /** 主动消息每天最多发多少条；0 = 不限（只记账、只在面板与日志里体现）。 */
+    private int proactiveDailyLimit = 0;
 
     public String getUserAgent() {
         return userAgent;
@@ -90,5 +96,21 @@ public class QqRuntimeProperties {
 
     public void setMarkdownMaxChars(int markdownMaxChars) {
         this.markdownMaxChars = markdownMaxChars;
+    }
+
+    public int getInboundRateLimitPerMinute() {
+        return inboundRateLimitPerMinute;
+    }
+
+    public void setInboundRateLimitPerMinute(int inboundRateLimitPerMinute) {
+        this.inboundRateLimitPerMinute = inboundRateLimitPerMinute;
+    }
+
+    public int getProactiveDailyLimit() {
+        return proactiveDailyLimit;
+    }
+
+    public void setProactiveDailyLimit(int proactiveDailyLimit) {
+        this.proactiveDailyLimit = proactiveDailyLimit;
     }
 }
