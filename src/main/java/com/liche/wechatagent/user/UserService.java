@@ -134,12 +134,18 @@ public class UserService {
     }
 
     public void touchDelivery(String userId, String botId, String channel) {
-        UserProfile profile = get(userId);
-        profile.setLastBotId(botId);
-        profile.setLastChannel(channel);
-        profile.setLastSeenAt(LocalDateTime.now());
-        profile.setUpdatedAt(LocalDateTime.now());
-        userProfileRepository.save(profile);
+        LocalDateTime now = LocalDateTime.now();
+        // 定向 UPDATE，理由见 UserProfileRepository.touchDelivery 的注释：
+        // 整行 save 会顺带回写旧快照，把并发写入的 coach_mode/memory_enabled 抹掉
+        if (userProfileRepository.touchDelivery(userId, botId, channel, now) == 0) {
+            // 这个用户的行还不存在（第一次见到）：走一次创建
+            UserProfile profile = getOrCreate(userId);
+            profile.setLastBotId(botId);
+            profile.setLastChannel(channel);
+            profile.setLastSeenAt(now);
+            profile.setUpdatedAt(now);
+            userProfileRepository.save(profile);
+        }
     }
 
     public UserProfile configureProactiveCare(String userId, boolean enabled, String cadence,

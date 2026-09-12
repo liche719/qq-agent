@@ -92,7 +92,11 @@ public class MaimemoPushService {
                 : message(snapshot);
         boolean sent = deliver(text);
         LocalDate today = LocalDate.now(zone);
-        maimemoService.markPushed(today);
+        // 只有真的发出去了才写「今天已推送」：否则额度受限时失败也记一次，
+        // 当天 21:30 的定时推送就永远不会再尝试，用户当天收不到进度。
+        if (sent) {
+            maimemoService.markPushed(today);
+        }
         result.put("sent", sent);
         result.put("text", text);
         result.put("message", sent

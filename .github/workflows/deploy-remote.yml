@@ -69,18 +69,17 @@ jobs:
         run: |
           HOST="${{ secrets.DEPLOY_HOST }}"
           NAME="liche.cloud"
-          BASE="https://$NAME"
+          BASE="https://$HOST"
           KEY="${{ secrets.ADMIN_API_KEY }}"
-          # 一律用 --resolve 把域名指到部署主机：这样**不需要公网 DNS 也能校验真实证书链**，
-          # 于是不再需要 -k。原来 IP 那一组是 curl -sk + 明文口令头，等于把面板唯一凭据
-          # 通过一条不校验证书的连接发出去；现在每个请求都走验证过的 TLS（证书过期也会让流水线红）。
-          # --retry-connrefused：容器刚重建时端口可能还没起来，不重试会把"还在启动"误判成 000。
-          code() { curl -s --resolve "$NAME:443:$HOST" --retry 3 --retry-connrefused --retry-delay 2 \
-            -o /dev/null -w '%{http_code}' --max-time 25 "$@"; }
+          # 不带口令的检查走 **IP 直连 + -k**：证书是给 liche.cloud 签的，IP 访问必然名称不匹配，
+          # 这里没有凭据、被中间人也拿不到东西。**不要用 `--resolve liche.cloud:443:<IP>`**——
+          # ICP 备案期间 A 记录是 DISABLED，阿里云按 SNI 拦未备案域名，带 liche.cloud SNI 的连接会被
+          # 直接掐断（实测外部 `--resolve` 000、直连 IP 200），那样自检会恒红。
+          code() { curl -sk -o /dev/null -w '%{http_code}' --retry 3 --retry-connrefused --retry-delay 2 --max-time 25 "$@"; }
           problems=""
           check() { if [ "$2" != "$3" ]; then problems="$problems $1(期望$2得到$3)"; fi; }
 
-          # 应用冷启动实测要 35~40 秒（JPA + Quartz + TLS），容器重建后还要等 compose 起来；
+          # 应用冷启动实测 35~40 秒（JPA + Quartz + TLS），容器重建后还要等 compose 起来；
           # 窗口给足 4 分钟，避免"还在启动"被当成部署失败（已经误报过一次）。
           ready=0
           for i in $(seq 1 48); do
@@ -88,33 +87,47 @@ jobs:
             echo "等待应用就绪 ($i)…"
             sleep 5
           done
-          if [ "$ready" != "1" ]; then
-            echo "❌ 等了 4 分钟应用仍未就绪"
-          fi
+          [ "$ready" = "1" ] || echo "❌ 等了 4 分钟应用仍未就绪"
 
-          asset=$(curl -s --resolve "$NAME:443:$HOST" --max-time 25 "$BASE/index.html" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
+          asset=$(curl -sk --max-time 25 "$BASE/index.html" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1)
           check "首页" 200 "$(code "$BASE/")"
           check "前端资源${asset:-（缺失）}" 200 "$(code "$BASE${asset}")"
           check "无口令应被拒" 401 "$(code "$BASE/api/admin/overview")"
           # 百分号编码变体也必须被拦住（历史上 /api/adm%69n/overview 能绕过口令）
           check "编码路径也应被拒" 401 "$(code "$BASE/api/adm%69n/overview")"
-          check "带口令接口" 200 "$(code -H "X-Agent-Admin-Key: $KEY" "$BASE/api/admin/overview")"
-          check "账号密码登录" 200 "$(code -X POST -H 'Content-Type: application/json' \
-            -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' "$BASE/api/admin/session")"
-          # 公网 DNS 单独看一眼（不带凭据）：备案期间按规则暂停了 A 记录，解析恢复后这里自然变绿
-          if getent hosts "$NAME" >/dev/null 2>&1; then
-            domain_note="、公网解析正常"
+
+          # 带口令的检查放到**服务器本机**跑（127.0.0.1）：流量不出主机，
+          # 所以既可以用 -k（IP 访问没有匹配证书），又不存在"明文口令经不校验证书的公网连接"的问题。
+          remote=$(ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" "KEY='$KEY' bash -s" <<'REMOTE'
+          curl -sk -o /dev/null -w 'withkey=%{http_code} ' -H "X-Agent-Admin-Key: $KEY" https://127.0.0.1/api/admin/overview
+          curl -sk -o /dev/null -w 'login=%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' https://127.0.0.1/api/admin/session
+          REMOTE
+          )
+          echo "服务端本机自检：$remote"
+          check "带口令接口" 200 "$(echo "$remote" | sed -n 's/.*withkey=\([0-9]*\).*/\1/p')"
+          check "账号密码登录" 200 "$(echo "$remote" | sed -n 's/.*login=\([0-9]*\).*/\1/p')"
+
+          # 域名这一组只在真的解析到本机时才校验（备案通过后自动生效）：那时才走真实证书链
+          if [ "$(getent hosts "$NAME" | awk '{print $1}' | head -1)" = "$HOST" ]; then
+            check "域名首页（证书校验）" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "https://$NAME/")"
+            check "域名带口令接口（证书校验）" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 \
+              -H "X-Agent-Admin-Key: $KEY" "https://$NAME/api/admin/overview")"
+            domain_note="、域名证书校验通过"
           else
-            domain_note="（公网 DNS 暂无解析：ICP 备案期间按规则暂停了 A 记录，现在用 https://$HOST/ 访问面板；备案通过后恢复 A 记录即可，无需改代码）"
+            domain_note="（域名校验已跳过：ICP 备案期间 A 记录为 DISABLED，面板暂用 https://$HOST/ 访问；备案通过后自动生效）"
             echo "ℹ️$domain_note"
           fi
 
           if [ -n "$problems" ]; then
             echo "❌ 部署后自检失败:$problems"
-            curl -s --resolve "$NAME:443:$HOST" -o /dev/null --max-time 20 -X POST -H "X-Agent-Admin-Key: $KEY" \
-              -H 'Content-Type: application/json' \
-              -d "{\"message\":\"部署后自检失败：$problems\"}" \
-              "$BASE/api/admin/actions/alerts/notify" || true
+            # 告警也走服务器本机，避免把口令发到不校验证书的公网连接上
+            ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" \
+              "KEY='$KEY' MSG='部署后自检失败：$problems' bash -s" <<'REMOTE' || true
+          curl -sk -o /dev/null --max-time 20 -X POST -H "X-Agent-Admin-Key: $KEY" \
+            -H 'Content-Type: application/json' \
+            -d "{\"message\":\"$MSG\"}" https://127.0.0.1/api/admin/actions/alerts/notify
+          REMOTE
             exit 1
           fi
           echo "✅ 部署后自检通过：页面可访问、鉴权生效（含编码路径）、登录与面板接口正常$domain_note"

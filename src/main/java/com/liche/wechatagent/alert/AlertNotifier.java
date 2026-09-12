@@ -87,9 +87,12 @@ public class AlertNotifier {
             Long last = sentAt.get(problem.getKey());
             if (isNew || last == null || now - last >= repeat) {
                 if (deliver("【运维告警】" + problem.getValue() + "\n时间：" + now())) {
-                    sentAt.put(problem.getKey(), now);
                     pushed.add(problem.getKey());
                 }
+                // 无论成败都要记下这次尝试的时间：失败时不记的话，下一轮（60 秒后）last 仍是 null，
+                // 会绕过 repeat-minutes 每分钟重试一次，把 QQ 主动消息额度持续打满，
+                // 结果真正的告警反而发不出去。
+                sentAt.put(problem.getKey(), now);
             }
         }
         for (Map.Entry<String, String> entry : new LinkedHashMap<>(active).entrySet()) {
