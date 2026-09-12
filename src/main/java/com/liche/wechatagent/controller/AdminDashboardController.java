@@ -157,12 +157,24 @@ public class AdminDashboardController {
     }
 
     @GetMapping("/users") public List<Map<String,Object>> userList() {
+        // 任务状态都存在 Redis 里，而原来的写法是"每个用户都把全部 task id 逐个 find 一遍"：
+        // 面板每 10 秒刷新一次，就是 用户数 × 任务数 次 HGET（3 用户 × 近百个任务还能忍，量涨上来是压力点）。
+        // 这里先聚合成一次遍历，之后按用户 O(1) 取值。
+        Map<String, Long> taskCountByUser = new LinkedHashMap<>();
+        for (String taskId : tasks.findTaskIds()) {
+            String owner = String.valueOf(tasks.find(taskId).get("userId"));
+            if (owner != null && !owner.isBlank() && !"null".equals(owner)) {
+                taskCountByUser.merge(owner, 1L, Long::sum);
+            }
+        }
         return users.findAll().stream().map(u -> {
+            // userId 是**必须**返回的：面板要用它去请求 /api/admin/users/{userId} 看详情，
+            // displayUserId 只是列表里给人看的打码值。两者都给是刻意的，不是"打码失效"。
             Map<String,Object> out = new LinkedHashMap<>(); out.put("userId", u.getUserId()); out.put("displayUserId", mask(u.getUserId()));
             out.put("lastSeenAt", String.valueOf(u.getLastSeenAt())); out.put("channel", String.valueOf(u.getLastChannel()));
             out.put("createdAt", String.valueOf(u.getCreatedAt()));
             out.put("messageCount", conversations.countByUserId(u.getUserId()));
-            out.put("taskCount", tasks.findTaskIds().stream().map(tasks::find).filter(state -> u.getUserId().equals(String.valueOf(state.get("userId")))).count());
+            out.put("taskCount", taskCountByUser.getOrDefault(u.getUserId(), 0L));
             out.put("memoryCount", core.countByUserId(u.getUserId()) + work.countByUserIdAndArchivedFalse(u.getUserId()) + episodes.countByUserId(u.getUserId()));
             out.put("reminderCount", reminders.countByUserId(u.getUserId())); return out;
         }).toList();
