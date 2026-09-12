@@ -94,92 +94,31 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **当前证书**：`CN = liche.cloud`（Let's Encrypt YR2），有效期 2026-09-12 → **2026-12-11**；`curl https://liche.cloud/` 不加 `-k` 返回 200。
 - **端口**：应用监听标准 **443**（服务器 `.env` 的 `SERVER_PORT=443`），地址因此不带端口号。**注意 443 上跑未备案域名属于"官方不允许、实际通常可用"**；万一被拦，回滚＝`SERVER_PORT` 改回 8443 并重建（安全组的 8443 规则先留着）。LE 不给 IP 签证书，所以**只有域名访问才有绿锁**，IP 访问必然提示"证书名称不匹配"。
 
+### 四个功能模块（2026-09-12 上线，均已端到端验证）
+
+**面试陪练**（`interview/` 包）：不是"换个人设聊天"，而是有题库 + 评分卡 + 复盘报告的模拟面试。入口 `陪练 面试` / `陪练 Java 后端 3 年` / `结束陪练`（中文指令走 `CommandRegistry` 的"整串不是别名就按首词识别、余下当参数"），也支持 `/practice interview|off`、以及自然语言（`InterviewTool`，提示词第 18 条要求必须调工具进入模式而不是临时扮演）。**不动用户人设**：只在 `user_profile` 记 `coach_mode`/`coach_session_id`/`coach_role`，由 `CoachPresets.withMode` 把模式要求追加到系统提示词。`InterviewBank` 6 个题类；`InterviewService` 的复盘报告**由程序按 `interview_round` 记录生成**（轮数/各维度均分/最弱项/未覆盖题类/下次重点），不靠模型记忆。**坑**：模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）→ "每轮必须先记分再说话"要同时写死在工具描述和提示词里。加新指令必须同步改写死的 `HelpHandler` 清单。此项**没有 QQ 菜单按钮**（菜单已占满 10 项）。
+
+**墨墨背单词**（`maimemo/` 包）：QQ 里问进度 + 每天 21:30 推送 + 面板「背单词」页签。接口 `open.maimemo.com/open/api/v1/*`（`Authorization: Bearer`，响应 `{success,data,errors}`），官方限流 10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次 → 服务层 30 秒缓存。个人 token **有效期约一天**，所以存 `maimemo_setting` 表并**优先于环境变量**，面板可粘贴更新；失效时聊天工具会明说去面板更新。**长期方案 OIDC**：`MaimemoOidcService` 换 1 小时 access + 90 天 refresh（自动续期），回调 `/api/maimemo/oauth/callback`（**故意不要求口令**，浏览器直跳），流程是"生成授权链接 → 打开 → 把整条回调地址粘回面板"；token 解析顺序 OIDC → 面板 → 环境变量，刷新失败会自动回落并写明原因。**还等用户凭据**：在 `open.maimemo.com/app` 建「后端应用」（要求主页是已上线 HTTPS 且与回调同域名 → **实际前置条件是备案通过**），**创建后不可修改**，名称不能含"墨墨/MaiMemo/官方"。**坑**：`study_time` 是**毫秒**；`next_study_date` 是 UTC ISO；新学/复习要自己按今日单词表拆（表没取全就不能拿条数当复习数）；顽固词（STICKING）只在**全量**记录里带标签，所以要单独用 `record-fetch-limit`(1000) 拉全量 + 独立缓存；**API 不提供官方释义**，摘要里必须写清"释义由模型自己给，不是墨墨官方"。用户 2026-09-12 决定**QQ 里不做背单词复习**（开放 API 没有提交复习结果的接口，写不回墨墨进度）。
+
+**定时任务**（`schedule/` 包）：与「定时提醒」的区别必须分清——提醒到点只发一句话，**定时任务到点重跑一遍完整 Agent**（可搜索、可调工具）再把结果发回来。入口：工具 `ScheduledTaskTool`（create/list/setEnabled/cancel/runNow）、`/schedules` 命令、面板页签（可新建/启停/立即执行/删除并显示上次结果）。调度复用现有 Quartz（组 `scheduled-tasks`，**不需要改表结构**），落 `scheduled_task` 表；启动时 `ApplicationReadyEvent` 把库里启用中的任务重新同步进调度器（容器重建自愈）。**手动执行必须放后台线程**：`runNow` 同步跑会嵌套 `onInboundSync`、打乱 MDC/userScope 与工具尾注上下文。面板还列 12 条系统内置任务（墨墨推送 21:30、关怀复盘 20:30、数据库备份、Quartz 两组的真实下次触发时间；Spring 不暴露 `@Scheduled` 的下次时间，如实标"—"）。
+
+**运维告警**（`alert/` 包）：`AlertNotifier` 每 60 秒查 QQ 网关 / MySQL / Redis / Quartz / 磁盘 / 堆，**只在问题新出现或恢复时**推送（同问题 `repeat-minutes` 内不重复，启动 2 分钟宽限期避免误报）；只发给 `.env` 的 `ALERT_QQ_OPENID`（**是 openid 不是 QQ 号**）。QQ 主动消息有额度限制，所以推送是"尽力而为"，**面板状态才是准的**。测试按钮在「QQ 通道」页，或 `POST /api/admin/actions/alerts/test`、`POST /api/admin/actions/alerts/notify`（CI 失败告警用）。
+
 ### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
-- **架构**：前端是独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，无 UI 框架），只通过 JSON 接口与后端通信；后端只提供 `/api/admin/*` 与静态入口。构建产物输出到 `src/main/resources/static/`，由 Dockerfile 的 node 阶段在打包镜像时生成，**部署就是 agent 这一个容器**（没有额外网关）。
-- **本地开发**：`cd web && npm install`；`npm run dev`（Vite 5173，已把 `/api` 代理到 `http://127.0.0.1:8080`）。改完样式或组件必须 `npm run build`（直接写进后端 static 目录）才会进 jar。
-- **目录结构**：`web/src/views/`（LoginView、DashboardView）、`web/src/panels/`（Overview / Qq / Llm / Maimemo / Tasks / Users / Logs 七个页签）、`web/src/components/`（StatCard、StatusPill、InfoGrid、DataTable、JsonBlock、ChartBars）、`web/src/{api,auth,labels,router}.js`，以及**集中承载全部视觉规范的 `web/src/style.css`**。
-- **路由**：`createWebHashHistory`（`/#/login`、`/#/dashboard`），因此网关只需放行固定路径、不需要服务端 rewrite。
-- **视觉（2026-09-12 按用户要求改成白色主调）**：白到浅蓝的极淡渐变底 + 极淡冷色网格（`body::before`：120px，竖线略清晰、横线更淡、交点小圆点，mask 向外淡出）；面板是**白色半透明玻璃**（`rgba(255,255,255,.58~.84)` 渐变 + `backdrop-filter: blur(20px) saturate(150%)` + 22px 圆角 + 白色描边 + 极淡外圈 `--ring`）；**强调色只用「淡蓝 → 白」渐变**（`#cfe0ff → #fff`，用在主按钮、选中页签、用户气泡、图表柱），蓝色不铺面积；状态色为柔和的绿/琥珀/红。改视觉只动 `web/src/style.css`。
-- **文案**：界面不出现英文状态词，接口状态一律翻中文（正常/降级/异常/未启用/运行中/失败/结果未知/已回复/待机/信息/警告/错误）；原始 JSON 视图保留英文键名（那是接口数据）。`labels.js` 是唯一的状态词典，新增状态值改那里。
-- **黑白主题（2026-09-12 新增）**：顶栏与登录卡片各有一个「深色主题 / 浅色主题」按钮（`.theme-toggle`），切换 `<html data-theme="dark">`；选择存 `localStorage['admin.theme']`，没存过时跟随系统 `prefers-color-scheme`。**默认仍是白色（就是原来的样子）**；黑色主题不改结构、不改圆角/玻璃/网格，只换调色板：底色近黑（`#0c0f16 → #05060a` + 冷蓝辉光）、玻璃改成 `rgba(255,255,255,.075→.035)`、文字 `#f1f4fa`，**强调色依旧是「淡蓝 → 白」渐变**（`#9dbcff → #fff`，按钮文字转深色），用户气泡照旧淡蓝渐变，状态色换成更亮的绿/琥珀/红。全部颜色都在 `web/src/style.css` 的 `:root` 与 `:root[data-theme="dark"]` 两个块里（组件里不要再写死颜色，错误提示也改成 `var(--bad-ink)`）；`index.html` 里有一小段内联脚本在首屏前定主题，避免深色下先闪一下白。
-- **登录**：账号默认 `rootlcw` + 密码 → `POST /api/admin/session`；勾「记住账号密码」时凭据写 `localStorage`（不勾只写 `sessionStorage`，关标签页即退出），退出登录会清凭据但保留账号名。路由守卫拦截 `/#/dashboard`，接口 401 自动清登录态并回登录页。
-- **用户与记忆页**：用户列表按最近活动倒序（**每个用户一条**，空时间的排最后），点「查看记录」进入聊天式视图——用户/机器人左右气泡、可上下滚动、`加载更早的消息` 分页往前翻、可选显示工具调用（`system` 消息）；同一页内还可用分段控件切到「长期记忆」「提醒任务」。
-- **告警**：QQ 通道页有「发送测试告警」按钮，调 `POST /api/admin/actions/alerts/test`；另有 `POST /api/admin/actions/alerts/notify`（body `{"message":"…"}`）供 CI 等自动化推送自定义告警，同样只发给配置里的那一个人。
-- **模型与搜索**（2026-09-12 新增页签）：展示 LLM 一次性调用（记忆提取/提醒解析）、对话流式调用、SearX-NG 搜索的**次数/失败/成功率/平均耗时/最近错误**，数据来自 `GET /api/admin/metrics/runtime`，由 `metrics` 包里的 `RuntimeMetrics` 在 `OpenAiCompatChatModel`、`OpenAiCompatStreamingChatModel`、`SearxngClient` 三处打点累计（进程内计数，重启归零）。出问题时先看这个页签，能立刻区分"模型慢/模型报错/搜索挂了"。
-- **手机适配**：`≤720px` 概览卡 2 列、表格**转卡片列表**（靠每格 `data-label` 显示列名、`thead` 隐藏）、工具栏换行、无横向滚动。
-- **面板数字的口径（2026-09-12 对齐过，别再改回去）**：总览的「工作记忆」只统计**未归档**的（`countByArchivedFalse`），已归档的单独一行显示——原来用 `work.count()` 会把归档的也算进去（实测 53 vs 29），和「用户与记忆」页的 `memoryCount` 口径不一致。总览其余数字（用户/对话证据/核心记忆/情景记忆/提醒）都是直接的 count，逐项和数据库核对过。
-- **趋势图与指标的"更新"语义**：`GET /metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时、容量 3600），**重启/部署即清零**，所以频繁部署时图上柱子很少是正常的；接口默认只返回最近 **120** 个点（`?limit=` 可调，10~3600），因为面板每 10 秒拉一次，全量返回 100KB×6 次/分钟 ≈ 35MB/小时纯属浪费。"模型与搜索"页签的调用计数同理（进程内、重启归零）；「任务」页签的数据在 Redis 里保留 `agent.task-state-ttl-hours`（默认 168 小时）。
-- **Markdown 渲染（2026-09-12 新增）**：聊天回复、长期记忆、定时任务结果里都是模型产出的 Markdown，原来用 `{{ }}` 插值会把 `**`、表格、列表原样显示。现在统一走 `web/src/components/MarkdownText.vue`：**marked 解析 + DOMPurify 白名单清洗**后才 `v-html`，链接强制 `target=_blank rel=noopener`；样式在 `style.css` 的 `.md` 段（两套主题都用 token）。长期记忆页也从"一坨 JSON"改成按条渲染的 Markdown 卡片（每段下面保留可折叠的「原始数据」）。依赖 `marked` + `dompurify` 已进 `web/package.json` 与 lock（Dockerfile 的 `npm ci` 会用到，lock 必须一起提交）。
-- **安全约定（更新）**：接口文本默认用 Vue 插值（自动转义）；**唯一允许 `v-html` 的地方是 `MarkdownText`**，且必须经过 DOMPurify 清洗——日志、用户记忆、模型回复都是不可信的用户数据，不要自己写 `v-html`。
-- **自动刷新的语义（2026-09-12 修过一轮）**：`DashboardView` 每 `interval`（默认 10 秒）拉一次 `/overview`，**成功后 `tick++`**，各页签 `watch(tick)` 重载自己的数据（趋势图接口失败不再阻断 tick）。坑：`UsersPanel` 原来只重载用户**列表**，正在看的那份「聊天记录 / 长期记忆 / 提醒任务」不刷新，必须整页刷新才更新——现在 tick 时会同时重载当前用户详情（新消息追加到末尾、保留已翻出来的更早消息、只在原本贴着底部时才自动滚到底）。`MaimemoPanel` 的推送设置表单加了"用户输入过就不被自动刷新覆盖"的保护。
-- **验证方式**（可复用）：`tools\ui-verify\verify_spa.py` 用 Playwright 打**公网真实地址**跑完登录/各页签/聊天视图/手机端与视觉断言（详细跑法见该目录 README）：
-  ```powershell
-  $env:WG_PW='<口令>'; $env:ADMIN_USERNAME='rootlcw'; $env:SPA_BASE='https://liche.cloud'; $env:SPA_TAG='v10'
-  & "D:\soft\JetBrains\Python\python\python.exe" "C:\Users\33721\Desktop\wechat-agent\tools\ui-verify\verify_spa.py"
-  ```
-  （本机调试用同目录 `spa_server.py` 起代理、不设 `SPA_BASE`。）Playwright 需要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`。
-
-### 面试陪练（只保留面试，2026-09-12 改版；英语陪练已删除）
-
-- 定位：**不是"换个人设聊天"，而是有题库、有评分卡、有复盘报告的一次模拟面试**。用户当时说"陪练模式没什么用"，所以去掉了只加一致性的英语陪练，改成能留下数据的面试模拟。
-- 进入/退出：QQ 发 `陪练 面试`、`陪练 Java 后端 3 年`（岗位会带进提示词）、`结束陪练`；也支持 `/practice interview|off`。**中文指令带参数**靠 `CommandRegistry` 的"整串别名不匹配就按首词识别、余下当参数"（`/help` 里的清单是写死的，加指令必须同步改 `HelpHandler`）。
-- **自然语言同样能进**：`tool/InterviewTool` 的 `startInterviewPractice(role)` / `recordInterviewRound(...)` / `endInterviewPractice()`，提示词第 18 条要求模型在用户说"你当面试官陪我练练""模拟一下面试"时**必须调用工具进入模式**，而不是临时扮演；工具必须写进 `ToolRegistry` 的构造列表，显示名加在 `AgentPolicyProperties.DEFAULT_TOOL_DISPLAY_NAMES`。
-- **不动用户人设**：只在 `user_profile` 记 `coach_mode`(interview) / `coach_session_id` / `coach_role`，由 `agent/CoachPresets.withMode(人设, 模式)` 在 `AgentOrchestrator.invokeAgent` 里把模式要求（含整个题库与评分观察点）追加到系统提示词末尾，退出即原样恢复。
-- 数据落库：`interview/` 包 —— `InterviewRound`(表 `interview_round`：题类/题目/回答要点/四维分数/反馈) + `InterviewBank`(6 个题类：自我介绍、项目深挖、技术基础、系统设计、行为面试、反问环节，每类带评分观察点) + `InterviewService`(**复盘报告由程序按记录生成**：轮数、各维度均分、最弱项、未覆盖题类、下次重点；不靠模型记忆)。
-- **踩过的坑**：模型会在长回复里"忘了先记分"（第一版实测第 2 轮没写进库）。修法是**把顺序写死并前置**——"每轮必须先调用 recordInterviewRound，再写反馈，顺序不能反，漏记等于这轮没练"，工具描述里也强调"在写反馈之前先调用"。改完实测 2/2 轮都记账。
-- `/help` 与 `PracticeHandler` 的用法文案都要跟着改；这一项**没有 QQ 菜单按钮**（菜单已占满 10 项，QQ 侧有上限）。
-
-### 墨墨背单词开放 API 接入（2026-09-12 新增）
-
-- 用途：QQ 里直接问「我今天背了多少单词 / 还剩多少没刷」→ 查真实进度回答；每天到点（默认 21:30）推一条今日进度；面板新增「背单词」页签。
-- **接口**：`https://open.maimemo.com/open/api/v1/*`，`Authorization: Bearer <个人 access token>`，响应统一 `{success, data, errors}`。用到 `study/get_study_progress`、`study/get_today_items`、`study/query_study_records`（还有 `add_words`/`advance_study`/云词本 CRUD，暂未接）。官方限流：**10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次**，所以服务层带 30 秒缓存（面板自动刷新与聊天追问都走缓存）。
-- **Token 从哪来**：墨墨 App 里的「开放 API」入口生成，**页面显示的有效期只有一天左右**，过期后接口返回 401（实测：有效的 token 能直接拿到 `progress`）。因此设计了**面板内更新**：`maimemo_setting` 表（键值表）存 Token，**数据库里的值优先于环境变量**，粘贴保存即生效、不用登录服务器；清空则回落到 `MAIMEMO_API_TOKEN`。Token 失效时聊天工具会明说"去面板更新"，每日推送也会推一条失效提醒（而不是装作没事）。
-- **代码结构**：`maimemo/` 包 —— `MaimemoClient`(HTTP+错误翻译，401 抛 `MaimemoAuthException`)、`MaimemoService`(Token 管理/缓存/快照/文案)、`MaimemoPushService`(每日扫描 + 立即推送)、`MaimemoSetting`+Repository；`tool/MaimemoTool`(聊天工具 `getMaimemoStudyProgress`)；`controller/AdminMaimemoController`(`GET /api/admin/maimemo/overview`、`POST /refresh|/token|/push/settings|/push/now`)；前端 `web/src/panels/MaimemoPanel.vue`（页签「背单词」）。
-- **自然语言识别交给模型**（用户明确要求）：工具只提供能力，描述里写清典型说法，**不做任何关键词硬编码**；提示词第 19 条要求先取数据再回答、禁止凭印象编数字。实测两种说法（"我今天背了多少单词？还差多少没背完？"、"墨墨那边我今天还剩多少没刷"）都会调用工具。
-- 推送目标复用 `ALERT_QQ_OPENID`（用户本人的 openid）；QQ 主动消息有额度限制，推送"尽力而为"，失败只记日志，**面板状态才是准的**。每天只推一次（日期记在 `maimemo_setting.last_push_date`），面板有开关与时间设置 + 「立即推送一次」。
-- 接口只给"今日完成/总数"，**新学与复习的拆分要靠今日单词列表自己算**：列表没取全（`total` 大于拉取条数）时不能拿列表长度当复习数——所以按 `max(item-limit, total)` 拉取算拆分，面板只展示前 `item-limit` 条，取不全就显示 `—`。
-- 配置项：`MAIMEMO_ENABLED`、`MAIMEMO_API_TOKEN`、`MAIMEMO_DAILY_PUSH_ENABLED`、`MAIMEMO_DAILY_PUSH_TIME`、`MAIMEMO_TIMEOUT_SECONDS`、`MAIMEMO_CACHE_SECONDS`；compose 的 `environment` 里必须列出来（只传列出的变量）。
-- **长期方案：OIDC 授权（2026-09-12 代码已就绪，等用户凭据）**。Token 一天一换太折腾，所以加了 `MaimemoOidcService`：OIDC Authorization Code 换 `access_token`(1 小时) + `refresh_token`(90 天，每次刷新自动续期)，**授权一次就不用再管**。要点：
-  - 官方要求（memodocs「开放平台」）：在 `open.maimemo.com/app` 创建**后端应用**；**主页必须是已上线可访问的 HTTPS 页面、且与回调地址同域名、"使用已备案域名更容易通过审核"**；**应用创建后不可修改**（名称不能含"墨墨/MaiMemo/官方"）；审核通过后才会批准 scope。→ **实际前置条件是 ICP 备案通过、`liche.cloud` 解析恢复**。
-  - 本项目固定回调接口：`/api/maimemo/oauth/callback`（`MaimemoOauthController`，**故意不加管理员口令**，因为它是浏览器直接跳转的），配好 `MAIMEMO_OIDC_CLIENT_ID` / `MAIMEMO_OIDC_CLIENT_SECRET` / `MAIMEMO_OIDC_REDIRECT_URI` 后重启容器即可。
-  - 面板「背单词」页有「长期授权」区块：生成授权链接 → 打开授权 → **把浏览器跳转后地址栏里那整条地址（或其中的 code）粘回来** → 完成授权。这条"手动粘回调"的路子是为了应对域名暂时打不开时也能完成授权（浏览器报错页里地址栏照样带 code）。
-  - Token 解析顺序：**OIDC（自动续期）→ 面板保存的 Token → 环境变量 `MAIMEMO_API_TOKEN`**；OIDC 刷新失败会自动回落到后面的 token 并在面板上写明原因；真拿不到数据才报"授权失效"。OIDC 的 access token 被提前作废（401）时会**强制刷新一次再重试**。
-  - 关键值都存在 `maimemo_setting` 表（`oidc_refresh_token`/`oidc_access_token`/`oidc_access_expires_at`/`oidc_subject`…），`POST /api/admin/maimemo/oidc/disconnect` 可一键断开。**client_secret 只在服务器 `.env`，违反官方规则会被停用应用。**
-  - 已验证（无凭据状态）：`/oidc` 状态接口、`authorize-url` 未配置时优雅报错、公开回调页渲染（缺 code / 带 error 两种情况）、原 Token 方式不受影响；**真正的授权换 token 要等用户拿到 client_id/secret 后实测**。
-- **QQ 里背单词（用户 2026-09-12 决定：暂不做，继续用墨墨 App）**。原因是实测限制：开放 API **没有提交复习结果的接口**（`study/submit_study_response`、`study/review` 均 404 `common_not_found`），也**不提供官方释义**（`interpretations`/`phrases`/`notes` 只返回你自己在云词本里建的内容）；唯一能反向影响墨墨的写操作是 `study/advance_study`（把词提前拉回今日任务）与 `study/add_words`。所以 QQ 侧的复习**只能存我们自己的库、不会算进墨墨 App 的进度**——用户选择不做。若以后要做，设计方向是：墨墨出词表 + QQ 三档自评（认识/模糊/忘记）+ 自建间隔重复调度 + 「忘记」的词用 `advance_study` 拉回墨墨。
-- **时长单位坑（2026-09-12 用户发现）**：墨墨 `get_study_progress` 的 `study_time` 是**毫秒**（实测 `1457786` ≈ 24.3 分钟），早期代码按"秒"除了 60，于是面板显示成 `24,296 分钟`（放大 1000 倍、还被 `toLocaleString` 加了千分位）。现在 `MaimemoClient.Progress.studyTimeMillis` 保留原始毫秒，后端给 `studyTimeText`（人话），前端统一用 `labels.js` 的 `fmtDuration`：**<1 秒说毫秒、<1 分钟说「24.3 秒」、<1 小时说「24 分 18 秒」、再往上「3 小时 5 分」**；`fmtMs` 也改成同一套规则（"模型与搜索"/"QQ 通道"的耗时列不再出现「24,296 毫秒」这种读不出来的数字）。**凡是毫秒/秒/分钟的字段，先拿真实响应算一遍再写单位。**
-- **用户隔离（2026-09-12 用户专门问过，逐条核过）**：定时任务/面试陪练/提醒/媒体工具全部按当前会话用户过滤（工具拿 `ToolStatusService.currentUserId()`，它由 `AgentOrchestrator` 在处理线程上绑定；定时任务的取消/启停/立即执行都先 `requireOwned`）。**墨墨是唯一的单账号接口**——Token 属于某一个人的墨墨账号，所以加了归属绑定：`maimemo.owner-user-id`（留空回落 `ALERT_QQ_OPENID`），非本人问背单词会被 `MaimemoTool` 明确拒绝；面板「背单词」页会显示"绑定的账号"。实测：`sim-outsider` 问进度得到拒答、本人得到真实数据。
-- **顽固单词（2026-09-12 用户真机用法驱动的修复）**：用户在 QQ 里自建了「墨墨顽固词推送」任务（每天 20:00），第一版跑出来说"拿不到顽固词"——原因是 `query_study_records` 只在**完整**列表里带 STICKING 标签（实测 833 条记录里有 35~42 个），而我们只拉了 `item-limit`(30) 条。现在 `MaimemoService.stickingInfo()` 单独用 `record-fetch-limit`(1000) 拉全量、筛出 STICKING，单独缓存 `sticking-cache-seconds`(600)；面板多了「顽固单词」卡片，聊天摘要里**最多列 60 个**。另外接口返回的 `next_study_date` 是 UTC ISO（`...T16:00:00.000Z` 其实就是本地次日零点），已统一换算成本地日期再展示。**释义仍由模型自己给**（API 不提供），摘要里明确要求"墨墨的数据照抄、中文意思你可以自己给，但不要声称是墨墨官方释义"。
-
-### 定时任务（到点真的去做事，2026-09-12 新增）
-
-- **用户提出「现在没有定时任务，只有定时提醒」**，所以补齐了这一块。区别写在提示词第 20 条里，模型必须分清：
-  - **定时提醒**（`parseReminder`）：到点**发一句话**，内容在创建时就定死了；
-  - **定时任务**（`createScheduledTask`）：到点**重新跑一遍完整 Agent**（可搜索、可读记忆、可调用工具）再把结果发回来，所以"每天早上把天气发我"必须走这条。
-- 入口：聊天自然语言（工具 `ScheduledTaskTool`：create/list/setEnabled/cancel/runNow）、`/schedules` 命令（列出/暂停/恢复/立即执行/删除，别名 定时任务/查看定时任务/我的定时任务）、面板「定时任务」页签（可新建、启停、立即执行、删除，并显示每个任务上次的结果）。
-- 结构：`schedule/` 包 —— `ScheduledTask`（表 `scheduled_task`：title/instruction/cron/enabled/nextRunAt/lastRunAt/status/lastResult/lastError/runCount）、`ScheduledTaskRepository`、`ScheduledTaskParseService`（LLM 把原话解析成 标题+执行指令+Cron，Cron 必填且必须是 6 段）、`ScheduledTaskService`（创建/列出/启停/删除/立即执行 + Quartz 调度）、`ScheduledTaskJob`（Quartz 入口）、`BuiltinScheduleService`（面板用的**系统内置任务清单**）。
-- **执行链路**：Quartz 到点 → `ScheduledTaskJob` → `ScheduledTaskService.execute` → `orchestrator.onInboundSync(InboundMessage.text(...))` 跑一遍 Agent → 结果推给用户（`ProactiveDelivery`）→ 写回 status/lastResult/nextRunAt/runCount。调度复用现有 Quartz（JDBC 持久化）+ 新任务组 `scheduled-tasks`，**不需要改表结构**；启动时 `ApplicationReadyEvent` 会把库里启用的任务重新同步进调度器（容器重建后自愈）。
-- **手动执行放后台线程**：`runNow` 不直接同步跑，因为它是从一次对话里被调用的，嵌套调用 `onInboundSync` 会打乱 MDC/userScope 与工具尾注上下文。
-- 面板「定时任务」页还列出**系统内置**在跑的东西：墨墨每日推送（每天 21:30、上次推送日期）、主动关怀复盘（每天 20:30、开启用户数）、数据库备份（`backup.cron`）、Quartz 提醒/定时任务两组的**真实下次触发时间**，以及告警检查/关怀扫描/背单词扫描/提醒恢复/记忆归档/生命周期/指标采样这些固定周期任务（Spring 不暴露 `@Scheduled` 的下次执行时间，所以这些如实标"—"，只显示频率）。
-- 配置：`SCHEDULED_ENABLED`、`SCHEDULED_MAX_PER_USER`（默认 10）、`SCHEDULED_RESULT_MAX_CHARS`；已加进 compose 的 environment 透传。
-
-### 运维告警推送（2026-09-12 新增）
-
-- `alert` 包里的 `AlertNotifier` 每 60 秒检查一次：QQ 网关是否断开、MySQL/Redis/Quartz 是否可用、磁盘可用空间是否低于阈值（默认 2GB）、堆内存是否超过阈值（默认 85%）。
-- 只在**问题新出现**或**问题恢复**时推送，同一问题在 `repeat-minutes`（默认 30 分钟）内不重复；启动后有 2 分钟宽限期，避免重启瞬间网关未连上就误报。
-- 推送目标由 `.env` 的 `ALERT_QQ_OPENID` 指定（**是 openid，不是 QQ 号**；管理员本人的 openid 是 `9C81741E2EFD75552F7FB3EB4B0D821C`，从 `user_profile` 里按最近活动确认），**只推给这一个人**，不会推给其它用户。
-- 手动验证：面板「QQ 通道」页的「发送测试告警」按钮，或 `POST /api/admin/actions/alerts/test`（需带口令头）。
-- 注意 QQ 官方机器人对**主动消息**有额度限制，因此告警是「尽力而为」：发送失败会记 WARN 日志（`运维告警推送失败（可能是 QQ 主动消息额度限制）`），面板里的状态永远是最可靠的来源。
-- 配置项：`ALERT_ENABLED`、`ALERT_QQ_OPENID`、`ALERT_REPEAT_MINUTES`、`ALERT_CHECK_INTERVAL_MS`、`ALERT_DISK_FREE_MIN_BYTES`、`ALERT_HEAP_USED_MAX_PERCENT`、`ALERT_STARTUP_GRACE_SECONDS`。
+- 独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，hash 路由），构建产物写进 `src/main/resources/static/`（已 gitignore），**改完必须 `npm run build`**（或走 Dockerfile 的 node 阶段）才会进 jar。**改视觉只动 `web/src/style.css`**（两套主题的 token 都在 `:root` 与 `:root[data-theme="dark"]` 里，组件里不要写死颜色）。
+- 8 个页签：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
+- **数字口径（别改回去）**：总览「工作记忆」只算**未归档**（`countByArchivedFalse`），已归档单独一行显示；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
+- **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
+- **验证工具**：`tools/ui-verify/verify_spa.py`（真实 Chromium 跑登录/各页签/聊天视图/手机端 390×844/黑白主题，`SPA_BASE` 指面板地址；`INSECURE = BASE.startswith("https")` 所以 https 下自动忽略证书名不匹配）。**注意它在 git 仓库之外、不受版本控制**，并且会随着前端行为变更失效：最近一次是 `remember` 改成默认不勾之后，脚本必须自己 `page.check("#remember")`，否则 localStorage 持久化断言和手机端（新建 context 只带 localStorage）都会失败。
 
 ## 4. CI/CD
 
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
-- 构建步骤用 `docker/build-push-action@v6` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（实测纯后端改动约 192 秒、含前端全量约 240 秒）。
-- 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f`。MySQL/Redis/SearXNG 及其卷不受影响。
-- 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥文件已删除，需要轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）。
-- **部署后自检**（2026-09-12 新增，同日加入域名校验）：部署完等应用就绪，然后检查「首页 200 / 前端 JS 资源 200 / 无口令 401 / 带口令 200 / 账号密码登录 200」(走 IP `https://$DEPLOY_HOST`，`curl -k`)，以及 **`https://liche.cloud/` 首页、前端资源、带口令接口三项（不加 `-k`，走真实证书链）——这三项仅在该域名有解析时执行**（备案期间暂停解析时自动跳过并打印提示，解析恢复后自动重新校验，避免误报红）；任一项不符即调用告警接口推一条 QQ 消息并把流水线置红。也就是说**改坏了、或者证书过期/域名解析挂了，都会被系统自己发现并通知你**。
+- 构建步骤用钉到 SHA 的 `docker/build-push-action` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（实测纯后端改动约 192 秒、含前端全量约 240 秒）。
+- 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f` → 按创建时间只保留最新两个 tag。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
+- 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥已删除，轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）、`DEPLOY_HOST_KEY`（服务器主机指纹，替代 `ssh-keyscan`，见坑 50）。
+- **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（备案期间自动跳过，通过后自动生效）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
 - **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
 - 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
 
@@ -238,7 +177,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 44. **面板前端的几个"看起来没事"的坑（2026-09-13 修）**：① `UsersPanel.loadChatPage` 在 `await` 之后无条件写 state——点用户 A 的请求慢、点 B 之后 A 的结果回来，**会把 A 的消息渲染在 B 的标题下**（串数据）；现在用请求序号 + `userId` 双重校验丢弃过期响应。② `remember` 默认 `true` = 默认把面板口令（服务器唯一凭据）明文写进 `localStorage`，改成默认不勾。③ 刷新间隔/页签名从 `localStorage` 读出来后**没有白名单**，被改成非数字时 `setInterval(fn, NaN)` 是**每毫秒一次的忙循环**、非法页签让整页只剩空壳。④ 移动端 `@media (max-width:720px)` 的 `thead{display:none}` 等规则**没有作用域**，把模型回复/记忆卡片里的 **Markdown 表格也拆成了卡片**——现在只作用于 `DataTable` 的 `.table-wrap`，`.md` 里的表格显式还原。⑤ `.bubble .text .md` 是死规则（Vue 把 class 合并到同一根元素，`.md` 就是 `.text`），正确的是 `.bubble .text.md`；写错则气泡里 Markdown 的 `white-space: pre-wrap` 没被还原，**行距撑成两倍**。
 45. **一个类里有两个构造器、又都没标 `@Autowired` = 应用起不来**（2026-09-13 我自己踩的，直接把线上打挂了两个部署周期）：Spring 会去找**无参构造**，报 `No default constructor found`，容器一直重启（面板 000、CI 沙箱自检全红）。**给 Service 加"带默认值的便捷构造器"是陷阱**——正确的做法是只留一个构造器，默认值用 `@Value("${...:默认值}")` 参数给。同类风险：`HealthController`/`UserService` 也有两个构造器，但它们标了 `@Autowired`，所以没事（`@Autowired` 标了才安全）。**本地 `mvn package` 通过 ≠ 能启动**：这次就是编译通过、部署后才知道——凡是动过构造器/Bean 装配，必须看**部署后**的日志或自检结果。
 46. **`BACKUP_CRON` 之类"想临时改一下 cron 来验证"的键，不写进 compose 的 `environment` 就改不动**（同第 36 条坑，我为此浪费了一轮：改了 `.env` 重启，备份根本没按新周期跑）。已把 `BACKUP_CRON`/`BACKUP_RETENTION_DAYS` 加进透传。**实测备份现在是好的**：把 `BACKUP_CRON` 临时设成 `0 */2 * * * ?`，重启后宿主机 `/opt/wechat-agent-infra/backup/<yyyymmdd>/user-*/state.json` 真的写出文件、日志有「每日记忆与资料备份完成: /app/backup/20260913 (3 个用户)」，验证完把 `.env` 里那行删掉（回到默认 03:00）。**冷启动实测 35~40 秒**（JPA + Quartz + TLS），所以部署后自检的就绪窗口给到了 4 分钟。
-47. **CI 自检的两处已改（2026-09-13）**：① 全部请求改用 `curl --resolve liche.cloud:443:$HOST`，**不再用 `-k`**——既走真实证书链校验（证书过期照样让流水线红），又不需要域名有公网解析（备案期间也能校验），因此不再把明文口令通过不校验证书的连接发出去；同时加了一条「编码路径（`/api/adm%69n/overview`）也应被拒 401」的断言，把坑 34 钉死。② `code()` 加 `--retry 3 --retry-connrefused --retry-delay 2`，就绪窗口从 2 分钟放宽到 4 分钟——**否则容器刚重建时"还在启动"会被误判成 000 满屏红**（已经误报过一次，白查了一轮）。
+47. **CI 自检的凭据不该走公网、而且不能用 `--resolve` 绕（2026-09-13 修，含一次我自己的误改）**：① 先说踩的坑——我一度把自检"统一改成 `curl --resolve liche.cloud:443:$HOST`"以便去掉 `-k`，结果**流水线恒红**：外部 `--resolve` 000、直连 IP 200。原因是**备案期间 A 记录是 DISABLED，阿里云按 SNI 拦未备案域名**，ClientHello 里带 `liche.cloud` 的连接会被直接掐断（从服务器本机发同样的 `--resolve` 请求是 200，所以只看服务器会误判）。**结论：备案期间不要用 `--resolve` 校验域名，它不通不等于服务有问题。** ② 正确做法（现状）：**不带口令的检查（首页/前端资源/无口令 401/编码路径 401）由 runner 走 IP 直连 + `-k`**（没有凭据可泄露）；**带口令的两项挪到服务器本机 `curl -sk https://127.0.0.1/...`**（流量不出主机，既不受 SNI 拦截、也不把口令交给公网链路）；域名证书校验只在 `getent hosts $NAME` 真解析到本机时才跑，备案通过自动生效。③ `code()` 加了 `--retry 3 --retry-connrefused --retry-delay 2`、就绪窗口 2→4 分钟，**否则容器刚重建时"还在启动"会被误判成 000 满屏红**（已经误报过一次，白查了一轮）。
+48. **`docker compose up -d <服务>` 会顺带重建"配置变了的依赖服务"**（2026-09-13 踩到）：CI 那一步只写 `up -d --no-build agent`，但 agent 有 `depends_on`，而我又刚把 mysql/redis/searxng 的 `image` 改成 digest —— 于是**三个数据服务被一起重建**（容器 `StartedAt` 全变了）。数据没丢（都在命名卷里），面板/搜索/QQ 全部正常起来，但这意味着：**以后任何一次改镜像版本，部署都会顺带重启 MySQL/Redis/SearXNG**。改 MySQL 镜像时**必须与数据卷的版本一致**（卷由 8.0.46 创建，换 8.0.27 会 InnoDB 起不来）。想彻底避免可以给那一步加 `--no-deps`，但那样全新机器上依赖不会被拉起，所以保持现状并记在这里。
+49. **镜像一律钉 digest，别用浮动 tag**（2026-09-13）：`searxng/searxng:latest` / `redis:7-alpine` 这种会跟着上游走，上游一次回归会在下次重建时静默生效、线上版本不可复现。现在 `docker-compose.remote.yml`（以及本机 `docker-compose.yml` 的 mysql）都写成 `镜像:tag@sha256:...`，钉的就是**当天实测在跑的那一层**（searxng / redis 7.4.11 / mysql 8.0.46）。换版本步骤：`docker pull <img>` → `docker image inspect <img> -f '{{index .RepoDigests 0}}'` → 改 compose 里的 digest → push（CI 会把 compose scp 上去，**改服务器上的那份会被覆盖**）。
+50. **CI 供应链（2026-09-13）**：三个 action **钉到 commit SHA**（注释里保留版本号；浮动 tag 被上游移动就能在**持有部署私钥的 runner** 上执行任意代码）；job 加 `permissions: contents: read`；**主机指纹由 Secret `DEPLOY_HOST_KEY` 固定**，不再 `ssh-keyscan`（keyscan 是"第一次见到就信任"，在途攻击者可在首次部署时冒充目标主机），并写了 `~/.ssh/config` 的 `StrictHostKeyChecking yes`（默认 `ask` 在非交互 shell 里会变成"提示并卡住"）。指纹值取自服务器自己的 `/etc/ssh/ssh_host_ed25519_key.pub`，并与本机 known_hosts 交叉核对一致（说明当初的 TOFU 没被中间人）。**仍未做**：部署公钥加 `from=…,restrict,command=…` 并把 `DEPLOY_USER` 降权——得先把 CI 里那串 `docker load/rmi/prune/rm` 收敛成服务端包装脚本，否则一加 `command=` 部署立刻全废。
 
 ## 6. Windows / PowerShell 环境注意
 
@@ -253,23 +195,16 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-12 21:30）
+## 7. 当前状态（2026-09-13 凌晨 · 一轮全量代码审查 + 修复之后）
 
-- 远程 `wechat-agent-java` 运行中，**应用自带 HTTPS 监听 `0.0.0.0:443`（标准端口），证书是 Let's Encrypt 签发给 `liche.cloud` 的有效证书**；`status=UP`、QQ 通道 `UP`。**容器已固定 `TZ=Asia/Shanghai`**（见坑 29）。
-- **面板入口：`https://liche.cloud/`（不带端口号、绿锁）**。Vue 单页应用，**8 个页签（总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志）**→ 未登录进 `/#/login`；账号 `rootlcw` + 密码（明文只在用户手上）。勾「记住账号密码」后凭据存浏览器本地。**支持黑白主题切换**（顶栏与登录卡片按钮，默认白色）。IP 地址 `https://120.25.170.92/` 仍能打开，但会提示证书名称不匹配。
-- 远程**只有 4 个容器**（nginx 网关与 VPN 全部拆除），全部配了 10m×3 的日志上限；只有 mysql/redis/searxng 三个数据卷（**严禁删除**）。
-- 公网暴露面：**22（SSH）、443（面板）**；8443 的安全组规则暂时保留（回滚备用，应用已不再监听），8080 / 51820 / 51821 均未开。内存占用平稳。
-- 数据：`user_profile` **3**（全是本人的 QQ 号）、`conversation_memory` **370**（本人为主）、`reminder_task` 14、`user_work_memory` 49、`user_core_memory` 17；`interview_round` 与 `maimemo_setting` 为 2026-09-12 新建表（验证后已清空/仅留推送设置）。微信与模拟器残留保持清空。
-- **面试陪练**已上线并端到端验证（自然语言进模式 → 逐轮评分入库 → 「结束陪练」出程序生成的复盘报告 → 模式自动清除），英语陪练已删除。
-- **墨墨背单词**已上线并端到端验证：面板「背单词」页读得到今日进度、Token 可在页面保存/清除（存 `maimemo_setting`，优先于环境变量）、`POST /maimemo/push/now` 实测推送到本人 QQ 成功（`sent=true`）、QQ 聊天里两种不同说法都会调用工具取真实数据；每日 21:30 自动推送已启用（日期记在 `last_push_date`）。Token 目前写在服务器 `.env` 的 `MAIMEMO_API_TOKEN`。
-- **墨墨 OIDC（长期免维护）代码已就绪，等用户凭据**：`MaimemoOidcService` + 公开回调 `/api/maimemo/oauth/callback` + 面板「长期授权」区块（生成授权链接 / 粘贴回调 / 断开）。已验证未配置状态下的全部路径（状态接口、优雅报错、回调页渲染、原 Token 方式不受影响）。**下一步（备案通过后由用户做）**：在 `open.maimemo.com/app` 创建后端应用（主页与回调都用 `https://liche.cloud`，回调填 `https://liche.cloud/api/maimemo/oauth/callback`，权限勾学习数据 + offline_access）→ 把 client_id/secret 写进服务器 `.env` 的 `MAIMEMO_OIDC_*` 并重建容器 → 面板点「生成授权链接」走一遍授权。
-- **QQ 里背单词：用户 2026-09-12 决定不做**（开放 API 不能提交复习结果、也不给官方释义，QQ 侧复习无法回写墨墨进度），继续用墨墨 App，本项目只做进度查询 + 每日推送。
-- **定时任务**已端到端验证（自然语言 → `createScheduledTask` → Cron 落库 → 定点准时跑一遍 Agent → 推到本人 QQ，`status=SUCCESS`）；面板列出 12 条内置任务；测试任务已清理，**但用户自建的「墨墨顽固词推送」（每晚 20:00，id=5）是他的数据，不要删**。
-- **用户隔离**已逐条核过并验证（定时任务/面试/提醒/媒体按会话用户过滤；墨墨加归属绑定，非本人被拒答）。
-- **面板数据口径**已对过数据库（总览「工作记忆」只算未归档 + 单独显示已归档数；`/metrics/history` 默认限量）。**面板 Markdown 渲染与自动刷新**已用真实浏览器验证（tick 会连当前用户详情一起重载；断言要看"最后一条气泡内容变了 + timeOrigin 未变"）。
-- CI 自验证（部署后查页面/鉴权/登录，失败推 QQ 并置红）；旧镜像只留两个；纯文档改动不触发构建；告警已实测推送成功。
-- **ICP 备案进行中**（用户 2026-09-12 提交）：材料与逐屏步骤见 `docs/ICP备案指南.md`（`.gitignore` 里有 `/docs/`，新增文档要 `git add -f`）。**备案期间** `A @ → 120.25.170.92` 置 **`DISABLE`**（RecordId `2098500125097357312`，恢复时改 `ENABLE`），面板暂用 `https://120.25.170.92/`。备案通过后：① A 记录恢复 `ENABLE`；② 服务器 `.env` 填 `SITE_ICP=<备案号>` 并重启（页脚显示备案号，已实现并验证）。
-- 微信 clawbot 通道已按用户要求删除；本地 Docker Desktop 未启动、本地 JAR 未运行。
+- **4 个容器全部 running**：`wechat-agent-mysql`(healthy) / `-redis` / `-searxng` / `-java`。应用跑 **`production` profile**（`ddl-auto=validate`，冷启动约 37 秒，零 ERROR），`status=UP`、QQ 网关 `UP`（心跳秒级新鲜）、MySQL/Redis/Quartz 全 `UP`、无告警。
+- **面板入口 `https://120.25.170.92/`**（ICP 备案期间 A 记录 DISABLED）：根路径 200、**编码路径 `/api/adm%69n/overview` = 401**（绕过洞已堵）。用域名会提示证书名称不匹配，而且**带 `liche.cloud` SNI 的连接会被阿里云掐断**（见第 5 节坑 48）。
+- 数据（2026-09-13 核对）：`user_profile` 3、`conversation_memory` 490、`user_core_memory` 18、`user_work_memory` 53（未归档）、`reminder_task` 14、`scheduled_task` 1、`maimemo_setting` 3、`memory_archive` 2。**用户自建任务 #5「墨墨顽固词推送」（每天 20:00 `0 0 20 * * ?`）是他自己的数据，不要删。**
+- **备份已落到宿主机**（`/opt/wechat-agent-infra/backup/<yyyymmdd>/user-*/state.json`），2026-09-13 实测真的写出文件；`stored-media` 与 `logs` 同样已持久化（原来三者都在容器可写层，每次部署即清空，见坑 38）。
+- **CI 自验证**：push `main` → 构建 → 部署 → 部署后自检（首页/前端资源/无口令 401/编码路径 401 由 runner 走 IP 直连，**带口令的两项在服务器本机 127.0.0.1 执行**，域名证书校验只在域名真解析到本机时才跑）。三个 action 已钉到 commit SHA，主机指纹由 Secret `DEPLOY_HOST_KEY` 固定（不再 `ssh-keyscan`）。旧镜像只保留两个 tag。
+- 本轮修掉的关键问题（细节见第 5 节 34~49 条）：编码路径绕过整站口令、公开回调同源 XSS、`/api/health` 泄露遥测、生产跑 `local` profile、备份/媒体/日志丢在容器层、截断多一字符撞列长、`touchDelivery` 覆盖并发字段、记忆提取窗口被工具记录占满、墨墨归属 fail-open、副作用工具默认可重试…… 前端在真实 Chromium 下 **`全部通过`**。
+- **明确未做（需要时再排）**：① 基础设施加固（MySQL `root/root`、Redis 无口令、容器 root + host 网络、无 `cap_drop`/`no-new-privileges`）；② 通道健壮性（被动失败**无条件**降级重发 → 可能收到两条；主动消息**没有配额账本** → 额度耗尽时静默丢；入站**没有按用户限流**）；③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER` 降为 docker 组成员）；④ SearXNG `secret_key` 出仓库；⑤ `isGatewayConnected` 的**自愈**（现在只做到"假在线能被发现并告警"，不会主动重连）；⑥ 墨墨回调的 IP 限流（等真要开 OIDC 时一起加）；⑦ `ScheduledTaskService.execute()` 仍用旧快照整行 save（"执行中点暂停 → 结果写回把 `enabled` 改回 true"这个场景还在）；⑧ 时区历史修正的迁移脚本未入库（SQL 与判定方法见坑 29）。
+- 本地：Docker Desktop 未启动、本地 JAR 未运行（本机 JAR 与远程容器**共用同一个 QQ AppID，不要同时启动**）。
 
 ## 8. 凭据索引
 
