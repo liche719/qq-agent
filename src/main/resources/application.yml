@@ -169,7 +169,10 @@ qq:
   enabled: ${QQ_ENABLED:false}
   app-id: ${QQ_APP_ID:}
   client-secret: ${QQ_CLIENT_SECRET:}
-  sandbox: ${QQ_SANDBOX:true}
+  # 默认 false（连正式环境）：只有**显式**配了 QQ_SANDBOX=true 才走沙箱。
+  # 原来默认 true，任何漏透传 QQ_SANDBOX 的部署都会静默连沙箱网关（普通用户的消息永远收不到，
+  # 额度/行为也与生产不一致）。生产 compose 里显式传 QQ_SANDBOX，以那份值为准。
+  sandbox: ${QQ_SANDBOX:false}
   group-enabled: ${QQ_GROUP_ENABLED:false}
   api-connect-timeout-seconds: ${QQ_API_CONNECT_TIMEOUT_SECONDS:5}
   api-read-timeout-seconds: ${QQ_API_READ_TIMEOUT_SECONDS:15}

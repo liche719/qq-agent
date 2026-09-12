@@ -18,6 +18,10 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    # 默认的 GITHUB_TOKEN 权限偏宽，而这个 job 只读代码、只往服务器推镜像与 compose：
+    # 显式收到只读，万一某个 step 被注入也拿不到仓库写权限。
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
