@@ -266,19 +266,32 @@ public class QqChannel implements WeChatChannel {
         log.info("QQ bot WebSocket connected");
     }
 
-    public boolean isGatewayConnected() {
-        WebSocket current = ws;
-        if (current == null || !running.get()) {
-            return false;
+    /** 连续多少个心跳周期收不到**任何**帧（含心跳 ACK）就判定为半开连接 */
+    private static final long SILENT_INTERVALS = 3;
+
+    /**
+     * 连接引用还在、心跳也发得出去，但已经很久没收到任何帧 —— 半开连接 / NAT 静默丢包的判据。
+     *
+     * <p>只看 {@code ws != null} 会"假在线"：socket 没关、写心跳也不报错，可对端早就不回话了
+     * （心跳 ACK 也算帧，会刷新时间戳）。这种情况 OkHttp 的 {@code onFailure}/{@code onClosed}
+     * **都不会回调**，所以既没人重连、也没人告警。
+     */
+    private boolean gatewayWentSilent() {
+        if (ws == null || !running.get()) {
+            return false;   // 压根没连接：交给 connectLoop 的退避重试
         }
         long last = lastGatewayEventAtMillis;
         if (last == 0) {
-            return true;
+            return false;   // 刚连上、还没收到第一帧
         }
-        // 只看 ws 引用会"假在线"：半开连接 / NAT 静默丢包时 socket 还在、心跳也发得出去，
-        // 但对端已经不回任何帧了（心跳 ACK 也算帧，会刷新这个时间戳）。面板和告警原来都显示正常，
-        // 实际消息已经收不到。超过 3 个心跳周期没收到任何帧就当掉线。
-        return System.currentTimeMillis() - last < Math.max(1, heartbeatIntervalMillis) * 3;
+        return System.currentTimeMillis() - last >= Math.max(1, heartbeatIntervalMillis) * SILENT_INTERVALS;
+    }
+
+    public boolean isGatewayConnected() {
+        if (ws == null || !running.get()) {
+            return false;
+        }
+        return !gatewayWentSilent();
     }
 
     public Map<String, Object> healthSnapshot() {
@@ -907,7 +920,30 @@ public class QqChannel implements WeChatChannel {
                     recordApiError(exception);
                 }
             }
+            // 每次心跳顺带体检：半开连接只有这里能发现（socket 的回调不会触发）
+            healSilentGateway();
         }, intervalMs / 2, intervalMs / 2, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 自我修复：连续 {@link #SILENT_INTERVALS} 个心跳周期收不到任何帧就主动关掉旧连接并重连一次。
+     *
+     * <p>为什么必须做：这种"半开"状态下 OkHttp 既不报错也不回调关闭，只靠告警的话机器人会
+     * **一直聋着**，等人看到告警再去重启。现在它能自己恢复（面板短暂显示异常 + 一条告警，
+     * 重连成功后告警会再推一条"已恢复"）。
+     */
+    private void healSilentGateway() {
+        if (!gatewayWentSilent() || reconnectPending.get()) {
+            return;
+        }
+        log.warn("QQ 网关连续 {} 个心跳周期没有任何帧，判定为半开连接，主动重连", SILENT_INTERVALS);
+        heartbeatFailureCount.incrementAndGet();
+        WebSocket stale = ws;
+        if (stale != null) {
+            // 先把旧 socket 关掉再重连：旧连接可能还在收消息，留着会变成"两条连接同时投递 → 重复回复"
+            try { stale.close(1000, "heartbeat timeout"); } catch (Exception ignored) { }
+        }
+        reconnect();
     }
 
     private void stopHeartbeat() {
