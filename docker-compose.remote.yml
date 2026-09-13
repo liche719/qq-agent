@@ -78,8 +78,8 @@ services:
       AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
       # 工具失败详情要不要拼进用户可见的回复（默认 false，只进日志）
       AGENT_TOOL_FAILURE_NOTICE_ENABLED: ${AGENT_TOOL_FAILURE_NOTICE_ENABLED:-false}
-      # 记忆归纳（每天一次把零碎记忆合并成高层记忆；不想要就设 false）
-      MEMORY_CONSOLIDATION_ENABLED: ${MEMORY_CONSOLIDATION_ENABLED:-true}
+      # 记忆归纳（每天一次把零碎记忆合并成高层记忆）；2026-09-14 首版实测不合格，**默认关闭**（详见 docs/memory-extraction.md）
+      MEMORY_CONSOLIDATION_ENABLED: ${MEMORY_CONSOLIDATION_ENABLED:-false}
       MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES: ${MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES:-15}
       MEMORY_CONSOLIDATION_CRON: ${MEMORY_CONSOLIDATION_CRON:-0 10 4 * * ?}
       QQ_ENABLED: ${QQ_ENABLED:-false}

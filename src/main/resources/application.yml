@@ -268,11 +268,13 @@ memory:
   extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:150}
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
-  # 记忆归纳（consolidation，2026-09-14 加）：每天把零碎的核心/中期记忆归纳成少量"更高层稳定记忆"。
-  # 只在活跃核心记忆 ≥ min-active-cores 时才动模型；被取代的旧条目只置 SUPERSEDED，不删行。
-  # 详见 docs/memory-extraction.md。
+  # 记忆归纳（consolidation，2026-09-14 加，**默认关闭**）：每天把零碎的核心/中期记忆归纳成少量"更高层稳定记忆"。
+  # 首次上线实测**不合格**，先关掉等方案定稿（详见 docs/memory-extraction.md"归纳这一版为什么被下线"）：
+  #   ① 模型在这个开放任务上会一直想：16384 的额度被思考吃干净（日志 reasoningTokens=16384），JSON 一个字没出；
+  #   ② 模型给的 replaces 常常对不上原文 → 走到"新增"，把原条目又抄了一遍，库里出现大量重复条目；
+  #   ③ 每跑一次都可能推倒重来，形成"合并→再拆开"的来回折腾（同一批记忆被反复 SUPERSEDED / 重新 ACTIVE）。
   consolidation:
-    enabled: ${MEMORY_CONSOLIDATION_ENABLED:true}
+    enabled: ${MEMORY_CONSOLIDATION_ENABLED:false}
     min-active-cores: ${MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES:15}
     max-output: ${MEMORY_CONSOLIDATION_MAX_OUTPUT:8}
     max-input-cores: ${MEMORY_CONSOLIDATION_MAX_INPUT_CORES:60}
