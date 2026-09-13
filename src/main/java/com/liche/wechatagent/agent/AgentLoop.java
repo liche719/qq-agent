@@ -1,6 +1,7 @@
 package com.liche.wechatagent.agent;
 
 import com.liche.wechatagent.tool.ToolRegistry;
+import com.liche.wechatagent.tool.ToolSetTrimmer;
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.tool.ToolExecutionOutcome;
 import com.liche.wechatagent.tool.ToolExecutionClass;
@@ -9,6 +10,7 @@ import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.config.AgentPolicyProperties;
 import com.liche.wechatagent.config.LlmEscalation;
+import com.liche.wechatagent.config.LlmScenario;
 import com.liche.wechatagent.memory.ConversationMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -83,6 +85,10 @@ public class AgentLoop {
     private final Pattern currentTimePattern;
     private final Map<String, String> toolDisplayNames;
     private final ConversationMemoryService conversationMemoryService;
+    /** 对话省电档决策（纯规则） */
+    private final DialogModeDecider dialogModeDecider;
+    /** 按用户状态裁剪工具集 */
+    private final ToolSetTrimmer toolSetTrimmer;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentLoop(StreamingChatModel streamingChatModel,
@@ -102,7 +108,9 @@ public class AgentLoop {
                      @Value("${agent.stream-chunk-delay-ms:120}") long streamChunkDelayMillis,
                      @Value("${media.storage.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String imageUserAgent,
                      AgentPolicyProperties policyProperties,
-                     ConversationMemoryService conversationMemoryService) {
+                     ConversationMemoryService conversationMemoryService,
+                     DialogModeDecider dialogModeDecider,
+                     ToolSetTrimmer toolSetTrimmer) {
         this.streamingChatModel = streamingChatModel;
         this.toolRegistry = toolRegistry;
         this.toolStatusService = toolStatusService;
@@ -125,6 +133,8 @@ public class AgentLoop {
         this.toolDisplayNames = configuredDisplayNames == null
                 ? AgentPolicyProperties.defaultToolDisplayNames() : Map.copyOf(configuredDisplayNames);
         this.conversationMemoryService = conversationMemoryService;
+        this.dialogModeDecider = dialogModeDecider;
+        this.toolSetTrimmer = toolSetTrimmer;
         this.imageHttpClient = new okhttp3.OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(bounded(imageConnectTimeoutSeconds, 1, 120, 8)))
                 .readTimeout(Duration.ofSeconds(bounded(imageReadTimeoutSeconds, 1, 300, 20)))
@@ -145,7 +155,8 @@ public class AgentLoop {
                 maxImageBytes, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
-                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties(), null);
+                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties(), null,
+                null, null);
     }
 
     AgentLoop(StreamingChatModel streamingChatModel,
@@ -166,7 +177,7 @@ public class AgentLoop {
                 maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxToolRounds, streamTimeoutSeconds,
                 maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
-                streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties(), null);
+                streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties(), null, null, null);
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -175,6 +186,14 @@ public class AgentLoop {
         // 工作线程是复用的：先清掉上一轮可能残留的升档状态（thinkDeeper）
         LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
+        // 这一轮用哪档：明确是寒暄/确认类的短句才走省电档（纯规则，见 DialogModeDecider）
+        boolean hasAttachments = (images != null && !images.isEmpty()) || (documents != null && !documents.isEmpty());
+        DialogModeDecider.Decision dialogMode = dialogModeDecider == null
+                ? new DialogModeDecider.Decision(false, "未配置")
+                : dialogModeDecider.decide(userText, hasAttachments);
+        LlmScenario.bind(dialogMode.fast() ? LlmScenario.DIALOG_FAST : LlmScenario.DIALOG);
+        log.info("对话档位 user={} mode={} reason={}", userId, dialogMode.fast() ? "fast" : "normal",
+                dialogMode.reason());
         try {
             List<ChatMessage> messages = buildConversationMessages(persona, coreSection, workSection,
                     history, userText, images, documents);
@@ -187,6 +206,7 @@ public class AgentLoop {
             }
             return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink);
         } finally {
+            LlmScenario.unbind();
             LlmEscalation.clear();
             toolStatusService.unbind();
         }
@@ -212,7 +232,7 @@ public class AgentLoop {
     private String runToolLoop(List<ChatMessage> messages, String userId, Set<String> successfulTools,
                                Map<String, ToolExecutionOutcome> failedTools,
                                Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
-        List<ToolSpecification> specifications = toolRegistry.specifications();
+        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId);
         try {
             for (int round = 0; round < effectiveMaxRounds(); round++) {
                 String roundText = streamOneRound(messages, specifications, userId, successfulTools, failedTools, toolResults);
@@ -227,6 +247,39 @@ public class AgentLoop {
             log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
         }
         return fallbackReply(failedTools, successfulTools, toolResults, sink);
+    }
+
+    /** 按用户状态裁剪工具集：没有备考计划、近期也没聊考研的用户，不必背着 18 个考试工具 schema */
+    private List<ToolSpecification> trimmedSpecifications(List<ChatMessage> messages, String userId) {
+        List<ToolSpecification> all = toolRegistry.specifications();
+        if (toolSetTrimmer == null) {
+            return all;
+        }
+        List<String> userTexts = new ArrayList<>();
+        for (ChatMessage message : messages) {
+            String text = userMessageText(message);
+            if (text != null && !text.isBlank()) {
+                userTexts.add(text);
+            }
+        }
+        int keep = Math.min(userTexts.size(), toolSetTrimmer.historyTurnsToScan() + 1);
+        List<String> recent = keep <= 0 ? List.of() : userTexts.subList(userTexts.size() - keep, userTexts.size());
+        return toolSetTrimmer.trim(all, userId, recent.isEmpty() ? "" : recent.get(recent.size() - 1), recent)
+                .specifications();
+    }
+
+    /** 取一条 user 消息里的纯文本（带图片/附件时也不能炸） */
+    private String userMessageText(ChatMessage message) {
+        if (!(message instanceof UserMessage userMessage)) {
+            return null;
+        }
+        StringBuilder text = new StringBuilder();
+        for (Content content : userMessage.contents()) {
+            if (content instanceof TextContent textContent) {
+                text.append(textContent.text()).append(' ');
+            }
+        }
+        return text.toString();
     }
 
     /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */

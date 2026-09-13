@@ -35,7 +35,7 @@ public class LlmScenarioSettings {
      * 省下的 token 可以忽略）；后者是长期记忆的摘要，质量优先（第一优先级是"记忆不丢失"）。
      */
     private static final Set<LlmScenario> DEFAULT_OFF = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE);
+            LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE, LlmScenario.DIALOG_FAST);
     /** 显式打开思考的场景：升档后要"确保开着"，不依赖上游默认 */
     private static final Set<LlmScenario> DEFAULT_ON = EnumSet.of(LlmScenario.DIALOG_DEEP);
     private static final String DEFAULT_OFF_BODY = "{\"thinking\":{\"type\":\"disabled\"}}";

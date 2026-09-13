@@ -19,6 +19,8 @@ public enum LlmScenario {
     DIALOG,
     /** 对话回复 + 模型自己申请了升档（thinkDeeper）：深度思考 + 更多工具轮 + 更长超时 */
     DIALOG_DEEP,
+    /** 对话回复的省电档：明确是寒暄/确认类的短句，关掉思考（见 DialogModeDecider） */
+    DIALOG_FAST,
     /** 记忆提取：只要结构化 JSON 正确，不需要思考 */
     EXTRACT,
     /** 提醒解析 */
@@ -29,6 +31,23 @@ public enum LlmScenario {
     ARCHIVE;
 
     private static final ThreadLocal<LlmScenario> CURRENT = new ThreadLocal<>();
+    private static final ThreadLocal<LlmScenario> PREVIOUS = new ThreadLocal<>();
+
+    /** 把"整轮"绑定成某个档位（AgentLoop 一次任务用一次，配合 {@link #unbind()}） */
+    public static void bind(LlmScenario scenario) {
+        PREVIOUS.set(CURRENT.get());
+        CURRENT.set(scenario);
+    }
+
+    public static void unbind() {
+        LlmScenario previous = PREVIOUS.get();
+        PREVIOUS.remove();
+        if (previous == null) {
+            CURRENT.remove();
+        } else {
+            CURRENT.set(previous);
+        }
+    }
 
     public static LlmScenario current() {
         LlmScenario scenario = CURRENT.get();

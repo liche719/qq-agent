@@ -31,6 +31,10 @@ public final class LlmEscalation {
 
     /** 升档后的有效档位：对话档 → 深度对话档（指标里单独一个场景，方便看效果） */
     public static LlmScenario effective(LlmScenario base) {
-        return active() && base == LlmScenario.DIALOG ? LlmScenario.DIALOG_DEEP : base;
+        if (!active()) {
+            return base;
+        }
+        // 省电档也要能被升档盖掉：否则"闲聊档"下模型申请了升档却还是关着思考
+        return base == LlmScenario.DIALOG || base == LlmScenario.DIALOG_FAST ? LlmScenario.DIALOG_DEEP : base;
     }
 }

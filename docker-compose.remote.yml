@@ -68,6 +68,10 @@ services:
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
       THINKING_DAILY_LIMIT_PER_USER: ${THINKING_DAILY_LIMIT_PER_USER:-5}
+      # 对话省电档与工具集裁剪（都可一键关掉）
+      LLM_DIALOG_FAST_ENABLED: ${LLM_DIALOG_FAST_ENABLED:-true}
+      AGENT_TOOL_TRIM_ENABLED: ${AGENT_TOOL_TRIM_ENABLED:-true}
+      AGENT_TOOL_TRIM_HISTORY_TURNS: ${AGENT_TOOL_TRIM_HISTORY_TURNS:-4}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。
