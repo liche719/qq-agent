@@ -52,8 +52,7 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 - 凭据来源：项目根目录 `.env`（已 gitignore）。Spring 用 `spring.config.import: optional:file:.env[.properties]` 加载。
 - 不再需要 `--spring.quartz.jdbc.initialize-schema=never` 参数，已固化在 `application-local.yml`。
 - 访问：运维面板 http://127.0.0.1:8080/ （Vue 单页应用；本机 `ADMIN_REQUIRE_KEY=false` 时回环免口令，直接进 `/#/dashboard`）
-- **前端是独立工程**：`cd web && npm install && npm run dev`（Vite 5173，接口代理到 8080）最方便；要进 jar 就先 `npm run build`，否则 `mvn package` 出来的包不带界面。
-- 管理接口默认不要求密钥（`ADMIN_REQUIRE_KEY=false`，回环地址免密钥）；`production` profile 才强制密钥。
+- **前端是独立工程**：`cd web && npm install && npm run dev`（Vite 5173，代理到 8080）；要进 jar 先 `npm run build`，否则包里不带界面。管理接口默认 `ADMIN_REQUIRE_KEY=false`（回环免密钥），`production` 才强制。
 - 关闭占用 8080 的进程：`Get-NetTCPConnection -LocalPort 8080` → `Stop-Process -Id <PID>`
 - 重要：本机 JAR 与远程容器使用同一个 QQ AppID，**不要同时运行**，否则双开抢网关。
 
@@ -204,7 +203,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 58. **备份改版：每天一个 zip + 媒体只存一份（2026-09-13，用户嫌占空间）**：原来 `backup/<yyyyMMdd>/user-<hash>/{state.json, media/*.bin}`——**媒体本体每天复制一份、保留 30 天**（存过 100MB 图就是 3GB，压缩也救不了，JPEG/PDF 本来就压过了）。现在媒体按 sha256 存**共享**的 `backup/media/<sha256>.bin`（内容一样就复用、artifact 标 `reused`），当天目录打完 `backup/<yyyyMMdd>.zip` 再删；遗忘清理改成"包里取 `state.json` → 改 → 重写整个包"；GC 只在真有备份过期时清掉没人引用的 blob。**实测 568K → 152K**，打包/去重/遗忘清理/GC 四件事全部端到端验过。**用 zip 不用 tar.gz 是因为 Java 标准库没有 tar。完整设计、恢复步骤、以及"库里 22 条媒体记录但磁盘上 0 个媒体文件"（本地跑时存的，行跟着库搬、文件没搬）这件事见 `docs/backup.md`。**
 
-59. **媒体记忆三件套：一次任务最多喂 3 张图 + 让模型把"看到了什么"写回库（2026-09-13 做，用户问"怎么搜到我存过的图"）**：① `readStoredMedia` 原来无上限，任务里连读 5 张手机拍的课表就是 ~9MB 上下文 → 现在 `media.context.max-images-per-task`（默认 3，`MediaToolContextService.reserveImageRead()` 按任务计数）超限**拒读**并让用户"点名下一张"（日志 `本轮读图已达上限`，计数随"重新激活"延续、绕不开）；② 检索靠 `stored_media.searchableText()`（文件名+原名+summary+importanceReason+extractedText），所以新增工具 `noteStoredMediaContent(mediaId, hint)` 把"图里是什么"写进 `extracted_text`（前缀 `【视觉识别】`、替换式写入、**故意不动 `updated_at`** 以免打乱列表排序）——**关键：视觉理解只在模型脑子里，工具拿不到，要么模型自己记、要么服务端再花一次视觉调用**；存图时也要求 `summary` 带可检索关键词（0 成本）。**设计与实测方法见 `docs/media-memory.md`。**
+59. **媒体记忆三件套：一次任务最多读 10 个文件 + 让模型把"看到了什么"写回库（2026-09-13 做，用户问"怎么搜到我存过的图"）**：① `readStoredMedia` 原来无上限，任务里连读十几份资料就把上下文撑爆（图片最狠：5 张手机课表 ~9MB）→ 现在 `media.context.max-files-per-task`（默认 10，`MediaToolContextService.reserveFileRead(mediaId)` **按 mediaId 去重计数**；**文本文件也算额度**——正文同样进上下文，用户明确要求按"文件"而不是"图片"口径）超限**拒读**并让用户"点名要哪几个"（日志 `本轮读取文件已达上限`，计数随"重新激活"延续、绕不开）；② 检索靠 `stored_media.searchableText()`（文件名+原名+summary+importanceReason+extractedText），所以新增工具 `noteStoredMediaContent(mediaId, hint)` 把"图里是什么"写进 `extracted_text`（前缀 `【视觉识别】`、替换式写入、**故意不动 `updated_at`** 以免打乱列表排序）——**关键：视觉理解只在模型脑子里，工具拿不到，要么模型自己记、要么服务端再花一次视觉调用**；存图时也要求 `summary` 带可检索关键词（0 成本）。**设计与实测方法见 `docs/media-memory.md`。**
 
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
@@ -212,10 +211,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - `apply_patch` 的 `.bat` 包装器会丢换行，多行补丁不可靠：可改为用 `[IO.File]::WriteAllText` + `String.Replace` 直接改写，或直接调用 `codex.exe --codex-run-as-apply-patch $patch`（路径见 `Get-Command apply_patch` 指向的 .bat）。
 - 写文件统一用 LF 换行，避免 git 警告与补丁解析失败。
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
-- **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里装了 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）。后果与绕法：
-  - `schannel` 后端在本 harness 里会报 `SEC_E_NO_CREDENTIALS (0x8009030e)`（curl.exe 与 git 都一样）；`OpenSSL` 后端又不认 SteamTools 根证书（`unable to get local issuer certificate`）。
-  - 已在**仓库本地**（`.git/config`，未入库、未改全局）设置：`http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（该文件由 Windows 证书库导出，150 张根证书）。删掉它会再次无法 push。
-  - `git push` 还需凭据管理器，而沙箱若禁止创建命名管道会报 `couldn't create signal pipe, Win32 error 5`；放宽文件策略后即可通过。SSH 方式走不通（本机两个密钥都没注册到 GitHub，且 22 端口被墙，443 端口同样 `Permission denied (publickey)`）。
+- **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
 ## 7. 当前状态（2026-09-13 傍晚 · 考研模块第二批之后）
@@ -226,7 +222,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 其余数据（09-13 晚）：`user_profile` 3、`conversation_memory` 514、`user_core_memory` 19、`user_work_memory` 32、`reminder_task` 14、`scheduled_task` 2、`stored_media` 5、`memory_archive` 2。**用户自建任务 #5「墨墨顽固词推送」（20:00）与 #6「顽固词抽查」（08:00）都是他自己的数据，不要删。** 墨墨 token 走**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（09-13 傍晚实测有效，当日 0/250）——**有效期约一天，随时可能过期**。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip`（每天一个包）+ 共享的 `backup/media/<sha256>.bin`，09-13 晚实测 148K；`stored-media`、`logs` 同样已持久化（原来都在容器可写层，见坑 38；改版细节见 `docs/backup.md`）。
 - **CI 自验证**：push `main` → 构建 → 部署 → 部署后自检（首页/前端资源/无口令 401/编码路径 401 走 IP 直连；**带口令的两项在服务器本机 127.0.0.1 执行**）。action 钉 SHA、主机指纹靠 Secret `DEPLOY_HOST_KEY`、旧镜像只留两个 tag。**09-13 傍晚 GitHub 自己抽风过一轮（坑 56）。**
-- **本轮（09-13）已完成**：① 基础设施加固（坑 53）；② 通道健壮性（坑 54 → `docs/channel-robustness.md`）；⑤ 网关半开自愈（坑 51）；⑥ 定时任务写回不再整行 save（坑 55）；⑦ 考研模块**两批**（→ `docs/exam-module.md`）；⑧ 面板不再闪屏、表单不被刷新冲掉（坑 57）；⑨ 备份改成每天一个 zip + 媒体共享一份（坑 58 → `docs/backup.md`）；⑩ 媒体记忆：每任务最多喂 3 张图 + 内容写回库（坑 59 → `docs/media-memory.md`）。
+- **本轮（09-13）已完成**：① 基础设施加固（坑 53）；② 通道健壮性（坑 54 → `docs/channel-robustness.md`）；⑤ 网关半开自愈（坑 51）；⑥ 定时任务写回不再整行 save（坑 55）；⑦ 考研模块**两批**（→ `docs/exam-module.md`）；⑧ 面板不再闪屏、表单不被刷新冲掉（坑 57）；⑨ 备份改成每天一个 zip + 媒体共享一份（坑 58 → `docs/backup.md`）；⑩ 媒体记忆：每任务最多读 10 个文件（图片也算），内容写回库可搜（坑 59 → `docs/media-memory.md`）。
 - **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；④ SearXNG `secret_key` 出仓库；⑥ 墨墨回调 IP 限流；⑦ 时区修正脚本未入库（坑 29）；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）；⑨ `tools/ui-verify/` 挪进仓库。
 - 本地：Docker Desktop 未启动、本地 JAR 未运行（与远程**共用同一个 QQ AppID，不要同时启动**）。
 
@@ -240,14 +236,6 @@ Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格�
 
 ## 10. 工作区结构（约 59MB）
 
-```
-C:\Users\33721\Desktop\wechat-agent\
-├─ AGENTS.md            工作区记忆入口
-├─ DS-HARNESS-PROMPT.md 用户给 AI 的初始提示词
-├─ tools\ui-verify\     面板端到端验证工具（脚本 + README + 截图；看 README.md）
-├─ .git-ca\             导出的系统根证书，**git push 依赖它，不能删**
-└─ wechat-agent-java\   git 仓库（源码、配置、AGENTS.md 完整记忆；web\node_modules 约 53MB，可 npm install 重建）
-```
-
-- 整理时删掉的都是可重建物（`target/`、本地 `logs/`、`research/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，远程服务器各有独立一份，本地调试完顺手删。
+- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `tools\ui-verify\`（面板验证工具，**不在仓库里**）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；`web\node_modules` 约 53MB，可重建）。
+- 整理时删掉的都是可重建物（`target/`、本地 `logs/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份，本地调试完顺手删。
 
