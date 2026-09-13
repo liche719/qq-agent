@@ -189,7 +189,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 ```
 
 省下的是每轮 prompt 里 18 段较长 schema（考试组描述普遍 60~120 字），具体 token 数**没有直接测到**
-（流式响应不带 usage，这也是"下一步"里想开 `stream_options.include_usage` 的原因）。
+（那会儿流式响应记不到 token；2026-09-14 已修，见 §14）。
 
 ## 10. 怎么验证
 
@@ -219,8 +219,9 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 
 ## 12. 下一步候选（按收益排序）
 
-1. **流式开 `stream_options.include_usage`**：现在对话/省电档的 token 记 0（用字符数近似），
-   "工具裁剪到底省了多少 token"这种问题**没有数字能回答**。
+1. ~~**流式开 `stream_options.include_usage`**：现在对话/省电档的 token 记 0（用字符数近似），
+   "工具裁剪到底省了多少 token"这种问题**没有数字能回答**。~~
+   **已做**（§14）：实测流式响应**本来就带 usage**，不用加任何请求字段，客户端把 usage 记下来即可。
 2. 工具裁剪扩到第二组（媒体工具：没有已存文件、没带附件、消息里也不提文件/图/课表）。
 3. 搜索深度（固定 3 篇正文 × 1200 字）与记忆召回预算（core 16/2200、work 15/1500、context 40 轮/12000）按问题类型动态调。
 4. ~~`dialog_deep`（升档）实测有过 28.5 秒一轮——要不要给它一个"超过 N 秒就先发一句缓冲"的体验设计。~~
@@ -273,3 +274,28 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 
 另外核对了：镜像 tag = `f60e009`；容器 env 里 `MEDIA_CONTEXT_MAX_FILES_PER_TASK=10`、`AGENT_DEEP_NOTICE_ENABLED=true`；
 前端 bundle 与本地构建产物 **sha256 完全一致**（`f4a6301d…`，也就是「省电档」那个标签确实进了线上）；0 条 ERROR；面板 200 / 编码路径 401；`reminder_task` 18、`stored_media` 6、`exam_plan` 1、`scheduled_task` 2、机主 `last_channel=qq`（测试数据已清、通道已复位）。
+
+## 14. 流式调用的 token 记账（2026-09-14 修）
+
+**发现的经过**：复查时有人指出「面板『按场景』表格里 `dialog` / `dialog_fast` / `dialog_deep` 三行的 token 恒为 0，
+而这三行恰恰是用来判断『升档值不值』的」。原来的注释写的是"流式响应没有 usage（除非开 `stream_options.include_usage`）"。
+
+**直接问接口**（`probe-stream-usage.js`，三次流式请求，一次不加任何字段）：
+
+```
+流式（现状：不带 usage）        usageChunks=1 prompt=38 completion=82 reasoning=56
+流式 + include_usage           usageChunks=1 prompt=38 completion=73 reasoning=44
+流式 + include_usage + 关思考   usageChunks=1 prompt=12 completion=27 reasoning=?
+```
+
+结论：**这个接口的流式响应本来就带 `usage`**（每个流都会推一个带 usage 的 chunk，`completion_tokens_details.reasoning_tokens`
+也在里面；关思考时该字段缺省）。所以问题从来不在服务端，而是**客户端没有去读**——原来的假设是错的。
+
+**修法**（`OpenAiCompatStreamingChatModel`）：读流时顺手取 `usage`（取最后一个非空值），
+结束时按场景写进 `RuntimeMetrics`，日志行也补上三个 token 数：
+
+```
+LLM 流式调用 scenario=dialog_fast ms=677 temperature=0.7 thinking=off maxTokens=0 正文=8字 思考=0字 promptTokens=? completionTokens=? reasoningTokens=0
+```
+
+拿不到 usage 时仍然是 0，`正文=/思考=` 的字符数继续兜底，**行为不回退**。

@@ -81,6 +81,9 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         JsonNode extraBody = scenarioSettings == null ? null : scenarioSettings.extraBody(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         int reasoningChars = 0;
+        // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
+        // 所以对话这几档的 token 也能照实记账，面板「按场景」表格不再恒为 0。取最后一个非空 usage。
+        int[] tokens = new int[3]; // prompt / completion / reasoning
         try {
             Request req = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
@@ -93,7 +96,8 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .build();
             try (Response response = client.newCall(req).execute()) {
                 if (!response.isSuccessful() || response.body() == null) {
-                    record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0);
+                    record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0,
+                            tokens);
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
                     return;
                 }
@@ -118,6 +122,13 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                             break;
                         }
                         JsonNode node = objectMapper.readTree(data);
+                        JsonNode usageNode = node.path("usage");
+                        if (usageNode.isObject() && !usageNode.isEmpty()) {
+                            tokens[0] = usageNode.path("prompt_tokens").asInt(tokens[0]);
+                            tokens[1] = usageNode.path("completion_tokens").asInt(tokens[1]);
+                            tokens[2] = usageNode.path("completion_tokens_details").path("reasoning_tokens")
+                                    .asInt(tokens[2]);
+                        }
                         JsonNode delta = node.path("choices").path(0).path("delta");
                         // 这个模型默认就带思考：思考走 delta.reasoning_content（不推给用户，只用来记账）
                         JsonNode reasoningDelta = delta.path("reasoning_content");
@@ -172,10 +183,11 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                         ? AiMessage.from(fullText)
                         : (fullText.isEmpty() ? AiMessage.from(toolRequests) : AiMessage.from(fullText, toolRequests));
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage).build());
-                record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length());
+                record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
+                        tokens);
             }
         } catch (Exception e) {
-            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0);
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0, tokens);
             handler.onError(e);
         }
     }
@@ -190,16 +202,18 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
-                        double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars) {
+                        double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars,
+                        int[] tokens) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
-            // 流式响应没有 usage（除非开 stream_options），所以 token 记 0，思考量用字符数代替
-            metrics.recordLlm(true, ok, millis, error, scenario.label(), 0, 0, 0);
+            // usage 直接来自流式响应（见 chat 里的实测说明）；拿不到时是 0，日志里另有字符数兜底
+            metrics.recordLlm(true, ok, millis, error, scenario.label(), tokens[0], tokens[1], tokens[2]);
         }
         if (ok) {
-            log.info("LLM 流式调用 scenario={} ms={} temperature={} thinking={} maxTokens={} 正文={}字 思考={}字",
+            log.info("LLM 流式调用 scenario={} ms={} temperature={} thinking={} maxTokens={} 正文={}字 思考={}字"
+                            + " promptTokens={} completionTokens={} reasoningTokens={}",
                     scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), maxTokens,
-                    contentChars, reasoningChars);
+                    contentChars, reasoningChars, tokens[0], tokens[1], tokens[2]);
         } else {
             log.warn("LLM 流式调用失败 scenario={} ms={} thinking={} error={}", scenario.label(), millis,
                     thinkingLabel(scenario), error);
