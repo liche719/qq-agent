@@ -43,8 +43,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
-/** 每日备份用户记忆、提醒和已保存资料，并以校验和记录可恢复的媒体副本。 */
+/**
+ * 每日备份用户记忆、提醒和已保存资料。
+ *
+ * <p>磁盘上的样子：`backup/<yyyyMMdd>.zip` 每天一个压缩包，里面是 `user-<hash>/state.json`（明文 JSON）；
+ * 媒体本体按 sha256 存在**共享**的 `backup/media/<sha256>.bin`，全网只有一份、不再每天复制一遍
+ * （这是唯一会长大的部分，所以按内容寻址去重，并在清理旧备份时回收没人引用的）。
+ */
 @Component
 public class MemoryBackupJob {
 
@@ -200,10 +209,37 @@ public class MemoryBackupJob {
                 backupUser(dayDir, profile.getUserId());
                 userCount++;
             }
-            log.info("每日记忆与资料备份完成: {} ({} 个用户)", dayDir, userCount);
+            // 打完包就把目录删掉：每天只留一个压缩包（媒体本体在 backup/media 里共享一份）
+            Path archive = checkedChild(backupDir, LocalDate.now(zone).format(DAY) + ".zip");
+            zipDay(dayDir, archive);
+            deleteRecursively(dayDir);
+            log.info("每日记忆与资料备份完成: {} ({} 个用户)", archive, userCount);
             prune();
         } catch (Exception exception) {
             log.error("每日记忆备份失败", exception);
+        }
+    }
+
+    /** 当天目录打成压缩包；里面就是 user-&lt;hash&gt;/state.json 明文，解压即可读 */
+    private void zipDay(Path dayDir, Path archive) throws IOException {
+        if (!Files.isDirectory(dayDir)) {
+            return;
+        }
+        Files.createDirectories(archive.getParent());
+        Path temporary = Files.createTempFile(backupDir, ".backup-", ".zip.tmp");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(temporary));
+                 Stream<Path> walk = Files.walk(dayDir)) {
+                for (Path file : walk.filter(Files::isRegularFile).sorted().toList()) {
+                    String name = dayDir.relativize(file).toString().replace('\\', '/');
+                    out.putNextEntry(new ZipEntry(name));
+                    Files.copy(file, out);
+                    out.closeEntry();
+                }
+            }
+            move(temporary, archive, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 
@@ -215,26 +251,23 @@ public class MemoryBackupJob {
         if (!Files.isDirectory(backupDir)) {
             return new PurgeResult(0, true);
         }
-        List<Path> dayDirectories = backupDayDirectories(userId, layer, targetId);
-        if (dayDirectories == null) {
+        List<Path> archives = backupDayArchives();
+        if (archives == null) {
             return new PurgeResult(0, false);
         }
+        String entryName = "user-" + shortHash(userId) + "/state.json";
         int updated = 0;
         boolean complete = true;
-        for (Path dayDirectory : dayDirectories) {
-            Path userDirectory = checkedChild(dayDirectory, "user-" + shortHash(userId));
-            Path stateFile = checkedChild(userDirectory, "state.json");
-            if (!Files.isRegularFile(stateFile)) {
-                continue;
-            }
+        for (Path archive : archives) {
             try {
-                if (redactBackupState(stateFile, userId, layer, targetId)) {
+                if (editStateInArchive(archive, entryName,
+                        stateFile -> redactBackupState(stateFile, userId, layer, targetId))) {
                     updated++;
                 }
             } catch (Exception exception) {
                 complete = false;
                 log.warn("清理历史备份失败 userHash={} layer={} targetId={} day={} reason={}", shortHash(userId), layer,
-                        targetId, dayDirectory.getFileName(), exception.getClass().getSimpleName());
+                        targetId, archive.getFileName(), exception.getClass().getSimpleName());
             }
         }
         return new PurgeResult(updated, complete);
@@ -251,40 +284,103 @@ public class MemoryBackupJob {
         if (!Files.isDirectory(backupDir)) {
             return new PurgeResult(0, true);
         }
-        List<Path> dayDirectories = backupDayDirectories(userId, "CONVERSATION", null);
-        if (dayDirectories == null) {
+        List<Path> archives = backupDayArchives();
+        if (archives == null) {
             return new PurgeResult(0, false);
         }
+        String entryName = "user-" + shortHash(userId) + "/state.json";
         int updated = 0;
         boolean complete = true;
-        for (Path dayDirectory : dayDirectories) {
-            Path userDirectory = checkedChild(dayDirectory, "user-" + shortHash(userId));
-            Path stateFile = checkedChild(userDirectory, "state.json");
-            if (!Files.isRegularFile(stateFile)) {
-                continue;
-            }
+        for (Path archive : archives) {
             try {
-                if (redactConversationEvidence(stateFile, userId, sourceIds, normalizedContent)) {
+                if (editStateInArchive(archive, entryName,
+                        stateFile -> redactConversationEvidence(stateFile, userId, sourceIds, normalizedContent))) {
                     updated++;
                 }
             } catch (Exception exception) {
                 complete = false;
                 log.warn("清理历史对话备份失败 userHash={} day={} reason={}", shortHash(userId),
-                        dayDirectory.getFileName(), exception.getClass().getSimpleName());
+                        archive.getFileName(), exception.getClass().getSimpleName());
             }
         }
         return new PurgeResult(updated, complete);
     }
 
-    private List<Path> backupDayDirectories(String userId, String layer, Long targetId) {
+    /** 所有历史备份压缩包（backup/&lt;yyyyMMdd&gt;.zip）；列不出来时返回 null（调用方据此报"没做全"） */
+    private List<Path> backupDayArchives() {
         try (Stream<Path> paths = Files.list(backupDir)) {
-            return paths.filter(Files::isDirectory)
-                    .filter(path -> path.getFileName().toString().matches("\\d{8}"))
+            return paths.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().matches("\\d{8}\\.zip"))
+                    .sorted(Comparator.comparing(Path::toString))
                     .toList();
         } catch (IOException exception) {
-            log.warn("列出历史备份失败 userHash={} layer={} targetId={} reason={}", shortHash(userId), layer, targetId,
-                    exception.getClass().getSimpleName());
+            log.warn("列出历史备份失败 reason={}", exception.getClass().getSimpleName());
             return null;
+        }
+    }
+
+    /** 备份状态的改写逻辑（忘掉记忆 / 清理对话证据）都作用在一个普通文件上 */
+    @FunctionalInterface
+    private interface StateEditor {
+        boolean edit(Path stateFile) throws IOException;
+    }
+
+    /**
+     * 把压缩包里的 user-&lt;hash&gt;/state.json 取到临时文件、交给 editor 改，改过才把压缩包重写一遍。
+     * 没这个条目、或什么都没改时不动压缩包。
+     */
+    private boolean editStateInArchive(Path archive, String entryName, StateEditor editor) throws IOException {
+        if (!Files.isRegularFile(archive)) {
+            return false;
+        }
+        Path workDir = Files.createTempDirectory("backup-purge-");
+        try {
+            Path stateFile = workDir.resolve("state.json");
+            try (ZipFile zip = new ZipFile(archive.toFile())) {
+                ZipEntry entry = zip.getEntry(entryName);
+                if (entry == null) {
+                    return false;
+                }
+                try (InputStream input = zip.getInputStream(entry)) {
+                    Files.copy(input, stateFile, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            if (!editor.edit(stateFile)) {
+                return false;
+            }
+            rewriteArchiveEntry(archive, entryName, stateFile);
+            return true;
+        } finally {
+            deleteRecursively(workDir);
+        }
+    }
+
+    /** 重写压缩包里的一个条目：其余条目原样搬运，只有目标条目换成新内容 */
+    private void rewriteArchiveEntry(Path archive, String entryName, Path replacement) throws IOException {
+        Path temporary = Files.createTempFile(backupDir, ".backup-", ".zip.tmp");
+        try {
+            try (ZipFile zip = new ZipFile(archive.toFile());
+                 ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(temporary))) {
+                var entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (entry.isDirectory()) {
+                        continue;
+                    }
+                    out.putNextEntry(new ZipEntry(entry.getName()));
+                    if (entry.getName().equals(entryName)) {
+                        Files.copy(replacement, out);
+                    } else {
+                        try (InputStream input = zip.getInputStream(entry)) {
+                            input.transferTo(out);
+                        }
+                    }
+                    out.closeEntry();
+                }
+            }
+            move(temporary, archive, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 
@@ -293,12 +389,12 @@ public class MemoryBackupJob {
         Files.createDirectories(userDir);
         List<StoredMedia> media = storedMediaRepository.findByUserIdOrderByCreatedAtAsc(userId);
         List<ConversationMemory> conversations = conversationEvidenceForBackup(userId);
-        ObjectNode node = buildBackupState(userId, userDir, media, conversations);
+        ObjectNode node = buildBackupState(userId, media, conversations);
         writeAtomically(userDir.resolve("state.json"), objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(node));
     }
 
     // Collects all user-scoped records and media artifacts into one backup document.
-    private ObjectNode buildBackupState(String userId, Path userDir, List<StoredMedia> media,
+    private ObjectNode buildBackupState(String userId, List<StoredMedia> media,
                                         List<ConversationMemory> conversations) throws IOException {
         ObjectNode node = objectMapper.createObjectNode();
         node.put("userId", userId);
@@ -313,7 +409,7 @@ public class MemoryBackupJob {
         node.put("conversationMemoryBackupLimit", conversationBackupLimit);
         node.set("reminders", objectMapper.valueToTree(reminderRepository.findByUserIdAndStatus(userId, "PENDING")));
         node.set("storedMedia", objectMapper.valueToTree(media));
-        node.set("mediaArtifacts", backupMedia(userDir, userId, media));
+        node.set("mediaArtifacts", backupMedia(userId, media));
         return node;
     }
 
@@ -354,9 +450,14 @@ public class MemoryBackupJob {
         }
     }
 
-    private ArrayNode backupMedia(Path userDir, String userId, List<StoredMedia> media) throws IOException {
-        Path artifactDir = checkedChild(userDir, "media");
-        Files.createDirectories(artifactDir);
+    /**
+     * 媒体本体按**内容寻址**存进共享目录 `backup/media/&lt;sha256&gt;.bin`：同一份内容只存一次，
+     * 每天备份同一张图不会再多占一份（以前是复制进当天的目录、30 天就是 30 份）。
+     * 大小一致就认为已经存过，不再重复复制与校验。
+     */
+    private ArrayNode backupMedia(String userId, List<StoredMedia> media) throws IOException {
+        Path blobDir = checkedChild(backupDir, "media");
+        Files.createDirectories(blobDir);
         ArrayNode artifacts = objectMapper.createArrayNode();
         for (StoredMedia item : media) {
             ObjectNode artifact = artifacts.addObject();
@@ -368,8 +469,19 @@ public class MemoryBackupJob {
                     artifact.put("status", "MISSING_SOURCE");
                     continue;
                 }
-                String targetName = item.getId() + "-" + item.getSha256() + ".bin";
-                Path target = checkedChild(artifactDir, targetName);
+                if (item.getSha256() == null || item.getSha256().isBlank()) {
+                    artifact.put("status", "MISSING_HASH");
+                    continue;
+                }
+                String targetName = item.getSha256().toLowerCase() + ".bin";
+                Path target = checkedChild(blobDir, targetName);
+                if (Files.isRegularFile(target) && Files.size(target) == Files.size(source)) {
+                    artifact.put("status", "OK");
+                    artifact.put("path", "media/" + targetName);
+                    artifact.put("sizeBytes", Files.size(target));
+                    artifact.put("reused", true);
+                    continue;
+                }
                 copyAtomically(source, target);
                 String actualHash = sha256(target);
                 if (!actualHash.equalsIgnoreCase(item.getSha256())) {
@@ -714,25 +826,97 @@ public class MemoryBackupJob {
             return;
         }
         LocalDate cutoff = LocalDate.now(zone).minusDays(retentionDays);
-        try (Stream<Path> dirs = Files.list(backupDir)) {
-            dirs.filter(Files::isDirectory)
-                    .filter(path -> path.getFileName().toString().matches("\\d{8}"))
-                    .filter(path -> {
-                        try {
-                            return LocalDate.parse(path.getFileName().toString(), DAY).isBefore(cutoff);
-                        } catch (Exception exception) {
-                            return false;
-                        }
-                    })
-                    .sorted(Comparator.comparing(Path::toString))
-                    .forEach(dir -> {
-                        try {
-                            deleteRecursively(dir);
-                            log.info("清理过期备份: {}", dir);
-                        } catch (IOException exception) {
-                            log.warn("清理备份失败: {}", dir, exception.getClass().getSimpleName());
-                        }
-                    });
+        boolean removed = false;
+        // 现在的备份是 backup/<yyyyMMdd>.zip；历史遗留的 <yyyyMMdd>/ 目录（老版本写的）也一起清掉
+        List<Path> expired;
+        try (Stream<Path> entries = Files.list(backupDir)) {
+            expired = entries.filter(path -> {
+                String name = path.getFileName().toString();
+                String day = name.endsWith(".zip") ? name.substring(0, name.length() - 4) : name;
+                if (!day.matches("\\d{8}")) {
+                    return false;
+                }
+                try {
+                    return LocalDate.parse(day, DAY).isBefore(cutoff);
+                } catch (Exception exception) {
+                    return false;
+                }
+            }).sorted(Comparator.comparing(Path::toString)).toList();
+        }
+        for (Path path : expired) {
+            try {
+                if (Files.isDirectory(path)) {
+                    deleteRecursively(path);
+                } else {
+                    Files.deleteIfExists(path);
+                }
+                removed = true;
+                log.info("清理过期备份: {}", path);
+            } catch (IOException exception) {
+                log.warn("清理备份失败: {}", path, exception.getClass().getSimpleName());
+            }
+        }
+        if (removed) {
+            pruneMediaBlobs();
+        }
+    }
+
+    /** 共享媒体库里已经不被任何一份备份引用的文件清掉，免得它只增不减 */
+    private void pruneMediaBlobs() {
+        Path blobDir = backupDir.resolve("media");
+        if (!Files.isDirectory(blobDir)) {
+            return;
+        }
+        List<Path> archives = backupDayArchives();
+        if (archives == null) {
+            return;
+        }
+        Set<String> referenced = new LinkedHashSet<>();
+        for (Path archive : archives) {
+            try (ZipFile zip = new ZipFile(archive.toFile())) {
+                var entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (!entry.getName().endsWith("/state.json")) {
+                        continue;
+                    }
+                    try (InputStream input = zip.getInputStream(entry)) {
+                        collectReferencedBlobs(objectMapper.readTree(input), referenced);
+                    }
+                }
+            } catch (Exception exception) {
+                // 有压缩包读不动就整个跳过，宁可不删
+                log.warn("读取备份失败，跳过媒体清理: {} ({})", archive, exception.getClass().getSimpleName());
+                return;
+            }
+        }
+        try (Stream<Path> blobs = Files.list(blobDir)) {
+            blobs.filter(Files::isRegularFile).forEach(blob -> {
+                if (referenced.contains(blob.getFileName().toString())) {
+                    return;
+                }
+                try {
+                    Files.deleteIfExists(blob);
+                    log.info("清理不再被引用的媒体副本: {}", blob.getFileName());
+                } catch (IOException exception) {
+                    log.warn("清理媒体副本失败: {}", blob.getFileName());
+                }
+            });
+        } catch (IOException exception) {
+            log.warn("扫描媒体副本失败: {}", exception.getClass().getSimpleName());
+        }
+    }
+
+    private void collectReferencedBlobs(JsonNode state, Set<String> referenced) {
+        JsonNode artifacts = state.path("mediaArtifacts");
+        if (!artifacts.isArray()) {
+            return;
+        }
+        for (JsonNode artifact : artifacts) {
+            String path = artifact.path("path").asText("");
+            if (path.startsWith("media/")) {
+                referenced.add(path.substring("media/".length()));
+            }
         }
     }
 
