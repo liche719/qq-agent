@@ -21,9 +21,10 @@ public class LlmConfig {
             @Value("${llm.zero-temperature-scenarios:}") String zeroTemperatureScenarios,
             @Value("${llm.max-tokens.structured:4096}") int structuredMaxTokens,
             @Value("${llm.max-tokens.dialog:0}") int dialogMaxTokens,
-            @Value("${llm.max-tokens.dialog-deep:0}") int dialogDeepMaxTokens) {
+            @Value("${llm.max-tokens.dialog-deep:0}") int dialogDeepMaxTokens,
+            @Value("${llm.max-tokens.consolidate:16384}") int consolidateMaxTokens) {
         return new LlmScenarioSettings(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens,
-                dialogDeepMaxTokens);
+                dialogDeepMaxTokens, consolidateMaxTokens);
     }
 
     /** 非流式模型：记忆提取 / 提醒解析 / 归档摘要等一次性调用 */

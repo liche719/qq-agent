@@ -60,11 +60,13 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
       # 深度思考不再按场景开关（2026-09-14 整块删除，全部场景都用模型默认思考），所以没有 LLM_THINKING_* 了
-      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
+      # 注意：这里是**非空默认值**，它会整体覆盖代码里的默认集合——加新场景（如 consolidate）必须两处一起改
+      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive,consolidate}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-4096}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
       LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
+      LLM_MAX_TOKENS_CONSOLIDATE: ${LLM_MAX_TOKENS_CONSOLIDATE:-16384}
       # thinkDeeper（模型自己申请升档）的预算与额度
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}

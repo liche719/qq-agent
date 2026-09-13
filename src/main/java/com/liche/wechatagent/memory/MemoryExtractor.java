@@ -42,6 +42,9 @@ public class MemoryExtractor {
      */
     private static final double CORE_CONFLICT_SIMILARITY = 0.72d;
 
+    /** 核心记忆超过这么多条时，就不做"这条是不是某条的新版本"的二次判断了（太多了模型也判不准） */
+    private static final int RECONCILE_MAX_CORES = 60;
+
     private final ChatModel chatModel;
     private final ContextStore contextStore;
     private final WorkMemoryService workMemoryService;
@@ -406,12 +409,19 @@ public class MemoryExtractor {
             // 【2026-09-14】确定性兜底：这条"新"核心事实其实和已有的某条是同一个主题（换了分数/日期/院校/称呼…）时，
             // 走替换而不是新增——模型偶尔不把它写成 coreUpdates，就会留下"旧事实还在"的观感（用户明确报过这个症状）。
             UserCoreMemory similar = mostSimilarCore(userId, candidate.content());
+            if (similar == null) {
+                // 字面不像也可能是"同一件事换了个说法"（实测：「考研数学目标分是130」→ 模型抽成
+                // 「用户在考研中设定的数学目标分数为140分，希望冲刺更高分数」，二元组重合度很低）。
+                // 所以再问模型一次**只做判断**的小调用（Mem0 的两阶段做法）：这条新事实是不是某条已有记忆的新版本？
+                similar = reconcileCoreWithModel(userId, candidate.content());
+            }
             if (similar != null) {
+                Long replacedId = similar.getId();
                 log.info("核心记忆按新陈述替换旧条目 user={} old=\"{}\" new=\"{}\" similarity={}",
                         userId, similar.getContent(), candidate.content(),
                         String.format(java.util.Locale.ROOT, "%.2f",
                                 MemoryTextSimilarity.similarity(similar.getContent(), candidate.content())));
-                runSafely(userId, "替换核心记忆", () -> coreMemoryService.replaceFromExtraction(userId, similar.getId(),
+                runSafely(userId, "替换核心记忆", () -> coreMemoryService.replaceFromExtraction(userId, replacedId,
                         candidate.content(), "与已有同类记忆冲突或重复，按用户最新陈述替换", "AUTO", provenance, attributes));
                 continue;
             }
@@ -587,6 +597,64 @@ public class MemoryExtractor {
             }
         }
         return best;
+    }
+
+    /**
+     * 第二次调用（只做判断，不做抽取）：这条新事实是不是某条已有核心记忆的"新版本"？
+     *
+     * <p>为什么要单独问一次：换了个说法之后字面相似度会掉到很低（实测 0.3 左右），而**抽取和比对挤在一次调用里**
+     * 时模型经常直接把新版本当成新事实输出（Mem0 也是把这两件事拆成两次调用做的：先抽事实，再拿候选与已有记忆
+     * 逐条比对决定 ADD/UPDATE/DELETE/NOOP）。这里是最小版本：一次小调用，只回答"跟哪条是同一件事"。
+     *
+     * @return 命中的那条已有记忆；答"不是同一件事"或解析失败都返回 null（=新增，宁可不替换）
+     */
+    private UserCoreMemory reconcileCoreWithModel(String userId, String content) {
+        if (chatModel == null || coreMemoryService == null || content == null || content.isBlank()) {
+            return null;
+        }
+        List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
+        if (cores.isEmpty() || cores.size() > RECONCILE_MAX_CORES) {
+            return null;
+        }
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("下面是一个用户的已有长期记忆（编号: 内容）：\n");
+        for (int i = 0; i < cores.size(); i++) {
+            prompt.append(i + 1).append(": ").append(cores.get(i).getContent()).append('\n');
+        }
+        prompt.append("\n刚从对话里抽到一条新事实：「").append(content).append("」\n\n");
+        prompt.append("问：这条新事实是不是上面某一条的**新版本**（同一件事，只是数值/日期/状态/说法变了）？\n")
+                .append("- 是 → 输出 {\"targetId\": 编号}\n")
+                .append("- 不是（是个新主题；或者只是已有事实的补充细节、两者可以同时成立）→ 输出 {\"targetId\": null}\n")
+                .append("拿不准就输出 null。只输出 JSON，不要解释。");
+        try {
+            String response = LlmScenario.run(LlmScenario.EXTRACT, () -> chatModel.chat(prompt.toString()));
+            if (response == null || response.isBlank()) {
+                return null;
+            }
+            String text = response.trim();
+            int start = text.indexOf('{');
+            int end = text.lastIndexOf('}');
+            if (start < 0 || end <= start) {
+                return null;
+            }
+            JsonNode node = objectMapper.readTree(text.substring(start, end + 1));
+            JsonNode target = node.path("targetId");
+            if (!target.isInt() && !target.isLong()) {
+                return null;
+            }
+            int index = target.asInt();
+            if (index < 1 || index > cores.size()) {
+                return null;
+            }
+            UserCoreMemory hit = cores.get(index - 1);
+            log.info("核心记忆比对（二次调用）user={} 判定为已有记忆的新版本 id={} old=\"{}\" new=\"{}\"",
+                    userId, hit.getId(), hit.getContent(), content);
+            return hit;
+        } catch (Exception e) {
+            // 判断失败就当"不是同一件事"，宁可不替换
+            log.warn("核心记忆比对失败，按新增处理 user={}", userId, e);
+            return null;
+        }
     }
 
     private boolean isDuplicate(String content, List<String> duplicates) {
