@@ -120,7 +120,9 @@ public class ExamService {
         plans.save(plan);
         log.info("备考计划已保存 user={} created={} subjects={} examDate={}", userId, created, subjects.size(),
                 plan.getExamDate());
-        return (created ? "记下了你的备考计划。\n" : "计划已更新。\n") + planText(userId);
+        return (created ? "记下了你的备考计划。\n" : "计划已更新。\n") + planText(userId)
+                + "\n\n（计划已保存。回复时把上面的计划复述一遍、问一句要不要现在排今天的任务即可；"
+                + "不要在同一条回复里顺手生成任务、更不要把任何任务标成完成。）";
     }
 
     @Transactional
@@ -137,7 +139,9 @@ public class ExamService {
 
     public List<Subject> subjects(String userId) {
         ExamPlan plan = plan(userId);
-        return plan == null ? List.of() : parseSubjects(plan.getSubjects(), plan.getDailyMinutes());
+        // 读库必须走 readSubjects（列里存的是 JSON）：用明文解析器会把整段 JSON 当成一个科目名，
+        // 生成的每日任务标题就变成 [{"name"… 那种乱码（实测踩过一次）。
+        return plan == null ? List.of() : readSubjects(plan.getSubjects(), plan.getDailyMinutes());
     }
 
     // ==================== 每日任务 ====================
