@@ -38,6 +38,8 @@ const formValues = ref({})
 const formBusy = ref({})
 /** 行内按钮忙碌标记：区块下标 → { '行下标:按钮下标': true }（行与行、按钮与按钮互不影响） */
 const rowBusy = ref({})
+/** 用户动过的表单：区块下标 → true。动过之后自动刷新不再回写预填值，否则会把正在编辑的内容冲掉 */
+const formTouched = ref({})
 /** 只认最后一次请求，切页签时慢响应回来不能覆盖新数据 */
 let sequence = 0
 
@@ -248,14 +250,36 @@ async function fetchOne(section) {
 
 function applyState(index, state, current) {
   if (current !== sequence) return
-  states.value[index] = state
-  if (state.values) formValues.value = { ...formValues.value, [index]: state.values }
+  const prev = states.value[index]
+  const next = { ...state }
+  // 刷新失败时保留上一次的数据：别把已经显示出来的内容换成一行报错
+  if (state.error && prev && prev.data !== null) next.data = prev.data
+  states.value[index] = next
+  // 表单只在「用户没动过」时才回写预填值，不然自动刷新会把正在编辑的内容冲掉
+  if (state.values && !formTouched.value[index]) {
+    formValues.value = { ...formValues.value, [index]: state.values }
+  }
 }
 
+/** 用户开始编辑这个表单了（input/change 冒泡上来） */
+function markTouched(index) {
+  if (formTouched.value[index]) return
+  formTouched.value = { ...formTouched.value, [index]: true }
+}
+
+/**
+ * 拉所有区块。**自动刷新时不清空旧数据**：原来每次都把状态重置成 loading + data:null，
+ * 于是每刷新一次，整个区块就被「加载中…」替掉、再重建一次 —— 看上去就跟整页刷新一样闪。
+ * 现在沿用上一次的状态（保留旧数据），只有第一次进来才显示「加载中…」。
+ */
 async function load() {
   const current = ++sequence
   const list = sections.value
-  states.value = list.map(() => ({ loading: true, error: '', data: null }))
+  const previous = states.value
+  states.value = list.map((section, index) => {
+    const prev = previous[index]
+    return prev ? { ...prev, loading: false } : { loading: true, error: '', data: null }
+  })
   await Promise.all(list.map(async (section, index) => {
     applyState(index, await fetchOne(section), current)
   }))
@@ -312,6 +336,8 @@ async function submit(view) {
   try {
     const result = await api(toPath(view.endpoint), { method: view.method, body: fieldBody(view) })
     notes.value = { ...notes.value, [view.index]: ensureAccepted(result) }
+    // 存过了就以服务端为准：清掉「动过」标记，让重拉回来的值覆盖表单
+    formTouched.value = { ...formTouched.value, [view.index]: false }
     await reloadSection(view.index)
   } catch (error) {
     notes.value = { ...notes.value, [view.index]: '操作失败：' + error.message }
@@ -368,6 +394,7 @@ const views = computed(() => sections.value.map((section, index) => {
     method: String(section?.method || 'POST').toUpperCase(),
     loading: Boolean(state.loading),
     error: state.error || '',
+    hasData: state.data !== null && state.data !== undefined,
     infoRows: toInfoRows(state),
     columns: toColumns(section?.columns),
     rows: Array.isArray(state?.data?.rows) ? state.data.rows : [],
@@ -401,6 +428,7 @@ watch(() => props.tab?.key, () => {
   notes.value = {}
   formBusy.value = {}
   rowBusy.value = {}
+  formTouched.value = {}
   load()
 })
 onMounted(() => load())
@@ -420,7 +448,7 @@ onMounted(() => load())
       </div>
 
       <div v-if="view.loading" class="empty">加载中…</div>
-      <p v-else-if="view.error" class="hint" style="margin-top: 8px; color: var(--bad-ink)">{{ view.error }}</p>
+      <p v-else-if="view.error && !view.hasData" class="hint" style="margin-top: 8px; color: var(--bad-ink)">{{ view.error }}</p>
 
       <template v-else-if="view.kind === 'info'">
         <div v-if="!view.infoRows.length" class="empty">{{ view.empty }}</div>
@@ -450,7 +478,8 @@ onMounted(() => load())
         </template>
       </template>
 
-      <form v-else-if="view.kind === 'form'" @submit.prevent="submit(view)">
+      <form v-else-if="view.kind === 'form'" @submit.prevent="submit(view)"
+            @input="markTouched(view.index)" @change="markTouched(view.index)">
         <div class="form-grid">
           <div v-for="field in view.fields" :key="field.key" class="field"
                :class="{ full: field.type === 'textarea' }">
@@ -484,6 +513,9 @@ onMounted(() => load())
 
       <p v-else class="hint" style="margin-top: 8px">不认识的区块类型：{{ view.kind || '（空）' }}</p>
 
+      <p v-if="!view.loading && view.error && view.hasData" class="hint" style="margin-top: 8px; color: var(--bad-ink)">
+        这次刷新失败，显示的是上一次的数据：{{ view.error }}
+      </p>
       <p v-if="!view.loading && !view.error && view.message" class="hint" style="margin-top: 8px">{{ view.message }}</p>
     </section>
   </div>
