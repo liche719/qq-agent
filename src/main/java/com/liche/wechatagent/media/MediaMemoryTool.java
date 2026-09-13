@@ -1,5 +1,6 @@
 package com.liche.wechatagent.media;
 
+import com.liche.wechatagent.tool.ToolBusinessResult;
 import com.liche.wechatagent.tool.ToolStatusService;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.stereotype.Component;
@@ -48,15 +49,26 @@ public class MediaMemoryTool implements com.liche.wechatagent.tool.AgentToolProv
     }
 
     @Tool(value = "读取当前用户已保存资料的内容。先用 listStoredMedia 找到 mediaId；文本文件会提供提取内容，图片会重新交给视觉模型查看。用户询问此前保存的图片或文件内容时调用。不能用于删除审阅。")
-    public String readStoredMedia(Long mediaId) {
-        MediaStorageService.ReadOutcome outcome = storageService.readForAssistant(requireCurrentUser(), mediaId);
-        mediaContext.addReadableMedia(outcome.description(), outcome.imageDataUrl());
-        return outcome.description();
+    public ToolBusinessResult readStoredMedia(Long mediaId) {
+        try {
+            MediaStorageService.ReadOutcome outcome = storageService.readForAssistant(requireCurrentUser(), mediaId);
+            mediaContext.addReadableMedia(outcome.description(), outcome.imageDataUrl());
+            return ToolBusinessResult.success(outcome.description());
+        } catch (MediaSourceMissingException exception) {
+            // 文件不会自己出现：直接告诉模型读不了，不要被工具框架当成瞬时故障再重试一轮
+            return ToolBusinessResult.failure(exception.getMessage() + "。这个文件的原始数据已经无法找回，"
+                    + "如实告诉用户，不要再反复尝试读取。");
+        }
     }
 
     @Tool(value = "审阅当前用户的一个已保存文件，明确其文件名、摘要、来源内容和保存原因。任何删除之前必须先调用本工具，并读取返回的 inspectionToken。")
-    public String inspectStoredMedia(Long mediaId) {
-        return storageService.inspect(requireCurrentUser(), mediaId);
+    public ToolBusinessResult inspectStoredMedia(Long mediaId) {
+        try {
+            return ToolBusinessResult.success(storageService.inspect(requireCurrentUser(), mediaId));
+        } catch (MediaSourceMissingException exception) {
+            return ToolBusinessResult.failure(exception.getMessage() + "。这个文件的原始数据已经无法找回，"
+                    + "如实告诉用户，也删不了它。");
+        }
     }
 
     @Tool(value = "将当前用户的已保存文件移入该用户回收目录。只能在刚刚调用 inspectStoredMedia、确认清楚文件内容且确有删除必要后调用；inspectionToken 必须使用审阅结果返回的令牌，reason 必须具体。不会永久删除。")

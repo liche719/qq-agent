@@ -196,7 +196,7 @@ public class MediaStorageService {
         StoredMedia media = requireOwnedActive(userId, mediaId);
         Path file = resolveStoredPath(media);
         if (!Files.isRegularFile(file)) {
-            throw new IllegalStateException("文件记录存在，但磁盘文件已丢失，不能删除");
+            throw new MediaSourceMissingException("文件记录存在，但磁盘文件已丢失，不能删除");
         }
         String token = UUID.randomUUID().toString();
         Instant now = Instant.now();
@@ -221,7 +221,7 @@ public class MediaStorageService {
         StoredMedia media = requireOwnedActive(userId, mediaId);
         Path file = resolveStoredPath(media);
         if (!Files.isRegularFile(file)) {
-            throw new IllegalStateException("文件记录存在，但磁盘文件已丢失，无法读取");
+            throw new MediaSourceMissingException("文件记录存在，但磁盘文件已丢失，无法读取");
         }
         String extracted = limitedExtractedText(media);
         String description = "已读取用户长期保存的文件：\nID=" + media.getId()
@@ -271,7 +271,7 @@ public class MediaStorageService {
         StoredMedia media = requireOwnedActive(userId, mediaId);
         Path file = resolveStoredPath(media);
         if (!Files.isRegularFile(file)) {
-            throw new IllegalStateException("文件记录存在，但磁盘文件已丢失，无法发送");
+            throw new MediaSourceMissingException("文件记录存在，但磁盘文件已丢失，无法发送");
         }
         return new SendableMedia(file, media.getFileName(), media.getContentType());
     }
