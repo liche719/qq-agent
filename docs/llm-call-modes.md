@@ -84,7 +84,56 @@ LLM_ZERO_TEMPERATURE_SCENARIOS=extract,reminder_parse,schedule_parse,archive
 顺便补上了**以前根本没透传**的 `LLM_TEMPERATURE` / `LLM_TIMEOUT_SECONDS` / `LLM_CONNECT_TIMEOUT_SECONDS`
 （坑 36：compose 只传列出来的变量，改了 `.env` 不生效而且不报错）。
 
-## 4. 怎么验证
+## 5. 让模型自己申请"更多预算"：`thinkDeeper`（2026-09-13 做并实测）
+
+**为什么是工具，不是路由器 agent**：升档要影响的是**当前这一轮**，而只有模型看到问题之后才知道难不难。外部路由器要多一次
+LLM 调用（QQ 场景首字延迟直接翻倍），判错了还分不清是谁的错。工具形态下模型在已有上下文里申请，**判错最坏只是没升档，
+不改变正确性**（"别让模型记得做某事"这类设计在本项目翻过车，见坑 27、39）。
+
+**升档到底给了什么**（都从**下一轮** model round 起生效，当轮立即判断所以不用重跑）：
+
+| 预算 | 默认 | 升档后 |
+|---|---|---|
+| 思考 | 模型默认（本来就开） | **显式** `thinking:{"type":"enabled"}`（不依赖上游默认） |
+| 工具轮数 | `agent.max-tool-rounds`（8） | `agent.deep-tool-rounds`（16） |
+| 流式超时 | `agent.stream-timeout-seconds`（120s） | `agent.deep-stream-timeout-seconds`（240s） |
+| 指标 | `dialog` | **`dialog_deep`**（单独一档，方便看"升档值不值"） |
+
+**额度**：单轮最多 1 次（第二次直接告诉模型"已经升过了，把问题答完"）；按用户日额度
+`THINKING_DAILY_LIMIT_PER_USER`（默认 5，**0 = 不限**），账本在 Redis `llm:think:<yyyy-MM-dd>:<userId>`；
+用尽时工具返回"今天升不了档"，模型按当前档位继续——**不改变正确性**。Redis 异常时 **fail-open**（额度是防滥用、不是安全边界）。
+
+**实测（生产，2026-09-13 23:00）**：给一条"三件事排优先级并说明理由，要仔细分析"的消息——
+
+```
+工具开始 name=thinkDeeper success=true durationMs=15
+LLM 流式调用 scenario=dialog_deep ms=12664 temperature=0.7 thinking=on maxTokens=0 正文=1269字 思考=1770字
+Redis 键 llm:think:2026-09-13:sim-escalate = 1
+```
+- **模型自己会调**（提示词第 21 条要求"确实复杂才调"），没人逼它；
+- 「好的，谢谢」这种**没有**触发升档 ✅；
+- 代价就是那一轮的 12.7 秒 + 1770 字思考——复杂任务该付的钱。
+
+## 6. 每场景 `max_tokens`（2026-09-13 做）
+
+之前**一个都没设**，极端长思考没有任何上限。现在：结构化场景（extract/parse/archive）给**宽松兜底**
+`LLM_MAX_TOKENS_STRUCTURED`（默认 4096）；**对话档默认不设**（`0`），因为**思考 token 也算进 max_tokens**，
+给对话加上限有把正常长回复截断的风险。升档档位（`dialog_deep`）默认同样不设——升档是"要更多预算"，不该反而加个盖子。
+
+实测日志：`scenario=extract … thinking=off maxTokens=4096`。
+
+## 7. 面板「模型与搜索」的按场景表格（2026-09-13 做）
+
+`web/src/panels/LlmPanel.vue` 新增一张表，读 `/api/admin/metrics/runtime → llmByScenario`：
+调用场景（中文名）/ 次数 / 失败 / 平均耗时 / 输入 token / 输出 token / **其中思考**。
+实测接口返回样例：
+
+```json
+{"dialog":{"calls":2,"averageMs":2056},"dialog_deep":{"calls":1,"averageMs":12664},
+ "extract":{"calls":1,"averageMs":926,"promptTokens":892,"completionTokens":40,"reasoningTokens":0}}
+```
+
+## 8. 怎么验证
 
 1. 模拟器发一条能同时触发三条链路的消息：`我叫小林，在做毕业设计，导师是张老师。顺便提醒我明天下午三点给张老师发开题报告。`
 2. 等 35 秒（记忆提取是后台异步的），看日志：
@@ -102,19 +151,18 @@ LLM_ZERO_TEMPERATURE_SCENARIOS=extract,reminder_parse,schedule_parse,archive
 - **别在提取跑完之前删测试用户的行**：`MemoryExtractionScheduler` 是延迟异步的，删 `user_profile` 会让它抛
   `BizException: 用户不存在`（看着像 bug，其实是测试脚本竞态）。测完先等「记忆提取完成」再清理。
 
-## 5. 明确没做（以及为什么）
+## 9. 明确没做（以及为什么）
 
 - **不做"分配资源的 agent"**：路由本身要一次 LLM 调用，QQ 首字延迟直接翻倍；出错时"错在路由器还是执行者"不可观测；
   而且"让模型自己记得判断"这类设计在本项目翻过车（坑 27、39）。档位由**调用点**决定，纯程序、可预测。
-- 对话侧的自适应（短闲聊关思考 / 长任务开思考）**这轮没做**：实测对话首正文 0.7~1.3 秒，收益不如结构化场景明确；
-  真要做也应该先上"程序规则"，而不是让模型判断。若真要让模型参与，唯一推荐的形态是 **`thinkDeeper(reason)` 工具**——
-  在已有上下文里申请"下一轮用思考档重跑"，配单轮上限 + 日额度；判错最坏只是"没升级"。
-- 面板「模型与搜索」页还没加**按场景的表格**（数据已经在 `/api/admin/metrics/runtime` 里了，前端没渲染）。
+- 对话侧的自适应（短闲聊关思考 / 长任务开思考）**还没做**：实测对话首正文 0.7~1.3 秒；要做也应该先上"程序规则"。
+  已落地的"让模型参与"只走了**升级**这条路（`thinkDeeper`），因为它判错不会更差。
 - 流式响应没有 `usage`（除非开 `stream_options.include_usage`），所以 dialog 的 token 记 0，思考量用**字符数**近似。
 
-## 6. 下一步候选（按收益排序）
+## 10. 下一步候选（按收益排序）
 
-1. 面板把 `llmByScenario` 渲染成一张表（现在只能看接口/日志）。
-2. 48 个工具 schema 每轮全量下发 → 按用户状态裁剪子集（无考研计划的人不该背 20 个考试工具的 schema）。
-3. `max_tokens` 至今没设：思考 token 也计费，给每场景一个上限能防极端长思考。
-4. 搜索深度（固定 3 篇正文 × 1200 字）与记忆召回预算（core 16/2200、work 15/1500、context 40 轮/12000）按问题类型动态调。
+1. **工具集按用户状态裁剪**：50 个工具 schema 每轮全量下发（无考研计划的人不用背 20 个考试工具）——省 prompt token，
+   也降低选错工具的概率。
+2. 对话侧**规则化自适应**（寒暄/确认类关思考）：和 `thinkDeeper` 正好配对（默认省电、复杂时升档）。
+3. 搜索深度（固定 3 篇正文 × 1200 字）与记忆召回预算（core 16/2200、work 15/1500、context 40 轮/12000）按问题类型动态调。
+4. 流式开 `stream_options.include_usage`，把对话的 token 也真正记上（现在用字符数近似）。
