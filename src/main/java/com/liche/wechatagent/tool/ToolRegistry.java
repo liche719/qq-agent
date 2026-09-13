@@ -34,26 +34,19 @@ public class ToolRegistry {
     }
 
     private final Map<String, ToolEntry> entries = new LinkedHashMap<>();
+    /** 注册到的工具类名，用来在启动日志里核对"有没有哪个工具忘了 implements AgentToolProvider" */
+    private final java.util.Set<String> toolClasses = new java.util.LinkedHashSet<>();
     private final int retryAttempts;
     private final ToolInvocationService invocationService;
     private final com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore;
 
     @Autowired
-    public ToolRegistry(com.liche.wechatagent.search.SearchTool searchTool,
-                         com.liche.wechatagent.search.WebPageTool webPageTool,
-                         com.liche.wechatagent.tool.ReminderTool reminderTool,
-                         com.liche.wechatagent.tool.InterviewTool interviewTool,
-                         com.liche.wechatagent.tool.MaimemoTool maimemoTool,
-                         com.liche.wechatagent.tool.ScheduledTaskTool scheduledTaskTool,
-                         com.liche.wechatagent.tool.TimeTool timeTool,
-                         com.liche.wechatagent.media.MediaMemoryTool mediaMemoryTool,
-                         com.liche.wechatagent.media.WebFileTool webFileTool,
+    public ToolRegistry(List<AgentToolProvider> tools,
                          ToolInvocationService invocationService,
                          com.liche.wechatagent.agent.AgentTaskStateStore taskStateStore,
                          @Value("${agent.tool-retry-attempts:1}") int retryAttempts,
                          @Value("${agent.tool-max-result-chars:8000}") int maxToolResultChars) {
-        this(List.of(searchTool, webPageTool, reminderTool, interviewTool, maimemoTool, scheduledTaskTool, timeTool, mediaMemoryTool, webFileTool),
-                retryAttempts, maxToolResultChars, invocationService, taskStateStore);
+        this(tools, retryAttempts, maxToolResultChars, invocationService, taskStateStore);
     }
 
     ToolRegistry(List<?> tools, int retryAttempts) {
@@ -73,6 +66,10 @@ public class ToolRegistry {
         if (tools != null) {
             tools.forEach(this::register);
         }
+        // 自动收集之后，"忘了 implements AgentToolProvider" 的工具会静默不注册，
+        // 所以把结果打印出来：加完工具核对一眼类名和数字。
+        log.info("工具注册完成：{} 个类 / {} 个工具 -> {}",
+                toolClasses.size(), entries.size(), String.join("、", toolClasses));
     }
 
     /** Number of automatic retries configured for repeatable tools. */
@@ -81,6 +78,7 @@ public class ToolRegistry {
     }
 
     private void register(Object tool) {
+        toolClasses.add(tool.getClass().getSimpleName());
         for (Method m : tool.getClass().getMethods()) {
             Tool ann = m.getAnnotation(Tool.class);
             if (ann == null) {

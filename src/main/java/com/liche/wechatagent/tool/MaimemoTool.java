@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * 工具描述里写清典型说法，模型自己判断「今天背了多少单词」「还剩多少没背」「背单词进度怎么样」是在问这个。
  */
 @Component
-public class MaimemoTool {
+public class MaimemoTool implements AgentToolProvider {
 
     private final MaimemoService maimemoService;
     private final ToolStatusService statusService;

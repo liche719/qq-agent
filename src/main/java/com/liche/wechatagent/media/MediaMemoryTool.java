@@ -5,7 +5,7 @@ import dev.langchain4j.agent.tool.Tool;
 import org.springframework.stereotype.Component;
 
 @Component
-public class MediaMemoryTool {
+public class MediaMemoryTool implements com.liche.wechatagent.tool.AgentToolProvider {
 
     private final MediaStorageService storageService;
     private final MediaToolContextService mediaContext;

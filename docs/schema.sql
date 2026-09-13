@@ -225,3 +225,6 @@ ALTER TABLE user_profile
 
 -- 情景记忆见 deploy/mysql/V2__create_episodic_memory.sql（那份是从线上库核对过的，别在这里手抄一份猜的）
 
+-- 考研规划模块三张表（exam_plan / exam_task / exam_checkin）见 deploy/mysql/V3__create_exam_tables.sql，
+-- 同样是 2026-09-13 按线上库实际建出来的结构；改实体务必同步那边，否则 validate 会拦住启动。
+

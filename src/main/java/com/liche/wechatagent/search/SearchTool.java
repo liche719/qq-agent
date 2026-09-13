@@ -23,7 +23,7 @@ import java.time.ZoneId;
  * - 调用前主动推送状态提示「我正在搜索相关资料…」
  */
 @Component
-public class SearchTool {
+public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider {
 
     private static final Logger log = LoggerFactory.getLogger(SearchTool.class);
 

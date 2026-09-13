@@ -1,5 +1,6 @@
 package com.liche.wechatagent.schedule;
 
+import com.liche.wechatagent.exam.ExamPushService;
 import com.liche.wechatagent.maimemo.MaimemoService;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserProfileRepository;
@@ -42,6 +43,7 @@ public class BuiltinScheduleService {
 
     private final Scheduler scheduler;
     private final MaimemoService maimemoService;
+    private final ExamPushService examPushService;
     private final UserProfileRepository profileRepository;
     private final ZoneId zone;
 
@@ -57,6 +59,7 @@ public class BuiltinScheduleService {
 
     public BuiltinScheduleService(Scheduler scheduler,
                                   MaimemoService maimemoService,
+                                  ExamPushService examPushService,
                                   UserProfileRepository profileRepository,
                                   @Value("${care.delivery-time:20:30}") String careDeliveryTime,
                                   @Value("${backup.cron:0 0 3 * * ?}") String backupCron,
@@ -70,6 +73,7 @@ public class BuiltinScheduleService {
                                   @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.scheduler = scheduler;
         this.maimemoService = maimemoService;
+        this.examPushService = examPushService;
         this.profileRepository = profileRepository;
         this.careDeliveryTime = careDeliveryTime;
         this.backupCron = backupCron;
@@ -87,6 +91,7 @@ public class BuiltinScheduleService {
     public List<Map<String, Object>> list() {
         List<Map<String, Object>> rows = new ArrayList<>();
         rows.add(maimemoPush());
+        rows.add(examPush());
         rows.add(proactiveCare());
         rows.add(backup());
         rows.add(quartzGroup("提醒调度（Quartz）", "用户创建的定时提醒，到点推送一句话",
@@ -112,6 +117,18 @@ public class BuiltinScheduleService {
         row.put("nextRunAt", enabled ? nextDaily(String.valueOf(push.get("time"))) : "—");
         row.put("lastRunText", push.get("lastPushDate") == null || String.valueOf(push.get("lastPushDate")).isBlank()
                 ? "还没推过" : "上次推送日期 " + push.get("lastPushDate"));
+        row.put("enabled", enabled);
+        return row;
+    }
+
+    /** 考研模块的三条推送（早计划 / 晚收尾 / 周复盘），时间与开关来自 exam.* */
+    private Map<String, Object> examPush() {
+        Map<String, Object> push = examPushService.pushState();
+        boolean enabled = Boolean.TRUE.equals(push.get("enabled"));
+        Map<String, Object> row = base("考研推送", "定时", "今日计划（早）、完成情况（晚）、周复盘（周日）推送给备考用户",
+                enabled ? "早 " + push.get("morning") + " · 晚 " + push.get("evening") + " · 周 " + push.get("weekly")
+                        : "已关闭", "面板「考研」页可开关；exam_plan 上记「今天已推」标记");
+        row.put("nextRunAt", enabled ? nextDaily(String.valueOf(push.get("morning"))) : "—");
         row.put("enabled", enabled);
         return row;
     }

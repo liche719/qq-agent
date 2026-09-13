@@ -39,19 +39,26 @@ public class CommandRegistry {
     }
 
     private final Map<String, CommandHandler> handlers = new LinkedHashMap<>();
+    /** 静态别名 + 各处理器自己声明的别名（后者由模块自带，加模块不用改这个类） */
+    private final Map<String, String> aliases = new LinkedHashMap<>(TEXT_ALIASES);
 
     public CommandRegistry(List<CommandHandler> handlerList) {
         for (CommandHandler h : handlerList) {
             handlers.put(h.name(), h);
+            for (String alias : h.aliases()) {
+                if (alias != null && !alias.isBlank()) {
+                    aliases.put(alias.trim(), h.name());
+                }
+            }
         }
     }
 
-    private static String aliasName(String text) {
+    private String aliasName(String text) {
         if (text == null) {
             return null;
         }
         String key = text.strip();
-        String mapped = TEXT_ALIASES.get(key);
+        String mapped = aliases.get(key);
         return mapped != null ? mapped : key.toLowerCase();
     }
 

@@ -91,6 +91,12 @@ services:
       MAIMEMO_OIDC_CLIENT_ID: ${MAIMEMO_OIDC_CLIENT_ID:-}
       MAIMEMO_OIDC_CLIENT_SECRET: ${MAIMEMO_OIDC_CLIENT_SECRET:-}
       MAIMEMO_OIDC_REDIRECT_URI: ${MAIMEMO_OIDC_REDIRECT_URI:-}
+      # 考研规划模块：三条定时推送的时间与总开关（compose 只传列出的变量——见坑 36）
+      EXAM_ENABLED: ${EXAM_ENABLED:-true}
+      EXAM_MORNING_TIME: ${EXAM_MORNING_TIME:-07:30}
+      EXAM_EVENING_TIME: ${EXAM_EVENING_TIME:-22:00}
+      EXAM_WEEKLY_TIME: ${EXAM_WEEKLY_TIME:-21:00}
+      EXAM_WEEKLY_DAY: ${EXAM_WEEKLY_DAY:-SUNDAY}
       # 数据库备份：默认每天 03:00。**要验证备份真的能跑，就得能改这个 cron**——
       # 不透传的话改 .env 不生效（同第 36 条坑），只能等到凌晨三点才知道有没有坏。
       BACKUP_CRON: ${BACKUP_CRON:-0 0 3 * * ?}

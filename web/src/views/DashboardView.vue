@@ -7,29 +7,18 @@ import { fmtNum, toneOf, zh } from '../labels'
 import { theme, themeLabel, toggleTheme } from '../theme'
 import StatCard from '../components/StatCard.vue'
 import StatusPill from '../components/StatusPill.vue'
-import OverviewPanel from '../panels/OverviewPanel.vue'
-import QqPanel from '../panels/QqPanel.vue'
-import LlmPanel from '../panels/LlmPanel.vue'
-import MaimemoPanel from '../panels/MaimemoPanel.vue'
-import TasksPanel from '../panels/TasksPanel.vue'
-import ScheduledPanel from '../panels/ScheduledPanel.vue'
-import UsersPanel from '../panels/UsersPanel.vue'
-import LogsPanel from '../panels/LogsPanel.vue'
+import DescriptorPanel from '../components/DescriptorPanel.vue'
+import { CORE_PANELS, CORE_TABS, CORE_TAB_LABELS } from '../panels/registry'
 
-const TABS = [
-  { key: 'overview', label: '总览' },
-  { key: 'qq', label: 'QQ 通道' },
-  { key: 'llm', label: '模型与搜索' },
-  { key: 'maimemo', label: '背单词' },
-  { key: 'tasks', label: '任务' },
-  { key: 'scheduled', label: '定时任务' },
-  { key: 'users', label: '用户与记忆' },
-  { key: 'logs', label: '日志' }
-]
 const INTERVALS = [5000, 10000, 30000, 60000, 0]
+/** 页签 key 的形状（清单里的 key 都是这种短标识），用于粗筛被改坏的 localStorage */
+const TAB_KEY = /^[A-Za-z0-9_-]{1,40}$/
 
 const router = useRouter()
 const tab = ref(readTab())
+/** 页签清单：先按内置 8 个渲染，/api/admin/panels 回来后再替换（后端新增模块不用改前端） */
+const tabs = ref(CORE_TABS)
+const panelsError = ref('')
 const interval = ref(readInterval())
 const overview = ref(null)
 const history = ref([])
@@ -39,6 +28,8 @@ const stopped = ref(false)
 const lastSuccess = ref('')
 const errorText = ref(null)
 const tickWidth = ref(0)
+/** 页签清单还在路上（此时可能还没法判断当前页签合不合法） */
+const panelsLoading = ref(true)
 
 let refreshTimer = null
 let progressTimer = null
@@ -66,10 +57,34 @@ function readInterval() {
   return INTERVALS.includes(value) ? value : 10000
 }
 
-/** 页签必须是 TABS 里的 key，非法值会让所有页签都不匹配、只剩空壳 */
+/** 页签必须是清单里的 key，非法值会让所有页签都不匹配、只剩空壳。
+ *  但清单要等 /panels 回来才有，所以这里只做形状粗筛（上次停在描述式页签时它的 key 不在内置注册表里），
+ *  拿到清单后再用清单校正（见 loadPanels）。 */
 function readTab() {
   const value = readSetting('admin.tab', 'overview')
-  return TABS.some(item => item.key === value) ? value : 'overview'
+  return TAB_KEY.test(value) ? value : 'overview'
+}
+
+/** 拉后端页签清单；接口还没上线/失败时退回内置 8 个页签，页签栏照常能用，错误只提示在内容区 */
+async function loadPanels() {
+  try {
+    const result = await api('/panels')
+    const list = Array.isArray(result?.tabs) ? result.tabs.filter(item => item && item.key) : []
+    if (!list.length) throw new Error('清单为空')
+    tabs.value = list.map(item => ({
+      ...item,
+      label: item.label || CORE_TAB_LABELS[item.key] || item.key,
+      kind: item.kind || (CORE_PANELS[item.key] ? 'core' : 'descriptor')
+    }))
+    panelsError.value = ''
+  } catch (error) {
+    tabs.value = CORE_TABS
+    panelsError.value = error.message
+  } finally {
+    panelsLoading.value = false
+  }
+  // 上次停的页签如果不在清单里（比如后端下线了某个模块），回落到总览
+  if (!tabs.value.some(item => item.key === tab.value)) tab.value = 'overview'
 }
 
 const status = computed(() => overview.value?.status || '')
@@ -78,6 +93,21 @@ const memoryCount = computed(() => ['coreMemories', 'workMemories', 'episodes']
   .map(key => Number(overview.value?.[key]) || 0)
   .reduce((left, right) => left + right, 0))
 const unknownTasks = computed(() => Number(overview.value?.tasks?.UNKNOWN_RESULT) || 0)
+
+const activeTab = computed(() => tabs.value.find(item => item.key === tab.value) || null)
+/** kind=core：用注册表里的手写组件；kind=descriptor：用通用描述式面板 */
+const activeCore = computed(() => (activeTab.value?.kind === 'core' ? CORE_PANELS[activeTab.value.key] || null : null))
+const activeDescriptor = computed(() => (activeTab.value?.kind === 'descriptor' ? activeTab.value : null))
+
+/** 现有 8 个页签的 props 语义保持不变：总览拿 overview/history，QQ 通道拿 overview，其余拿 tick */
+const coreProps = computed(() => {
+  if (activeTab.value?.key === 'overview') return { overview: overview.value, history: history.value }
+  if (activeTab.value?.key === 'qq') return { overview: overview.value }
+  return { tick: tick.value }
+})
+
+/** 原来只有「QQ 通道」接了 @refresh（改配置后顺手刷新总览），行为照旧 */
+const coreEvents = computed(() => (activeTab.value?.key === 'qq' ? { refresh: () => refresh(true) } : {}))
 
 const statusLine = computed(() => {
   if (errorText.value) {
@@ -163,6 +193,7 @@ watch(interval, value => {
 onMounted(() => {
   schedule()
   refresh(true)
+  loadPanels()
 })
 
 onBeforeUnmount(() => {
@@ -227,18 +258,23 @@ onBeforeUnmount(() => {
     </div>
 
     <nav class="glass tabs" role="tablist">
-      <button v-for="item in TABS" :key="item.key" class="tab" :class="{ active: tab === item.key }"
+      <button v-for="item in tabs" :key="item.key" class="tab" :class="{ active: tab === item.key }"
               role="tab" @click="tab = item.key">{{ item.label }}</button>
     </nav>
 
-    <OverviewPanel v-if="tab === 'overview'" :overview="overview" :history="history"></OverviewPanel>
-    <QqPanel v-else-if="tab === 'qq'" :overview="overview" @refresh="refresh(true)"></QqPanel>
-    <LlmPanel v-else-if="tab === 'llm'" :tick="tick"></LlmPanel>
-    <MaimemoPanel v-else-if="tab === 'maimemo'" :tick="tick"></MaimemoPanel>
-    <TasksPanel v-else-if="tab === 'tasks'" :tick="tick"></TasksPanel>
-    <ScheduledPanel v-else-if="tab === 'scheduled'" :tick="tick"></ScheduledPanel>
-    <UsersPanel v-else-if="tab === 'users'" :tick="tick"></UsersPanel>
-    <LogsPanel v-else :tick="tick"></LogsPanel>
+    <div v-if="panelsError" class="notice" style="margin-bottom: 14px">
+      页签清单接口不可用（{{ panelsError }}），当前显示内置页签
+    </div>
+
+    <component v-if="activeCore" :is="activeCore" :key="'core-' + activeTab.key" v-bind="coreProps"
+               v-on="coreEvents"></component>
+    <DescriptorPanel v-else-if="activeDescriptor" :key="'descriptor-' + activeDescriptor.key"
+                     :tab="activeDescriptor" :tick="tick"></DescriptorPanel>
+    <div v-else-if="panelsLoading" class="notice">正在读取页签清单…</div>
+    <section v-else-if="activeTab" class="glass panel">
+      <div class="panel-head"><h2>{{ activeTab.label }}</h2></div>
+      <div class="empty">这个页签在前端没有对应的渲染组件（kind={{ activeTab.kind || '未给' }}）</div>
+    </section>
 
     <div class="status-line" :class="{ stale: Boolean(errorText) }" role="status">{{ statusLine }}</div>
   </div>

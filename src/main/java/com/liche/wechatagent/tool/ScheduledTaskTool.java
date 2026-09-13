@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * 要不要调用完全由模型按用户意图判断（不做关键词硬编码）。
  */
 @Component
-public class ScheduledTaskTool {
+public class ScheduledTaskTool implements AgentToolProvider {
 
     private final ScheduledTaskService scheduledTaskService;
     private final ToolStatusService statusService;

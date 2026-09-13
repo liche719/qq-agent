@@ -198,6 +198,17 @@ qq:
   # 主动消息每天最多发多少条（0 = 不限，只记账并在面板显示）；超限后放弃发送并记 WARN
   proactive-daily-limit: ${QQ_PROACTIVE_DAILY_LIMIT:0}
 
+exam:
+  # 考研规划模块：计划/每日任务/打卡/进度统计 + 三条定时推送
+  # 关掉推送（enabled=false）不影响聊天里的指令与工具，只是不再自动催
+  enabled: ${EXAM_ENABLED:true}
+  morning-time: ${EXAM_MORNING_TIME:07:30}
+  evening-time: ${EXAM_EVENING_TIME:22:00}
+  weekly-time: ${EXAM_WEEKLY_TIME:21:00}
+  weekly-day: ${EXAM_WEEKLY_DAY:SUNDAY}
+  push-scan-interval-ms: ${EXAM_PUSH_SCAN_INTERVAL_MS:60000}
+  push-initial-delay-ms: ${EXAM_PUSH_INITIAL_DELAY_MS:60000}
+
 wechat:
   channel:
     mode: ${WECHAT_CHANNEL_MODE:disabled}   # QQ 项目默认不启动微信通道；本地调试可显式设 simulator

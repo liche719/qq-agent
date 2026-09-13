@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter;
  * 通过工具获取时间，避免把动态时间写进系统提示词破坏 DeepSeek 前缀缓存。
  */
 @Component
-public class TimeTool {
+public class TimeTool implements AgentToolProvider {
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm");
     private final ZoneId zone;

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * parseReminder：@Tool 仅负责把自然语言解析为结构化数据，入库/校验/调度全部交由后端业务层（ReminderService）。
  */
 @Component
-public class ReminderTool {
+public class ReminderTool implements AgentToolProvider {
 
     private final ReminderParseService parseService;
     private final ReminderService reminderService;

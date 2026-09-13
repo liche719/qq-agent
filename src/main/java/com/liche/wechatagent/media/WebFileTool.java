@@ -26,7 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 @Component
-public class WebFileTool {
+public class WebFileTool implements com.liche.wechatagent.tool.AgentToolProvider {
 
     private static final int DEFAULT_MAX_REDIRECTS = 3;
     private static final int DEFAULT_MAX_LINKS = 20;

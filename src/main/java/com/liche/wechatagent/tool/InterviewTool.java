@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * 每轮结束后用 {@code recordInterviewRound} 记分，退出时程序给出复盘报告。
  */
 @Component
-public class InterviewTool {
+public class InterviewTool implements AgentToolProvider {
 
     private final InterviewService interviewService;
     private final ToolStatusService statusService;

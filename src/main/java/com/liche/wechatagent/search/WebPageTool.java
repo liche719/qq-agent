@@ -20,7 +20,7 @@ import java.time.Duration;
 import java.util.List;
 
 @Component
-public class WebPageTool {
+public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider {
 
     private static final int DEFAULT_MAX_REDIRECTS = 3;
     private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
