@@ -35,7 +35,9 @@ public class ExamTool implements AgentToolProvider {
     @Tool(value = "新建或更新考研备考计划。subjects 用分号分隔科目，每个科目四个字段用冒号分隔："
             + "科目名:目标分:每天分钟:每日计划，例如「数学:120:120:强化第3章;英语:70:60:阅读2篇+单词50;政治:70:60:刷题;专业课:110:120:真题」。"
             + "只有科目名必填。examDate 传用户说的考试日期（YYYY-MM-DD，不知道具体日期时可以传空），"
-            + "stage 传 基础/强化/冲刺。用户第一次说考研目标、或要求改计划时调用。")
+            + "stage 传 基础/强化/冲刺。用户第一次说考研目标、或要求改计划时调用。"
+            + "只想改其中某一项（例如「考试日期改成 2027-12-25」）时，**subjects 可以不传、原科目会保留**；"
+            + "但只要传了 subjects，就会整体替换掉原来的科目，所以传就必须把全部科目一次列全（先调 viewExamPlan 看现状）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool

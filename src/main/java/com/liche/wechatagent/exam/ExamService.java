@@ -90,13 +90,15 @@ public class ExamService {
         if (examDate != null && !examDate.isBlank() && parsedExamDate == null) {
             return "考试日期没看懂（要 2026-12-20 这种写法），计划没有保存。";
         }
-        List<Subject> subjects = parseSubjects(subjectsText, dailyMinutes);
-        if (subjects.isEmpty()) {
-            return "至少要写一个科目（例如「数学:120:120:强化第3章;英语:70:60:阅读2篇」），计划没有保存。";
-        }
         LocalDateTime now = LocalDateTime.now(zone);
         ExamPlan plan = plans.findById(userId).orElse(null);
         boolean created = plan == null;
+        List<Subject> subjects = parseSubjects(subjectsText, dailyMinutes);
+        // 只有「新建」才强制要科目。已有计划时 subjects 留空＝不动科目：
+        // 否则用户说「考试日期改成 2027-12-25」而模型没把科目重列一遍时，整个保存会被拒掉。
+        if (subjects.isEmpty() && created) {
+            return "至少要写一个科目（例如「数学:120:120:强化第3章;英语:70:60:阅读2篇」），计划没有保存。";
+        }
         if (created) {
             plan = new ExamPlan();
             plan.setUserId(userId);
@@ -114,10 +116,17 @@ public class ExamService {
         if (stage != null && !stage.isBlank()) {
             plan.setStage(normalizeStage(stage));
         }
-        plan.setDailyMinutes(subjects.stream().mapToInt(s -> s.dailyMinutes() == null ? 0 : s.dailyMinutes()).sum() > 0
-                ? subjects.stream().mapToInt(s -> s.dailyMinutes() == null ? 0 : s.dailyMinutes()).sum()
-                : (dailyMinutes == null || dailyMinutes <= 0 ? null : dailyMinutes));
-        plan.setSubjects(writeSubjects(subjects));
+        if (subjects.isEmpty()) {
+            // 没传科目＝不改科目，只在明确给了总时长时覆盖它
+            if (dailyMinutes != null && dailyMinutes > 0) {
+                plan.setDailyMinutes(dailyMinutes);
+            }
+        } else {
+            int subjectMinutes = subjects.stream().mapToInt(s -> s.dailyMinutes() == null ? 0 : s.dailyMinutes()).sum();
+            plan.setDailyMinutes(subjectMinutes > 0 ? subjectMinutes
+                    : (dailyMinutes == null || dailyMinutes <= 0 ? null : dailyMinutes));
+            plan.setSubjects(writeSubjects(subjects));
+        }
         if (remark != null && !remark.isBlank()) {
             plan.setRemark(clip(remark, 500));
         }
