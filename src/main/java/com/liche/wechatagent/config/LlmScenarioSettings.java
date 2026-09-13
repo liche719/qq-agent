@@ -21,9 +21,21 @@ import java.util.Set;
  */
 public class LlmScenarioSettings {
 
-    /** 默认档：结构性任务关思考 + 温度 0（实测输出 token 少约 90%、快约 2.4 倍，JSON 依然合法） */
+    /**
+     * 默认档：**只关实测过、且失败代价小**的两个场景。
+     *
+     * <ul>
+     *   <li>{@code extract}：每轮对话都会跑，输出是结构化事实，实测同一条消息开/关思考提取结果一致
+     *       （episodes/work/core 数量相同），而 8194ms/1516token → 2254ms/493token；</li>
+     *   <li>{@code schedule_parse}：自然语言 → cron，实测 8/8 完全正确，且 {@code isValidCron} 有兜底，
+     *       真解析错了也只是反问用户；</li>
+     * </ul>
+     *
+     * <p>**reminder_parse 与 archive 不关**：前者是提醒时间，解析错了用户会漏掉提醒（且调用很少，
+     * 省下的 token 可以忽略）；后者是长期记忆的摘要，质量优先（第一优先级是"记忆不丢失"）。
+     */
     private static final Set<LlmScenario> DEFAULT_OFF = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);
+            LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE);
     private static final String DEFAULT_OFF_BODY = "{\"thinking\":{\"type\":\"disabled\"}}";
     private static final String DEFAULT_ON_BODY = "{\"thinking\":{\"type\":\"enabled\"}}";
 

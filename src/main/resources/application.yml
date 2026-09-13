@@ -73,8 +73,9 @@ llm:
   # 输出 token 少约 90%、快约 2.4 倍，JSON 依然合法；对话（dialog）保持默认档不动。
   # 场景见 LlmScenario：dialog / extract / reminder_parse / schedule_parse / archive
   thinking:
-    # 关思考的场景（逗号分隔）；留空 = 用内置默认值（extract,reminder_parse,schedule_parse,archive）
-    disabled-scenarios: ${LLM_THINKING_DISABLED_SCENARIOS:extract,reminder_parse,schedule_parse,archive}
+    # 关思考的场景（逗号分隔）；留空 = 用内置默认值（extract,schedule_parse）。reminder_parse/archive 不关：
+    # 前者解析错=用户漏提醒（且调用很少），后者是长期记忆摘要、质量优先
+    disabled-scenarios: ${LLM_THINKING_DISABLED_SCENARIOS:extract,schedule_parse}
     # 要显式打开思考的场景（默认空 = 不额外塞字段，保持上游默认）
     enabled-scenarios: ${LLM_THINKING_ENABLED_SCENARIOS:}
     # 关/开思考时塞进请求体的额外字段（字段形状按上游文档，代码不写死；**留空 = 用内置默认值**）

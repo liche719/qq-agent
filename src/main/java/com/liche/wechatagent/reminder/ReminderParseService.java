@@ -4,15 +4,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.liche.wechatagent.config.LlmScenario;
 import dev.langchain4j.model.chat.ChatModel;
+import org.quartz.CronExpression;
 import org.springframework.stereotype.Service;
 
+import java.text.ParseException;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.DayOfWeek;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -73,6 +77,9 @@ public class ReminderParseService {
                 + "- 时间模糊或缺失 → triggerAt 为 null，missing 里说明缺什么（如'具体几点？'）；\n"
                 + "- 有重复需求（每天/每周一/每三天等）→ repeatCron 填 Quartz 标准 6 段 Cron 表达式（秒 分 时 日 月 周），否则 null；\n"
                 + "- Cron 示例：每天9点 = \"0 0 9 * * ?\"；每周一早上8点 = \"0 0 8 ? * MON\"；每3天 = \"0 0 9 */3 * ?\"；必须是 6 段（秒位补 0，周位用 ? 或 MON/TUE），不要输出 5 段；\n"
+                + "- 有重复需求时 triggerAt 也必须给出**下一次**触发时间，不要因为填了 cron 就把 triggerAt 留成 null："
+                + "例如「每天早上七点半」→ cron=\"0 30 7 * * ?\" 且 triggerAt=明天的 07:30；\n"
+                + "- cron 里已经写明的时刻不算缺失信息（如 cron=\"0 0 9 */3 * ?\" 已经表示 9 点），不要再往 missing 里写'具体几点'；\n"
                 + "- prewarmMinutes 是同一条提醒提前多少分钟推送的参数，默认 " + defaultPrewarmMinutes
                 + "，用户提到提前时长则按其填写；\n"
                 + "- 重要：用户说'提前X分钟预热/提前提醒'只是这条提醒的预热参数，绝对不要创建第二条提醒任务，\n"
@@ -95,6 +102,11 @@ public class ReminderParseService {
         for (JsonNode m : root.path("missing")) {
             missing.add(m.asText(""));
         }
+        if (triggerAt == null && cron != null) {
+            // 重复提醒常见"只给 cron 不给时间"（关思考后更明显）。校验要求 triggerAt 非空，否则会白白反问用户，
+            // 所以这里直接用 cron 算下一次触发时间；cron 不合法就保持 null，交给校验去反问。
+            triggerAt = firstFireTime(cron);
+        }
         validateDateHints(description, triggerAt, missing, current);
         return new ParsedReminder(content, triggerAt, prewarm, cron, missing);
     }
@@ -105,6 +117,18 @@ public class ReminderParseService {
         try {
             return LocalDateTime.parse(value, FMT);
         } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** 按 cron 算下一次触发时间（时区显式指定，见坑 29：不写会跟着 JVM 默认时区漂） */
+    private LocalDateTime firstFireTime(String cron) {
+        try {
+            CronExpression expression = new CronExpression(cron);
+            expression.setTimeZone(TimeZone.getTimeZone(zone));
+            Date next = expression.getNextValidTimeAfter(new Date());
+            return next == null ? null : LocalDateTime.ofInstant(next.toInstant(), zone);
+        } catch (ParseException | RuntimeException exception) {
             return null;
         }
     }

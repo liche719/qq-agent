@@ -55,7 +55,7 @@ services:
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
       # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 extract/reminder_parse/
       # schedule_parse/archive；请求体字段形状也由这里覆盖，上游换写法不用改代码）
-      LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
+      LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-extract,schedule_parse}
       LLM_THINKING_ENABLED_SCENARIOS: ${LLM_THINKING_ENABLED_SCENARIOS:-}
       LLM_THINKING_DISABLED_BODY: ${LLM_THINKING_DISABLED_BODY:-}
       LLM_THINKING_ENABLED_BODY: ${LLM_THINKING_ENABLED_BODY:-}
