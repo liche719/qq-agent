@@ -24,7 +24,8 @@ use_default_settings:
       - bing
 
 server:
-  secret_key: "au3YAZnq1wPU6lmytCOJ7R1boCpGOuE"
+  # secret_key 不写在这里（这个文件在仓库里）——由容器环境变量 SEARXNG_SECRET 提供，
+  # 值只存在服务器 /opt/wechat-agent-infra/.env（2026-09-14 轮换过一次，旧值已作废）。
   image_proxy: true
   limiter: false
 

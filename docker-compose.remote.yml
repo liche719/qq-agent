@@ -203,6 +203,8 @@ services:
         max-file: "3"
     environment:
       SEARXNG_BASE_URL: http://localhost:8888
+      # 会话签名密钥：**不放仓库**，只在服务器 .env（2026-09-14 起）；空值会让搜狗之外的防滥用逻辑退化
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
       TZ: Asia/Shanghai
     ports: ["127.0.0.1:8888:8080"]
     volumes:
