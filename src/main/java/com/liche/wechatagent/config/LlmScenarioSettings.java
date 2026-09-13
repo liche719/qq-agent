@@ -88,7 +88,8 @@ public class LlmScenarioSettings {
      */
     public int maxTokensFor(LlmScenario scenario) {
         if (scenario == LlmScenario.DIALOG_DEEP) {
-            return dialogDeepMaxTokens > 0 ? dialogDeepMaxTokens : structuredMaxTokens;
+            // 升档是"要更多预算"，所以默认**不设上限**（与普通对话一致）；要限制就显式配 dialog-deep
+            return dialogDeepMaxTokens;
         }
         if (scenario == LlmScenario.DIALOG) {
             return dialogMaxTokens;
