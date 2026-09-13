@@ -218,8 +218,8 @@ public class ExamService {
      */
     @Transactional
     public String updateTask(String userId, Long taskId, String keyword, String status, String note) {
-        ExamTask task = taskId == null ? matchToday(userId, keyword) : tasks.findById(taskId).orElse(null);
-        if (task == null || !userId.equals(task.getUserId())) {
+        ExamTask task = resolveTask(userId, taskId, keyword);
+        if (task == null) {
             return taskId == null
                     ? "没在今天的任务里找到「" + (keyword == null ? "" : keyword) + "」，可以先让我列出今天的任务。"
                     : "没找到这个任务（id 可能不对）。";
@@ -238,6 +238,23 @@ public class ExamService {
         String label = ExamTask.STATUS_DONE.equals(normalized) ? "已完成 ✅"
                 : ExamTask.STATUS_SKIPPED.equals(normalized) ? "已跳过 ⏭" : "改回未完成";
         return "「" + task.getSubject() + " · " + task.getContent() + "」" + label;
+    }
+
+    private ExamTask resolveTask(String userId, Long taskId, String keyword) {
+        if (taskId != null) {
+            ExamTask byId = tasks.findById(taskId)
+                    .filter(task -> userId.equals(task.getUserId()))
+                    .orElse(null);
+            if (byId != null) {
+                return byId;
+            }
+            // 模型很容易把「列表里的第几条」当成 id（列表以前只给行号）：按 1 起的序号在今天的任务里再兜一次
+            List<ExamTask> today = todayTasks(userId);
+            if (taskId >= 1 && taskId <= today.size()) {
+                return today.get((int) (taskId - 1));
+            }
+        }
+        return matchToday(userId, keyword);
     }
 
     private ExamTask matchToday(String userId, String keyword) {
@@ -471,7 +488,9 @@ public class ExamService {
             if (isDone) {
                 done++;
             }
-            sb.append(index++).append(". ")
+            // 这里的 #编号 是**数据库里的真实 taskId**，不是行号：模型要改任务时得把这个 id 传回来
+            // （列表只给行号时，模型会把 1、2 当成 id，然后 updateExamTask 全部"找不到"）
+            sb.append(index++).append(". #").append(task.getId()).append(" ")
                     .append(isDone ? "✅" : skipped ? "⏭" : "⬜").append(" ")
                     .append(task.getSubject() == null ? "" : task.getSubject() + " · ")
                     .append(task.getContent());

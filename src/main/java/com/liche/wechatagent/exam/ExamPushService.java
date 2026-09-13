@@ -137,7 +137,7 @@ public class ExamPushService {
         result.put("kind", label);
         result.put("text", text);
         result.put("message", sent
-                ? "已推送「" + label + "」到你的 " + channelName(userId)
+                ? "已推送「" + label + "」（内容见 text）"
                 : "推送失败：可能是通道不接主动消息或 QQ 主动消息额度限制（内容已生成，见 text）");
         return result;
     }
@@ -160,12 +160,6 @@ public class ExamPushService {
             log.warn("考研推送异常 user={}：{}", userId, exception.toString());
             return false;
         }
-    }
-
-    private String channelName(String userId) {
-        UserProfile profile = profiles.findById(userId).orElse(null);
-        String channel = profile == null ? null : profile.getLastChannel();
-        return channel == null || channel.isBlank() ? "QQ" : channel;
     }
 
     private boolean notBefore(LocalDateTime now, LocalTime target) {
