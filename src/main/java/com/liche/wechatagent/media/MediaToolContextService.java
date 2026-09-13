@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Binds only the current inbound message's media to the agent tool thread. */
 @Component
@@ -50,7 +51,7 @@ public class MediaToolContextService {
                                 int attachmentCount, List<MediaCandidate> candidates, CandidateOrigin candidateOrigin,
                                 PendingMediaKey pendingKey, List<SavedNotice> savedNotices,
                                 List<ReadableMedia> readableMedia, List<String> sentNotices,
-                                List<String> failedNotices) {
+                                List<String> failedNotices, AtomicInteger imageReads) {
     }
 
     private record PendingMedia(String sourceMessageId, List<MediaCandidate> candidates,
@@ -108,7 +109,7 @@ public class MediaToolContextService {
         current.set(new CurrentMedia(userId, scope, taskId == null ? messageId : taskId, messageId,
                 mediaSourceMessageId, userText == null ? "" : userText,
                 sizeOf(attachments) + sizeOf(quotedAttachments), List.copyOf(candidates), origin, pendingKey,
-                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new AtomicInteger()));
     }
 
     public void unbind() {
@@ -159,7 +160,8 @@ public class MediaToolContextService {
         CurrentMedia activated = new CurrentMedia(media.userId(), media.scope(), media.taskId(), media.messageId(),
                 pending.sourceMessageId(), media.userText(), media.attachmentCount(), pending.candidates(),
                 CandidateOrigin.PREVIOUS_UNSAVED_UPLOAD, key,
-                media.savedNotices(), media.readableMedia(), media.sentNotices(), media.failedNotices());
+                media.savedNotices(), media.readableMedia(), media.sentNotices(), media.failedNotices(),
+                media.imageReads());
         current.set(activated);
         for (MediaCandidate candidate : activated.candidates()) {
             if (candidate.image() && candidate.sourceUrl() != null && !candidate.sourceUrl().isBlank()) {
@@ -211,6 +213,19 @@ public class MediaToolContextService {
     public void addReadableMedia(String description, String imageDataUrl) {
         CurrentMedia media = current.get();
         if (media != null) media.readableMedia().add(new ReadableMedia(description, imageDataUrl));
+    }
+
+    /**
+     * 本条消息（一次任务）已经喂给视觉模型的图片张数 +1，返回累计张数。
+     *
+     * <p>为什么要记这个：{@code readStoredMedia} 会把图片的 base64 塞进下一次模型请求，而对话历史在同一任务内
+     * 是累加的——模型要是把十几个候选文件一个个看完，请求体就会有十几张原图（每张几百 KB~几 MB），
+     * 直接把上下文撑爆。所以调用方拿这个计数做上限，图片不再无限往里塞。
+     * 计数随任务创建、随 {@code unbind()} 一起释放，不需要额外清理。
+     */
+    public int reserveImageRead() {
+        CurrentMedia media = current.get();
+        return media == null ? 0 : media.imageReads().incrementAndGet();
     }
 
     public List<ReadableMedia> consumeReadableMedia() {

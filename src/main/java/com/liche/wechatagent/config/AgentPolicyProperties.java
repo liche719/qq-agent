@@ -58,6 +58,7 @@ public class AgentPolicyProperties {
             Map.entry("inspectRecentUnstoredMedia", "查看刚才的媒体"),
             Map.entry("listStoredMedia", "查找已保存文件"),
             Map.entry("readStoredMedia", "读取已保存文件"),
+            Map.entry("noteStoredMediaContent", "记录资料内容"),
             Map.entry("inspectStoredMedia", "审阅文件"),
             Map.entry("deleteStoredMedia", "删除文件"),
             Map.entry("findDownloadableLinks", "查找下载文件"),

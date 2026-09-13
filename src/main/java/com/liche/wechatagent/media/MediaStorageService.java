@@ -55,6 +55,9 @@ public class MediaStorageService {
     private final Duration inspectionTtl;
     private final int maxListResults;
     private final int maxInspectionTextChars;
+    /** 视觉识别记录的起始标记：同一份资料只保留最新一条 */
+    private static final String VISION_MARKER = "【视觉识别】";
+    private static final int MAX_CONTENT_HINT_CHARS = 400;
     private final MediaDownloadService downloadService;
     private final Map<String, InspectionGrant> inspectionGrants = new ConcurrentHashMap<>();
     private final Map<String, Object> userLocks = new ConcurrentHashMap<>();
@@ -253,6 +256,31 @@ public class MediaStorageService {
             return extracted;
         }
         return extracted.substring(0, maxInspectionTextChars) + "…（内容已截断）";
+    }
+
+    /**
+     * 模型看完一份资料后，把「里面到底是什么」记回这一行的 extracted_text。
+     *
+     * <p>extracted_text 本身就在检索字段里（见 searchableText），所以记过一次之后，用户按内容关键词
+     * （例如「课表」「复试线」）就能搜到它——哪怕文件名起得很含糊。同一份资料重复调用是**覆盖**，
+     * 不会一条条堆长。刻意**不动 updated_at**：列表按 updated_at 排序，"看了一眼"不该把老文件顶到最前面。
+     */
+    @Transactional
+    public String noteContentHint(String userId, Long mediaId, String hint) {
+        StoredMedia media = requireOwnedActive(userId, mediaId);
+        String clean = hint == null ? "" : hint.strip().replaceAll("\\s+", " ");
+        if (clean.isBlank()) {
+            throw new IllegalArgumentException("要记下来的内容不能为空");
+        }
+        if (clean.length() > MAX_CONTENT_HINT_CHARS) {
+            clean = clean.substring(0, MAX_CONTENT_HINT_CHARS - 1) + "…";
+        }
+        String existing = blankToEmpty(media.getExtractedText());
+        int marker = existing.indexOf(VISION_MARKER);
+        String documentText = (marker >= 0 ? existing.substring(0, marker) : existing).stripTrailing();
+        media.setExtractedText((documentText.isBlank() ? "" : documentText + "\n") + VISION_MARKER + clean);
+        repository.save(media);
+        return "记下了：" + clean + "。以后我按这些词就能搜到这份资料（ID=" + media.getId() + "）。";
     }
 
     public SaveOutcome downloadFromWeb(String userId, String sourceMessageId, String url, String fileName, String summary) {
