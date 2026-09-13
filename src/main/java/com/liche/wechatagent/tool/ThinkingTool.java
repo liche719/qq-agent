@@ -5,6 +5,7 @@ import com.liche.wechatagent.config.LlmEscalation;
 import dev.langchain4j.agent.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,10 +25,14 @@ public class ThinkingTool implements AgentToolProvider {
 
     private final ThinkingQuota quota;
     private final ToolStatusService statusService;
+    /** 升档后发不发"稍等我一下"那条提示：升档要跑十几秒到几十秒，默认发；设为 false 可关掉。 */
+    private final boolean noticeEnabled;
 
-    public ThinkingTool(ThinkingQuota quota, ToolStatusService statusService) {
+    public ThinkingTool(ThinkingQuota quota, ToolStatusService statusService,
+                        @Value("${agent.deep-notice-enabled:true}") boolean noticeEnabled) {
         this.quota = quota;
         this.statusService = statusService;
+        this.noticeEnabled = noticeEnabled;
     }
 
     @com.liche.wechatagent.tool.ToolExecutionPolicy(value = com.liche.wechatagent.tool.ToolExecutionClass.FAST,
@@ -54,7 +59,9 @@ public class ThinkingTool implements AgentToolProvider {
         LlmEscalation.escalate();
         quota.record(userId);
         // 升档后这一轮可能要跑十几秒到几十秒：先给用户一句反馈，别让他对着"正在输入"干等
-        statusService.pushNotice("这个我得仔细想想，稍等我一下…");
+        if (noticeEnabled) {
+            statusService.pushNotice("这个我得仔细想想，稍等我一下…");
+        }
         log.info("已升档 user={} 今日第 {} 次（上限 {}）reason={}", userId, quota.used(userId), quota.limit(),
                 reason == null ? "" : reason.strip());
         return ToolBusinessResult.success("已升档：后面的轮次会用深度思考，也可以多用几轮工具，"
