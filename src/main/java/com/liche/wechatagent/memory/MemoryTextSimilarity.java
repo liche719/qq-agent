@@ -14,6 +14,10 @@ import java.util.Set;
  *
  * <p>为什么不用向量：项目里没有 embedding 接口，而这类冲突（改分数、改日期、改院校、改称呼）**字面高度重合**，
  * 二元组 Jaccard 已经够用；真需要语义检索时再上向量（见 docs/memory-extraction.md 的"下一步"）。
+ *
+ * <p>**注意它的能力边界（实测）**：它只能抓"字面相近"的新旧版本；模型把「考研数学目标分是130」改写成
+ * 「用户在考研中设定的数学目标分数为140分」这种**换了说法**的情况，相似度只有 0.3 左右 → 抓不到，
+ * 那种情况由 {@code MemoryExtractor.reconcileCoreWithModel()} 的第二次小调用兜住。
  */
 final class MemoryTextSimilarity {
 

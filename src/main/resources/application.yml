@@ -74,16 +74,14 @@ llm:
   # thinking:{"type":"disabled"}；只有对话省电档能省到用户的等待时间，其余场景省的只是后台 token）。
   # 场景见 LlmScenario：dialog / dialog_deep / extract / reminder_parse / schedule_parse / archive
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
-  # （extract,reminder_parse,schedule_parse,archive,consolidate）
-  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reminder_parse,schedule_parse,archive,consolidate}
+  # （extract,reminder_parse,schedule_parse,archive）
+  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reminder_parse,schedule_parse,archive}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   max-tokens:
     structured: ${LLM_MAX_TOKENS_STRUCTURED:4096}
     dialog: ${LLM_MAX_TOKENS_DIALOG:0}
     dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
-    # 记忆归纳单独一档：实测 23 条记忆的归纳，光思考就吃掉 4096、JSON 一个字都没出来，所以给它更大的额度
-    consolidate: ${LLM_MAX_TOKENS_CONSOLIDATE:16384}
 
 agent:
   message-batch-thread-name-prefix: ${AGENT_MESSAGE_BATCH_THREAD_NAME_PREFIX:message-batch-}
@@ -268,18 +266,8 @@ memory:
   extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:150}
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
-  # 记忆归纳（consolidation，2026-09-14 加，**默认关闭**）：每天把零碎的核心/中期记忆归纳成少量"更高层稳定记忆"。
-  # 首次上线实测**不合格**，先关掉等方案定稿（详见 docs/memory-extraction.md"归纳这一版为什么被下线"）：
-  #   ① 模型在这个开放任务上会一直想：16384 的额度被思考吃干净（日志 reasoningTokens=16384），JSON 一个字没出；
-  #   ② 模型给的 replaces 常常对不上原文 → 走到"新增"，把原条目又抄了一遍，库里出现大量重复条目；
-  #   ③ 每跑一次都可能推倒重来，形成"合并→再拆开"的来回折腾（同一批记忆被反复 SUPERSEDED / 重新 ACTIVE）。
-  consolidation:
-    enabled: ${MEMORY_CONSOLIDATION_ENABLED:false}
-    min-active-cores: ${MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES:15}
-    max-output: ${MEMORY_CONSOLIDATION_MAX_OUTPUT:8}
-    max-input-cores: ${MEMORY_CONSOLIDATION_MAX_INPUT_CORES:60}
-    max-input-work: ${MEMORY_CONSOLIDATION_MAX_INPUT_WORK:20}
-  consolidation-cron: ${MEMORY_CONSOLIDATION_CRON:0 10 4 * * ?}
+  # 2026-09-14 曾短暂上线过"每天一次记忆归纳（consolidation）"，实测不合格（模型把两条原文用「；」拼起来当归纳、
+  # 思考吃满额度、replaces 对不上原文导致重复新增），**当天已整块删除**。始末与实测数据见 docs/memory-extraction.md。
   dedup-threshold: ${MEMORY_DEDUP_THRESHOLD:0.8}
   usage-touch-interval-minutes: ${MEMORY_USAGE_TOUCH_INTERVAL_MINUTES:15}
   extraction-max-candidates: ${MEMORY_EXTRACTION_MAX_CANDIDATES:32}

@@ -18,22 +18,18 @@ public class LlmScenarioSettings {
 
     /** 默认温度 0 的场景：只要结构化输出正确，不需要发散 */
     private static final Set<LlmScenario> DEFAULT_ZERO_TEMPERATURE = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE,
-            LlmScenario.CONSOLIDATE);
+            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);
 
     private final Set<LlmScenario> zeroTemperature;
     private final int structuredMaxTokens;
     private final int dialogMaxTokens;
     private final int dialogDeepMaxTokens;
-    private final int consolidateMaxTokens;
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
-                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
-                               int consolidateMaxTokens) {
+                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens) {
         this.structuredMaxTokens = Math.max(0, structuredMaxTokens);
         this.dialogMaxTokens = Math.max(0, dialogMaxTokens);
         this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
-        this.consolidateMaxTokens = Math.max(0, consolidateMaxTokens);
         this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_ZERO_TEMPERATURE);
     }
 
@@ -43,9 +39,6 @@ public class LlmScenarioSettings {
      * <p>为什么要这个：早先一个都没设，极端长思考没有任何上限。但注意**思考 token 也算进这个上限**——
      * 实测"每3天"这类问题光思考就 1800+ token，所以结构化场景给的是**宽松的兜底值**（默认 4096），
      * 而对话档默认仍然不设，免得把正常长回复截断。
-     *
-     * <p>**记忆归纳（consolidate）单独一档**：实测 23 条记忆的归纳，思考就吃掉整整 4096，
-     * JSON 一个字都没输出（日志 `completionTokens=4096 reasoningTokens=4096`）→ 给它 16384 的额度。
      */
     public int maxTokensFor(LlmScenario scenario) {
         if (scenario == LlmScenario.DIALOG_DEEP) {
@@ -55,9 +48,6 @@ public class LlmScenarioSettings {
         if (scenario == LlmScenario.DIALOG) {
             // 对话档默认不设上限：思考 token 也算进 max_tokens，加了会截断正常长回复
             return dialogMaxTokens;
-        }
-        if (scenario == LlmScenario.CONSOLIDATE) {
-            return consolidateMaxTokens;
         }
         return structuredMaxTokens;
     }

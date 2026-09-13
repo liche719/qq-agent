@@ -46,8 +46,7 @@ const DICTIONARY = {
     extract: '记忆提取',
     reminder_parse: '提醒解析',
     schedule_parse: '定时任务解析',
-    archive: '归档摘要',
-    consolidate: '记忆归纳'
+    archive: '归档摘要'
   }
 }
 

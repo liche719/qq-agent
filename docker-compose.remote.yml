@@ -60,13 +60,12 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
       # 深度思考不再按场景开关（2026-09-14 整块删除，全部场景都用模型默认思考），所以没有 LLM_THINKING_* 了
-      # 注意：这里是**非空默认值**，它会整体覆盖代码里的默认集合——加新场景（如 consolidate）必须两处一起改
-      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive,consolidate}
+      # 注意：这里是**非空默认值**，它会整体覆盖代码里的默认集合——加新场景必须两处一起改
+      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-4096}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
       LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
-      LLM_MAX_TOKENS_CONSOLIDATE: ${LLM_MAX_TOKENS_CONSOLIDATE:-16384}
       # thinkDeeper（模型自己申请升档）的预算与额度
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
@@ -78,10 +77,6 @@ services:
       AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
       # 工具失败详情要不要拼进用户可见的回复（默认 false，只进日志）
       AGENT_TOOL_FAILURE_NOTICE_ENABLED: ${AGENT_TOOL_FAILURE_NOTICE_ENABLED:-false}
-      # 记忆归纳（每天一次把零碎记忆合并成高层记忆）；2026-09-14 首版实测不合格，**默认关闭**（详见 docs/memory-extraction.md）
-      MEMORY_CONSOLIDATION_ENABLED: ${MEMORY_CONSOLIDATION_ENABLED:-false}
-      MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES: ${MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES:-15}
-      MEMORY_CONSOLIDATION_CRON: ${MEMORY_CONSOLIDATION_CRON:-0 10 4 * * ?}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。
