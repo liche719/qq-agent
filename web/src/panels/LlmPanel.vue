@@ -99,7 +99,7 @@ onMounted(() => load())
     </div>
 
     <section class="glass panel">
-      <div class="panel-head"><h2>按场景</h2><span class="hint">关掉思考的场景（记忆提取、定时任务解析）省下的最多；「其中思考」是输出 token 里花在思考上的部分</span></div>
+      <div class="panel-head"><h2>按场景</h2><span class="hint">全部场景都开着深度思考（2026-09-14 起不再分场景开关）；「其中思考」是输出 token 里花在思考上的部分</span></div>
       <DataTable :columns="scenarioColumns" :rows="scenarioRows" empty="还没有调用记录（重启后归零）"></DataTable>
     </section>
 

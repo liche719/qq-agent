@@ -34,7 +34,7 @@ public final class LlmEscalation {
         if (!active()) {
             return base;
         }
-        // 省电档也要能被升档盖掉：否则"闲聊档"下模型申请了升档却还是关着思考
-        return base == LlmScenario.DIALOG || base == LlmScenario.DIALOG_FAST ? LlmScenario.DIALOG_DEEP : base;
+        // 升档后单独记一个场景（dialog_deep），方便看"升档值不值"
+        return base == LlmScenario.DIALOG ? LlmScenario.DIALOG_DEEP : base;
     }
 }

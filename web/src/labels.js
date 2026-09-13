@@ -43,7 +43,6 @@ const DICTIONARY = {
   scenario: {
     dialog: '对话（默认档）',
     dialog_deep: '对话（模型申请升档）',
-    dialog_fast: '对话（省电档：寒暄/确认类）',
     extract: '记忆提取',
     reminder_parse: '提醒解析',
     schedule_parse: '定时任务解析',

@@ -4,24 +4,25 @@ import java.util.Locale;
 import java.util.function.Supplier;
 
 /**
- * 一次 LLM 调用属于哪个场景——只用来决定「这一轮要不要深度思考、温度多少」，不影响业务语义。
+ * 一次 LLM 调用属于哪个场景——只用来决定「温度多少、max_tokens 给多少」，不影响业务语义。
+ *
+ * <p>**2026-09-14：不再按场景开关深度思考**（按用户要求整块删除，现在默认全部思考）。
+ * 这个枚举留下来是因为温度与 max_tokens 仍按场景区分，指标也按场景分开记账。
  *
  * <p>为什么用 ThreadLocal 而不是给方法加参数：这几个调用点分散在四个 Service 里，而这些 Service 都带着
  * 多个给单测用的构造器（见坑 45，加构造器参数曾把线上打挂两个部署周期）。绑定/解绑只在同步调用前后发生，
  * 两个自研 ChatModel 都是在调用线程里同步读完响应，所以 ThreadLocal 是安全的。
  *
- * <p>没显式标注时按 {@link #DIALOG} 处理：对话是主路径，宁可保持"模型默认档"，也不要因为漏标注而把某个
- * 场景悄悄降档。
+ * <p>没显式标注时按 {@link #DIALOG} 处理：对话是主路径，宁可保持默认，也不要因为漏标注而把某个场景
+ * 悄悄套上结构化的 0 温度或 token 上限。
  */
 public enum LlmScenario {
 
-    /** 对话回复（流式）：保持模型默认档 */
+    /** 对话回复（流式） */
     DIALOG,
-    /** 对话回复 + 模型自己申请了升档（thinkDeeper）：深度思考 + 更多工具轮 + 更长超时 */
+    /** 对话回复 + 模型自己申请了升档（thinkDeeper）：更多工具轮 + 更长的流式超时 */
     DIALOG_DEEP,
-    /** 对话回复的省电档：明确是寒暄/确认类的短句，关掉思考（见 DialogModeDecider） */
-    DIALOG_FAST,
-    /** 记忆提取：只要结构化 JSON 正确，不需要思考 */
+    /** 记忆提取 */
     EXTRACT,
     /** 提醒解析 */
     REMINDER_PARSE,
@@ -31,23 +32,6 @@ public enum LlmScenario {
     ARCHIVE;
 
     private static final ThreadLocal<LlmScenario> CURRENT = new ThreadLocal<>();
-    private static final ThreadLocal<LlmScenario> PREVIOUS = new ThreadLocal<>();
-
-    /** 把"整轮"绑定成某个档位（AgentLoop 一次任务用一次，配合 {@link #unbind()}） */
-    public static void bind(LlmScenario scenario) {
-        PREVIOUS.set(CURRENT.get());
-        CURRENT.set(scenario);
-    }
-
-    public static void unbind() {
-        LlmScenario previous = PREVIOUS.get();
-        PREVIOUS.remove();
-        if (previous == null) {
-            CURRENT.remove();
-        } else {
-            CURRENT.set(previous);
-        }
-    }
 
     public static LlmScenario current() {
         LlmScenario scenario = CURRENT.get();

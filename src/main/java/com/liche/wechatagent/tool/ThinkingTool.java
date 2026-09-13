@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  * 外部路由器要多一次 LLM 调用（QQ 场景首字延迟直接翻倍），而且判错了分不清是谁的错；工具形态下模型在已有上下文里申请，
  * **判错最坏只是没升档，不改变正确性**（用户明确要求过"别让模型记得做某事"，见坑 27、39）。
  *
- * <p>升档的效果（由 {@link LlmEscalation} 与 AgentLoop 落实）：后续 model round 用深度思考档、允许更多工具轮、更长的流式超时；
+ * <p>升档的效果（由 {@link LlmEscalation} 与 AgentLoop 落实）：后续 model round 允许更多工具轮、更长的流式超时；
  * 指标里单独记成 {@code dialog_deep}，方便看"升档到底有没有用"。
  */
 @Component
@@ -39,8 +39,8 @@ public class ThinkingTool implements AgentToolProvider {
             hasSideEffect = true, retryable = false, riskLevel = com.liche.wechatagent.tool.ToolRiskLevel.LOW,
             allowParallel = false)
     @com.liche.wechatagent.tool.NonIdempotentTool
-    @Tool(value = "申请把当前这一轮升级到更深的思考档：后续轮次会用深度思考、允许更多工具轮、更长的超时。"
-            + "只在问题确实复杂时调用——需要多步推理、反复核对、跨多份资料对比，或用户明确要求仔细分析/认真想想。"
+    @Tool(value = "申请把当前这一轮升级到更高的预算档：后续轮次允许更多工具轮、更长的等待时间。"
+            + "只在问题确实复杂时调用——需要多步工具、反复核对、跨多份资料对比，或用户明确要求仔细分析/认真想想。"
             + "闲聊、确认、简单查询、单步操作**不要**调用（有每日额度）。同一轮最多调用一次，调用后继续把任务做完，"
             + "不要停下来问用户。")
     public ToolBusinessResult thinkDeeper(String reason) {
@@ -64,7 +64,7 @@ public class ThinkingTool implements AgentToolProvider {
         }
         log.info("已升档 user={} 今日第 {} 次（上限 {}）reason={}", userId, quota.used(userId), quota.limit(),
                 reason == null ? "" : reason.strip());
-        return ToolBusinessResult.success("已升档：后面的轮次会用深度思考，也可以多用几轮工具，"
+        return ToolBusinessResult.success("已升档：后面的轮次可以多用几轮工具、也允许更长的等待，"
                 + "请把这件事一次做完，最后再统一回复用户。");
     }
 }

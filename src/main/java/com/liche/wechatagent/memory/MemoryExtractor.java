@@ -184,7 +184,7 @@ public class MemoryExtractor {
             }
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
-            // 结构化抽取：关掉深度思考（见 LlmScenarioSettings），实测输出 token 少约 90%
+            // 结构化抽取：温度 0（见 LlmScenarioSettings）；深度思考 2026-09-14 起不再关（记忆质量优先，且提取是后台异步跑）
             List<ContextTurn> promptRecent = recent;
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
                     () -> chatModel.chat(buildPrompt(promptRecent, existing, cores))));

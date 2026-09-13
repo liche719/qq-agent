@@ -68,16 +68,15 @@ public class OpenAiCompatChatModel implements ChatModel {
     @Override
     public ChatResponse chat(ChatRequest request) {
         long started = System.nanoTime();
-        // 模型可以用 thinkDeeper 申请升档：升档后按 DIALOG_DEEP 取设置（思考显式开、max_tokens 更大）
+        // 模型可以用 thinkDeeper 申请升档：升档后按 DIALOG_DEEP 取设置（更宽松的 max_tokens）
         LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
-        JsonNode extraBody = scenarioSettings == null ? null : scenarioSettings.extraBody(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         try {
             String resp = restClient.post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false, extraBody,
+                    .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false,
                             maxTokens).toString())
                     .retrieve()
                     .body(String.class);
@@ -104,18 +103,13 @@ public class OpenAiCompatChatModel implements ChatModel {
                     usage.reasoning());
         }
         if (ok) {
-            log.info("LLM 调用 scenario={} ms={} temperature={} thinking={} maxTokens={} promptTokens={} "
+            log.info("LLM 调用 scenario={} ms={} temperature={} maxTokens={} promptTokens={} "
                             + "completionTokens={} reasoningTokens={}",
-                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), maxTokens,
+                    scenario.label(), millis, effectiveTemperature, maxTokens,
                     usage.prompt(), usage.completion(), usage.reasoning());
         } else {
-            log.warn("LLM 调用失败 scenario={} ms={} thinking={} error={}", scenario.label(), millis,
-                    thinkingLabel(scenario), error);
+            log.warn("LLM 调用失败 scenario={} ms={} error={}", scenario.label(), millis, error);
         }
-    }
-
-    private String thinkingLabel(LlmScenario scenario) {
-        return scenarioSettings == null ? "default" : scenarioSettings.thinkingLabel(scenario);
     }
 
     /** usage 里的 token 数：reasoning 已经含在 completion 里，单独记只是为了看清"思考花了多少" */

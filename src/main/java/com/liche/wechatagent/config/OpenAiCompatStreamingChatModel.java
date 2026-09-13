@@ -78,7 +78,6 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         long started = System.nanoTime();
         LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
-        JsonNode extraBody = scenarioSettings == null ? null : scenarioSettings.extraBody(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         int reasoningChars = 0;
         // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
@@ -90,7 +89,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(
-                            OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true, extraBody,
+                            OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true,
                                     maxTokens).toString(),
                             MediaType.parse("application/json; charset=utf-8")))
                     .build();
@@ -197,10 +196,6 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         return override == null ? temperature : override;
     }
 
-    private String thinkingLabel(LlmScenario scenario) {
-        return scenarioSettings == null ? "default" : scenarioSettings.thinkingLabel(scenario);
-    }
-
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
                         double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars,
                         int[] tokens) {
@@ -210,13 +205,12 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
             metrics.recordLlm(true, ok, millis, error, scenario.label(), tokens[0], tokens[1], tokens[2]);
         }
         if (ok) {
-            log.info("LLM 流式调用 scenario={} ms={} temperature={} thinking={} maxTokens={} 正文={}字 思考={}字"
+            log.info("LLM 流式调用 scenario={} ms={} temperature={} maxTokens={} 正文={}字 思考={}字"
                             + " promptTokens={} completionTokens={} reasoningTokens={}",
-                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), maxTokens,
+                    scenario.label(), millis, effectiveTemperature, maxTokens,
                     contentChars, reasoningChars, tokens[0], tokens[1], tokens[2]);
         } else {
-            log.warn("LLM 流式调用失败 scenario={} ms={} thinking={} error={}", scenario.label(), millis,
-                    thinkingLabel(scenario), error);
+            log.warn("LLM 流式调用失败 scenario={} ms={} error={}", scenario.label(), millis, error);
         }
     }
 }

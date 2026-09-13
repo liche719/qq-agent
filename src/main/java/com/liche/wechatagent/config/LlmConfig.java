@@ -11,22 +11,19 @@ import org.springframework.context.annotation.Configuration;
 public class LlmConfig {
 
     /**
-     * 场景档位：哪些场景关掉"深度思考"、哪些场景用温度 0。
-     * 留空的键由 {@link LlmScenarioSettings} 用内置默认值兜底（默认关思考的是 extract / schedule_parse /
-     * dialog_fast；reminder_parse 与 archive 保持思考，dialogue 默认档也保持思考）。
+     * 场景档位：哪些场景用温度 0、每个场景的 {@code max_tokens} 上限。
+     * 留空的键由 {@link LlmScenarioSettings} 用内置默认值兜底（默认温度 0 的是四个结构化场景）。
+     *
+     * <p>**深度思考不再分场景**（2026-09-14 起全部思考），所以这里没有 thinking 相关的参数了。
      */
     @Bean
     public LlmScenarioSettings llmScenarioSettings(
-            @Value("${llm.thinking.disabled-scenarios:}") String disabledScenarios,
-            @Value("${llm.thinking.enabled-scenarios:}") String enabledScenarios,
-            @Value("${llm.thinking.disabled-body:}") String disabledBody,
-            @Value("${llm.thinking.enabled-body:}") String enabledBody,
             @Value("${llm.zero-temperature-scenarios:}") String zeroTemperatureScenarios,
             @Value("${llm.max-tokens.structured:4096}") int structuredMaxTokens,
             @Value("${llm.max-tokens.dialog:0}") int dialogMaxTokens,
             @Value("${llm.max-tokens.dialog-deep:0}") int dialogDeepMaxTokens) {
-        return new LlmScenarioSettings(disabledScenarios, enabledScenarios, disabledBody, enabledBody,
-                zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens);
+        return new LlmScenarioSettings(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens,
+                dialogDeepMaxTokens);
     }
 
     /** 非流式模型：记忆提取 / 提醒解析 / 归档摘要等一次性调用 */

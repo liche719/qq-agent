@@ -87,8 +87,6 @@ public class AgentLoop {
     private final Pattern currentTimePattern;
     private final Map<String, String> toolDisplayNames;
     private final ConversationMemoryService conversationMemoryService;
-    /** 对话省电档决策（纯规则） */
-    private final DialogModeDecider dialogModeDecider;
     /** 按用户状态裁剪工具集 */
     private final ToolSetTrimmer toolSetTrimmer;
 
@@ -112,7 +110,6 @@ public class AgentLoop {
                      @Value("${agent.tool-failure-notice.enabled:false}") boolean toolFailureNoticeEnabled,
                      AgentPolicyProperties policyProperties,
                      ConversationMemoryService conversationMemoryService,
-                     DialogModeDecider dialogModeDecider,
                      ToolSetTrimmer toolSetTrimmer) {
         this.streamingChatModel = streamingChatModel;
         this.toolRegistry = toolRegistry;
@@ -137,7 +134,6 @@ public class AgentLoop {
         this.toolDisplayNames = configuredDisplayNames == null
                 ? AgentPolicyProperties.defaultToolDisplayNames() : Map.copyOf(configuredDisplayNames);
         this.conversationMemoryService = conversationMemoryService;
-        this.dialogModeDecider = dialogModeDecider;
         this.toolSetTrimmer = toolSetTrimmer;
         this.imageHttpClient = new okhttp3.OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(bounded(imageConnectTimeoutSeconds, 1, 120, 8)))
@@ -160,7 +156,7 @@ public class AgentLoop {
                 DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
                 DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, false, new AgentPolicyProperties(), null,
-                null, null);
+                null);
     }
 
     AgentLoop(StreamingChatModel streamingChatModel,
@@ -181,7 +177,7 @@ public class AgentLoop {
                 maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxToolRounds, streamTimeoutSeconds,
                 maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
-                streamChunkDelayMillis, imageUserAgent, false, new AgentPolicyProperties(), null, null, null);
+                streamChunkDelayMillis, imageUserAgent, false, new AgentPolicyProperties(), null, null);
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -190,14 +186,6 @@ public class AgentLoop {
         // 工作线程是复用的：先清掉上一轮可能残留的升档状态（thinkDeeper）
         LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
-        // 这一轮用哪档：明确是寒暄/确认类的短句才走省电档（纯规则，见 DialogModeDecider）
-        boolean hasAttachments = (images != null && !images.isEmpty()) || (documents != null && !documents.isEmpty());
-        DialogModeDecider.Decision dialogMode = dialogModeDecider == null
-                ? new DialogModeDecider.Decision(false, "未配置")
-                : dialogModeDecider.decide(userText, hasAttachments, lastAssistantText(history));
-        LlmScenario.bind(dialogMode.fast() ? LlmScenario.DIALOG_FAST : LlmScenario.DIALOG);
-        log.info("对话档位 user={} mode={} reason={}", userId, dialogMode.fast() ? "fast" : "normal",
-                dialogMode.reason());
         try {
             List<ChatMessage> messages = buildConversationMessages(persona, coreSection, workSection,
                     history, userText, images, documents);
@@ -210,7 +198,6 @@ public class AgentLoop {
             }
             return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink);
         } finally {
-            LlmScenario.unbind();
             LlmEscalation.clear();
             toolStatusService.unbind();
         }
@@ -284,20 +271,6 @@ public class AgentLoop {
             }
         }
         return text.toString();
-    }
-
-    /** 机器人上一轮说的话（用来识别"用户只回一个『好』其实是在回答提问"） */
-    private String lastAssistantText(List<ContextTurn> history) {
-        if (history == null) {
-            return "";
-        }
-        for (int i = history.size() - 1; i >= 0; i--) {
-            ContextTurn turn = history.get(i);
-            if (turn != null && "assistant".equals(turn.role()) && turn.text() != null) {
-                return turn.text();
-            }
-        }
-        return "";
     }
 
     /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */

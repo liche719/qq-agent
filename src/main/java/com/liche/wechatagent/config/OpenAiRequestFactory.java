@@ -34,28 +34,18 @@ final class OpenAiRequestFactory {
     }
 
     static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream) {
-        return buildPayload(model, temperature, request, stream, null, 0);
+        return buildPayload(model, temperature, request, stream, 0);
     }
 
-    /**
-     * @param extraBody 额外塞进请求体的字段（例如 {@code {"thinking":{"type":"disabled"}}}）；null 或非对象则不添加。
-     *                  字段形状由配置提供（见 LlmScenarioSettings），上游换一种开关写法不用改代码。
-     */
+    /** @param maxTokens 0 = 不设上限（保持上游默认） */
     static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream,
-                                   JsonNode extraBody, int maxTokens) {
+                                   int maxTokens) {
         ObjectNode payload = OBJECT_MAPPER.createObjectNode();
         payload.put("model", model);
         payload.put("temperature", temperature);
         payload.put("stream", stream);
         if (maxTokens > 0) {
             payload.put("max_tokens", maxTokens);
-        }
-        if (extraBody != null && extraBody.isObject()) {
-            Iterator<Map.Entry<String, JsonNode>> fields = extraBody.fields();
-            while (fields.hasNext()) {
-                Map.Entry<String, JsonNode> field = fields.next();
-                payload.set(field.getKey(), field.getValue());
-            }
         }
 
         ArrayNode messages = payload.putArray("messages");
