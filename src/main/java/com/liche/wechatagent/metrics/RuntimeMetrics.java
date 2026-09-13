@@ -8,6 +8,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -43,6 +44,9 @@ public class RuntimeMetrics {
     private volatile String lastSearchError = "";
     private volatile String lastSearchErrorAt = "";
 
+    /** 按调用场景分开记账：回答"时间和 token 花在哪一类调用上"（场景见 LlmScenario） */
+    private final Map<String, ScenarioStat> llmByScenario = new ConcurrentHashMap<>();
+
     public RuntimeMetrics(@Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.zone = parseZone(timeZone);
     }
@@ -67,6 +71,33 @@ public class RuntimeMetrics {
         if (!ok && error != null && !error.isBlank()) {
             lastLlmError = trim(error);
             lastLlmErrorAt = now();
+        }
+    }
+
+    /**
+     * 记录一次 LLM 调用，并带上场景与 token。
+     *
+     * @param reasoningTokens "深度思考"花掉的那部分，**已经含在 completionTokens 里**，单独记只是为了让面板
+     *                        能回答"这次调用有多少是在思考"
+     */
+    public void recordLlm(boolean streaming, boolean ok, long millis, String error, String scenario,
+                          int promptTokens, int completionTokens, int reasoningTokens) {
+        recordLlm(streaming, ok, millis, error);
+        if (scenario == null || scenario.isBlank()) {
+            return;
+        }
+        ScenarioStat stat = llmByScenario.computeIfAbsent(scenario, key -> new ScenarioStat());
+        stat.calls.incrementAndGet();
+        if (!ok) {
+            stat.failures.incrementAndGet();
+        }
+        stat.totalMillis.addAndGet(millis);
+        stat.lastMillis.set(millis);
+        stat.promptTokens.addAndGet(promptTokens);
+        stat.completionTokens.addAndGet(completionTokens);
+        stat.reasoningTokens.addAndGet(reasoningTokens);
+        if (reasoningTokens > 0) {
+            stat.reasoningCalls.incrementAndGet();
         }
     }
 
@@ -98,7 +129,38 @@ public class RuntimeMetrics {
                 searchLastMillis.get(), lastSearchError, lastSearchErrorAt);
         search.put("emptyResults", searchEmpty.get());
         out.put("search", search);
+        out.put("llmByScenario", scenarioSection());
         return out;
+    }
+
+    private Map<String, Object> scenarioSection() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        llmByScenario.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> {
+            ScenarioStat stat = entry.getValue();
+            long calls = stat.calls.get();
+            Map<String, Object> section = new LinkedHashMap<>();
+            section.put("calls", calls);
+            section.put("failures", stat.failures.get());
+            section.put("averageMs", calls == 0 ? null : Math.round((double) stat.totalMillis.get() / calls));
+            section.put("lastMs", stat.lastMillis.get() == 0 ? null : stat.lastMillis.get());
+            section.put("promptTokens", stat.promptTokens.get());
+            section.put("completionTokens", stat.completionTokens.get());
+            section.put("reasoningTokens", stat.reasoningTokens.get());
+            section.put("reasoningCalls", stat.reasoningCalls.get());
+            out.put(entry.getKey(), section);
+        });
+        return out;
+    }
+
+    private static final class ScenarioStat {
+        private final AtomicLong calls = new AtomicLong();
+        private final AtomicLong failures = new AtomicLong();
+        private final AtomicLong totalMillis = new AtomicLong();
+        private final AtomicLong lastMillis = new AtomicLong();
+        private final AtomicLong promptTokens = new AtomicLong();
+        private final AtomicLong completionTokens = new AtomicLong();
+        private final AtomicLong reasoningTokens = new AtomicLong();
+        private final AtomicLong reasoningCalls = new AtomicLong();
     }
 
     private Map<String, Object> section(long calls, long failures, long totalMillis, long lastMillis,

@@ -49,6 +49,17 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # 漏一个就"改了 .env 不生效且不报错"（坑 36）：温度/超时以前根本没透传，改了也没用
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
+      LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
+      # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 extract/reminder_parse/
+      # schedule_parse/archive；请求体字段形状也由这里覆盖，上游换写法不用改代码）
+      LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
+      LLM_THINKING_ENABLED_SCENARIOS: ${LLM_THINKING_ENABLED_SCENARIOS:-}
+      LLM_THINKING_DISABLED_BODY: ${LLM_THINKING_DISABLED_BODY:-}
+      LLM_THINKING_ENABLED_BODY: ${LLM_THINKING_ENABLED_BODY:-}
+      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。

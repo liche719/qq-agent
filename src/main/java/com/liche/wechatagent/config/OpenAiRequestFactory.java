@@ -21,7 +21,9 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /** 构建 OpenAI 兼容接口请求体（非流式/流式共用） */
 final class OpenAiRequestFactory {
@@ -32,10 +34,26 @@ final class OpenAiRequestFactory {
     }
 
     static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream) {
+        return buildPayload(model, temperature, request, stream, null);
+    }
+
+    /**
+     * @param extraBody 额外塞进请求体的字段（例如 {@code {"thinking":{"type":"disabled"}}}）；null 或非对象则不添加。
+     *                  字段形状由配置提供（见 LlmScenarioSettings），上游换一种开关写法不用改代码。
+     */
+    static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream,
+                                   JsonNode extraBody) {
         ObjectNode payload = OBJECT_MAPPER.createObjectNode();
         payload.put("model", model);
         payload.put("temperature", temperature);
         payload.put("stream", stream);
+        if (extraBody != null && extraBody.isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = extraBody.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                payload.set(field.getKey(), field.getValue());
+            }
+        }
 
         ArrayNode messages = payload.putArray("messages");
         for (ChatMessage m : request.messages()) {

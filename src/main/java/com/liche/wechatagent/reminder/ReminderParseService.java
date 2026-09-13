@@ -2,6 +2,7 @@ package com.liche.wechatagent.reminder;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.config.LlmScenario;
 import dev.langchain4j.model.chat.ChatModel;
 import org.springframework.stereotype.Service;
 
@@ -55,7 +56,7 @@ public class ReminderParseService {
         LocalDateTime current = LocalDateTime.now(zone);
         String prompt = buildPrompt(description, current);
 
-        JsonNode root = parseJson(chatModel.chat(prompt));
+        JsonNode root = parseJson(LlmScenario.run(LlmScenario.REMINDER_PARSE, () -> chatModel.chat(prompt)));
         return parseResult(root, description, current);
     }
 

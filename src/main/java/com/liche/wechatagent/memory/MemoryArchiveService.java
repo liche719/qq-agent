@@ -1,6 +1,7 @@
 package com.liche.wechatagent.memory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.config.LlmScenario;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
@@ -257,7 +258,7 @@ public class MemoryArchiveService {
         if (chatModel == null) {
             return "";
         }
-        String response = chatModel.chat(sb.toString());
+        String response = LlmScenario.run(LlmScenario.ARCHIVE, () -> chatModel.chat(sb.toString()));
         String summary = response == null ? "" : response.trim();
         if (summary.length() > summaryMaxChars) {
             summary = summary.substring(0, summaryMaxChars);

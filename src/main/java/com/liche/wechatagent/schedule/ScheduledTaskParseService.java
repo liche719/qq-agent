@@ -2,6 +2,7 @@ package com.liche.wechatagent.schedule;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.config.LlmScenario;
 import dev.langchain4j.model.chat.ChatModel;
 import org.quartz.CronExpression;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,7 +45,8 @@ public class ScheduledTaskParseService {
 
     public ParsedTask parse(String description) {
         LocalDateTime current = LocalDateTime.now(zone);
-        JsonNode root = parseJson(chatModel.chat(buildPrompt(description, current)));
+        JsonNode root = parseJson(LlmScenario.run(LlmScenario.SCHEDULE_PARSE,
+                () -> chatModel.chat(buildPrompt(description, current))));
         String title = trimTo(root.path("title").asText(""), 60);
         String instruction = trimTo(root.path("instruction").asText(""), 500);
         String cron = normalizeCron(root.path("cron").asText(""));

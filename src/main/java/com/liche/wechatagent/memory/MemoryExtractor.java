@@ -7,6 +7,7 @@ import com.liche.wechatagent.log.UserScope;
 import com.liche.wechatagent.agent.ContextTurn;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
+import com.liche.wechatagent.config.LlmScenario;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
@@ -183,7 +184,10 @@ public class MemoryExtractor {
             }
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
-            ExtractionResult result = parse(chatModel.chat(buildPrompt(recent, existing, cores)));
+            // 结构化抽取：关掉深度思考（见 LlmScenarioSettings），实测输出 token 少约 90%
+            List<ContextTurn> promptRecent = recent;
+            ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
+                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores))));
             log.info("记忆提取完成 user={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
                     result.episodes().size(), result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
                     result.conflicts().size(), result.completedWork().size(), result.duplicates().size());
