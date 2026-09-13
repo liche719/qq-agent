@@ -112,7 +112,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 8 个页签：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
 - **数字口径（别改回去）**：总览「工作记忆」只算**未归档**（`countByArchivedFalse`），已归档单独一行显示；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
 - **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
-- **验证工具**：`tools/ui-verify/verify_spa.py`（真实 Chromium 跑登录/各页签/聊天视图/手机端 390×844/黑白主题，`SPA_BASE` 指面板地址；`INSECURE = BASE.startswith("https")` 所以 https 下自动忽略证书名不匹配）。**注意它在 git 仓库之外、不受版本控制**，并且会随着前端行为变更失效：最近一次是 `remember` 改成默认不勾之后，脚本必须自己 `page.check("#remember")`，否则 localStorage 持久化断言和手机端（新建 context 只带 localStorage）都会失败。
+- **验证工具**：`tools/ui-verify/verify_spa.py`（真实 Chromium 跑登录/各页签/聊天视图/手机端 390×844/黑白主题，`SPA_BASE` 指面板地址；`INSECURE = BASE.startswith("https")` 所以 https 下自动忽略证书名不匹配）。**已入库（`tools/ui-verify/`，只提交脚本、png 截图不入库）**，但它会随着前端行为变更失效：最近一次是 `remember` 改成默认不勾之后，脚本必须自己 `page.check("#remember")`，否则 localStorage 持久化断言和手机端（新建 context 只带 localStorage）都会失败。
 
 ## 4. CI/CD
 
@@ -227,7 +227,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI 自验证**：push `main` → 构建 → 部署 → 自检（无口令各项走 IP 直连，带口令两项在服务器本机跑）；action 钉 SHA、主机指纹靠 `DEPLOY_HOST_KEY`、旧镜像只留两个 tag。**09-13 GitHub 抽风过一轮（坑 56）。**
 - **本轮（09-13）已完成**：① 基础设施加固（坑 53）；② 通道健壮性（坑 54 → `docs/channel-robustness.md`）；⑤ 网关半开自愈（坑 51）；⑥ 定时任务写回不再整行 save（坑 55）；⑦ 考研模块**两批**（→ `docs/exam-module.md`）；⑧ 面板不再闪屏、表单不被刷新冲掉（坑 57）；⑨ 备份改 zip + 媒体共享（坑 58 → `docs/backup.md`）；⑩ 媒体记忆：最多读 10 个文件 + 内容写回库（坑 59 → `docs/media-memory.md`）；⑪ 调用档位 / 对话省电档 / 工具裁剪（坑 60、61 → `docs/llm-call-modes.md`）。
-- **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；④ SearXNG `secret_key` 出仓库；⑥ 墨墨回调 IP 限流；⑦ 时区修正脚本未入库（坑 29）；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）；⑨ `tools/ui-verify/` 挪进仓库。
+- **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；④ SearXNG `secret_key` 出仓库（方案已定，见坑 3）；⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。
 - 本地：Docker Desktop 未启动、本地 JAR 未运行（与远程**共用同一个 QQ AppID，不要同时启动**）。
 
 ## 8. 凭据索引
@@ -240,6 +240,6 @@ Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格�
 
 ## 10. 工作区结构（约 59MB）
 
-- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `tools\ui-verify\`（面板验证工具，**不在仓库里**）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；`web\node_modules` 约 53MB，可重建）。
+- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `tools\ui-verify\`（面板验证工具，**已入库**，只提交脚本、png 不入库）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；`web\node_modules` 约 53MB，可重建）。
 - 整理时删掉的都是可重建物（`target/`、本地 `logs/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份，本地调试完顺手删。
 
