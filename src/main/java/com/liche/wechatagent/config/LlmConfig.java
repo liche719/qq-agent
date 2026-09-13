@@ -21,9 +21,12 @@ public class LlmConfig {
             @Value("${llm.thinking.enabled-scenarios:}") String enabledScenarios,
             @Value("${llm.thinking.disabled-body:}") String disabledBody,
             @Value("${llm.thinking.enabled-body:}") String enabledBody,
-            @Value("${llm.zero-temperature-scenarios:}") String zeroTemperatureScenarios) {
+            @Value("${llm.zero-temperature-scenarios:}") String zeroTemperatureScenarios,
+            @Value("${llm.max-tokens.structured:4096}") int structuredMaxTokens,
+            @Value("${llm.max-tokens.dialog:0}") int dialogMaxTokens,
+            @Value("${llm.max-tokens.dialog-deep:0}") int dialogDeepMaxTokens) {
         return new LlmScenarioSettings(disabledScenarios, enabledScenarios, disabledBody, enabledBody,
-                zeroTemperatureScenarios);
+                zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens);
     }
 
     /** 非流式模型：记忆提取 / 提醒解析 / 归档摘要等一次性调用 */

@@ -17,6 +17,8 @@ public enum LlmScenario {
 
     /** 对话回复（流式）：保持模型默认档 */
     DIALOG,
+    /** 对话回复 + 模型自己申请了升档（thinkDeeper）：深度思考 + 更多工具轮 + 更长超时 */
+    DIALOG_DEEP,
     /** 记忆提取：只要结构化 JSON 正确，不需要思考 */
     EXTRACT,
     /** 提醒解析 */

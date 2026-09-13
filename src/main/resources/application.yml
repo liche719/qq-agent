@@ -83,6 +83,12 @@ llm:
     enabled-body: ${LLM_THINKING_ENABLED_BODY:}
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值（同上四个）
   zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reminder_parse,schedule_parse,archive}
+  # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
+  # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
+  max-tokens:
+    structured: ${LLM_MAX_TOKENS_STRUCTURED:4096}
+    dialog: ${LLM_MAX_TOKENS_DIALOG:0}
+    dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
 
 agent:
   message-batch-thread-name-prefix: ${AGENT_MESSAGE_BATCH_THREAD_NAME_PREFIX:message-batch-}
@@ -99,6 +105,11 @@ agent:
   tool-retry-delay-ms: ${AGENT_TOOL_RETRY_DELAY_MS:0}
   tool-max-result-chars: ${AGENT_TOOL_MAX_RESULT_CHARS:8000}
   max-tool-rounds: ${AGENT_MAX_TOOL_ROUNDS:8}
+  # thinkDeeper 升档后放宽的预算：更多工具轮 + 更长的流式超时（复杂任务不至于半路 fallback）
+  deep-tool-rounds: ${AGENT_DEEP_TOOL_ROUNDS:16}
+  deep-stream-timeout-seconds: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:240}
+  # thinkDeeper 的按用户日额度：0 = 不限（只观测）
+  thinking-daily-limit-per-user: ${THINKING_DAILY_LIMIT_PER_USER:5}
   stream-timeout-seconds: ${AGENT_STREAM_TIMEOUT_SECONDS:120}
   image-max-redirects: ${AGENT_IMAGE_MAX_REDIRECTS:3}
   image-connect-timeout-seconds: ${AGENT_IMAGE_CONNECT_TIMEOUT_SECONDS:8}

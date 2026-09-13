@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
+import DataTable from '../components/DataTable.vue'
 import InfoGrid from '../components/InfoGrid.vue'
 import JsonBlock from '../components/JsonBlock.vue'
 import { fmtMs, fmtNum } from '../labels'
@@ -47,6 +48,30 @@ const searchRows = computed(() => {
   ]
 })
 
+const SCENARIO_LABELS = {
+  dialog: '对话（默认档）',
+  dialog_deep: '对话（模型申请升档）',
+  extract: '记忆提取',
+  reminder_parse: '提醒解析',
+  schedule_parse: '定时任务解析',
+  archive: '归档摘要'
+}
+
+const scenarioColumns = [
+  { label: '调用场景', value: (row) => SCENARIO_LABELS[row.key] || row.key },
+  { label: '次数', value: (row) => fmtNum(row.calls) },
+  { label: '失败', value: (row) => fmtNum(row.failures) },
+  { label: '平均耗时', value: (row) => (row.averageMs === null || row.averageMs === undefined ? '—' : fmtMs(row.averageMs)) },
+  { label: '输入 token', value: (row) => fmtNum(row.promptTokens) },
+  { label: '输出 token', value: (row) => fmtNum(row.completionTokens) },
+  { label: '其中思考', value: (row) => fmtNum(row.reasoningTokens) }
+]
+
+const scenarioRows = computed(() => {
+  const map = data.value?.llmByScenario || {}
+  return Object.keys(map).map((key) => Object.assign({ key }, map[key]))
+})
+
 const lastErrors = computed(() => {
   const rows = []
   const llm = data.value?.llm || {}
@@ -81,6 +106,11 @@ onMounted(() => load())
         <InfoGrid :rows="searchRows"></InfoGrid>
       </section>
     </div>
+
+    <section class="glass panel">
+      <div class="panel-head"><h2>按场景</h2><span class="hint">关掉思考的场景（记忆提取、定时任务解析）省下的最多；「其中思考」是输出 token 里花在思考上的部分</span></div>
+      <DataTable :columns="scenarioColumns" :rows="scenarioRows" empty="还没有调用记录（重启后归零）"></DataTable>
+    </section>
 
     <section v-if="lastErrors.length" class="glass panel">
       <div class="panel-head"><h2>最近异常</h2><span class="hint">只记录最近一次，用于快速定位</span></div>

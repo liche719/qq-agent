@@ -8,6 +8,7 @@ import com.liche.wechatagent.document.ExtractedDocument;
 import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.config.AgentPolicyProperties;
+import com.liche.wechatagent.config.LlmEscalation;
 import com.liche.wechatagent.memory.ConversationMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -70,7 +71,11 @@ public class AgentLoop {
     private final okhttp3.OkHttpClient imageHttpClient;
     private final ImageContentLoader imageContentLoader;
     private final int maxToolRounds;
+    /** 升档后允许的工具轮数（thinkDeeper 生效时） */
+    private final int deepToolRounds;
     private final long streamTimeoutSeconds;
+    /** 升档后的流式超时（秒）：复杂任务允许更长的生成时间 */
+    private final long deepStreamTimeoutSeconds;
     private final int maxImageRedirects;
     private final int streamChunkChars;
     private final long streamChunkDelayMillis;
@@ -88,6 +93,8 @@ public class AgentLoop {
                      @Value("${media.storage.max-file-bytes:20971520}") long maxImageBytes,
                      @Value("${agent.max-tool-rounds:8}") int maxToolRounds,
                      @Value("${agent.stream-timeout-seconds:120}") long streamTimeoutSeconds,
+                     @Value("${agent.deep-tool-rounds:16}") int deepToolRounds,
+                     @Value("${agent.deep-stream-timeout-seconds:240}") long deepStreamTimeoutSeconds,
                      @Value("${agent.image-max-redirects:3}") int maxImageRedirects,
                      @Value("${agent.image-connect-timeout-seconds:8}") long imageConnectTimeoutSeconds,
                      @Value("${agent.image-read-timeout-seconds:20}") long imageReadTimeoutSeconds,
@@ -104,6 +111,8 @@ public class AgentLoop {
         this.maxImageBytes = Math.max(1, maxImageBytes);
         this.maxToolRounds = bounded(maxToolRounds, 1, 32, DEFAULT_MAX_TOOL_ROUNDS);
         this.streamTimeoutSeconds = bounded(streamTimeoutSeconds, 1, 600, DEFAULT_STREAM_TIMEOUT_SECONDS);
+        this.deepToolRounds = bounded(deepToolRounds, 1, 32, this.maxToolRounds);
+        this.deepStreamTimeoutSeconds = bounded(deepStreamTimeoutSeconds, 1, 600, this.streamTimeoutSeconds);
         this.maxImageRedirects = bounded(maxImageRedirects, 0, 10, DEFAULT_MAX_IMAGE_REDIRECTS);
         this.streamChunkChars = bounded(streamChunkChars, 1, 2_000, DEFAULT_STREAM_CHUNK_CHARS);
         this.streamChunkDelayMillis = bounded(streamChunkDelayMillis, 0, 5_000,
@@ -134,6 +143,7 @@ public class AgentLoop {
               long maxImageBytes) {
         this(streamingChatModel, toolRegistry, toolStatusService, mediaToolContextService, urlValidator,
                 maxImageBytes, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
+                DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
                 DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties(), null);
     }
@@ -153,7 +163,8 @@ public class AgentLoop {
               long streamChunkDelayMillis,
               String imageUserAgent) {
         this(streamingChatModel, toolRegistry, toolStatusService, mediaToolContextService, urlValidator,
-                maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxImageRedirects,
+                maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxToolRounds, streamTimeoutSeconds,
+                maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
                 streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties(), null);
     }
@@ -161,6 +172,8 @@ public class AgentLoop {
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
                        List<ContextTurn> history, String userText, List<String> images, List<ExtractedDocument> documents,
                        StreamReplySink sink) {
+        // 工作线程是复用的：先清掉上一轮可能残留的升档状态（thinkDeeper）
+        LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
         try {
             List<ChatMessage> messages = buildConversationMessages(persona, coreSection, workSection,
@@ -174,6 +187,7 @@ public class AgentLoop {
             }
             return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink);
         } finally {
+            LlmEscalation.clear();
             toolStatusService.unbind();
         }
     }
@@ -200,7 +214,7 @@ public class AgentLoop {
                                Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
         List<ToolSpecification> specifications = toolRegistry.specifications();
         try {
-            for (int round = 0; round < maxToolRounds; round++) {
+            for (int round = 0; round < effectiveMaxRounds(); round++) {
                 String roundText = streamOneRound(messages, specifications, userId, successfulTools, failedTools, toolResults);
                 if (roundText != null) {
                     return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
@@ -213,6 +227,16 @@ public class AgentLoop {
             log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
         }
         return fallbackReply(failedTools, successfulTools, toolResults, sink);
+    }
+
+    /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */
+    private int effectiveMaxRounds() {
+        return LlmEscalation.active() ? Math.max(maxToolRounds, deepToolRounds) : maxToolRounds;
+    }
+
+    private long effectiveStreamTimeoutSeconds() {
+        return LlmEscalation.active()
+                ? Math.max(streamTimeoutSeconds, deepStreamTimeoutSeconds) : streamTimeoutSeconds;
     }
 
     // Normalizes model text, appends deterministic notices, and delivers the final response.
@@ -302,7 +326,7 @@ public class AgentLoop {
                 });
 
         try {
-            if (!latch.await(streamTimeoutSeconds, TimeUnit.SECONDS)) {
+            if (!latch.await(effectiveStreamTimeoutSeconds(), TimeUnit.SECONDS)) {
                 throw new RuntimeException("LLM 流式响应超时");
             }
         } catch (InterruptedException e) {

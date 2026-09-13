@@ -68,23 +68,25 @@ public class OpenAiCompatChatModel implements ChatModel {
     @Override
     public ChatResponse chat(ChatRequest request) {
         long started = System.nanoTime();
-        LlmScenario scenario = LlmScenario.current();
+        // 模型可以用 thinkDeeper 申请升档：升档后按 DIALOG_DEEP 取设置（思考显式开、max_tokens 更大）
+        LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
         JsonNode extraBody = scenarioSettings == null ? null : scenarioSettings.extraBody(scenario);
+        int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         try {
             String resp = restClient.post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false, extraBody)
-                            .toString())
+                    .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false, extraBody,
+                            maxTokens).toString())
                     .retrieve()
                     .body(String.class);
             JsonNode root = objectMapper.readTree(resp);
             ChatResponse response = parseResponse(root);
-            record(true, started, null, scenario, effectiveTemperature, usageOf(root));
+            record(true, started, null, scenario, effectiveTemperature, maxTokens, usageOf(root));
             return response;
         } catch (Exception e) {
-            record(false, started, e.getMessage(), scenario, effectiveTemperature, Usage.EMPTY);
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, Usage.EMPTY);
             throw new RuntimeException("调用 LLM 接口失败: " + e.getMessage(), e);
         }
     }
@@ -95,17 +97,17 @@ public class OpenAiCompatChatModel implements ChatModel {
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
-                        double effectiveTemperature, Usage usage) {
+                        double effectiveTemperature, int maxTokens, Usage usage) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
             metrics.recordLlm(false, ok, millis, error, scenario.label(), usage.prompt(), usage.completion(),
                     usage.reasoning());
         }
         if (ok) {
-            log.info("LLM 调用 scenario={} ms={} temperature={} thinking={} promptTokens={} completionTokens={} "
-                            + "reasoningTokens={}",
-                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), usage.prompt(),
-                    usage.completion(), usage.reasoning());
+            log.info("LLM 调用 scenario={} ms={} temperature={} thinking={} maxTokens={} promptTokens={} "
+                            + "completionTokens={} reasoningTokens={}",
+                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), maxTokens,
+                    usage.prompt(), usage.completion(), usage.reasoning());
         } else {
             log.warn("LLM 调用失败 scenario={} ms={} thinking={} error={}", scenario.label(), millis,
                     thinkingLabel(scenario), error);

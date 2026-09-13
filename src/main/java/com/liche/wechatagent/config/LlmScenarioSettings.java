@@ -36,6 +36,8 @@ public class LlmScenarioSettings {
      */
     private static final Set<LlmScenario> DEFAULT_OFF = EnumSet.of(
             LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE);
+    /** 显式打开思考的场景：升档后要"确保开着"，不依赖上游默认 */
+    private static final Set<LlmScenario> DEFAULT_ON = EnumSet.of(LlmScenario.DIALOG_DEEP);
     private static final String DEFAULT_OFF_BODY = "{\"thinking\":{\"type\":\"disabled\"}}";
     private static final String DEFAULT_ON_BODY = "{\"thinking\":{\"type\":\"enabled\"}}";
 
@@ -45,11 +47,18 @@ public class LlmScenarioSettings {
     private final Set<LlmScenario> zeroTemperature;
     private final JsonNode offBody;
     private final JsonNode onBody;
+    private final int structuredMaxTokens;
+    private final int dialogMaxTokens;
+    private final int dialogDeepMaxTokens;
 
     public LlmScenarioSettings(String disabledScenarios, String enabledScenarios, String disabledBody,
-                               String enabledBody, String zeroTemperatureScenarios) {
+                               String enabledBody, String zeroTemperatureScenarios,
+                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens) {
+        this.structuredMaxTokens = Math.max(0, structuredMaxTokens);
+        this.dialogMaxTokens = Math.max(0, dialogMaxTokens);
+        this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
         this.thinkingOff = parseScenarios(disabledScenarios, DEFAULT_OFF);
-        this.thinkingOn = parseScenarios(enabledScenarios, EnumSet.noneOf(LlmScenario.class));
+        this.thinkingOn = parseScenarios(enabledScenarios, DEFAULT_ON);
         this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_OFF);
         this.offBody = readJson(disabledBody, DEFAULT_OFF_BODY);
         this.onBody = readJson(enabledBody, DEFAULT_ON_BODY);
@@ -68,6 +77,23 @@ public class LlmScenarioSettings {
             return onBody;
         }
         return null;
+    }
+
+    /**
+     * 本次请求的 {@code max_tokens}；**0 = 不设**（保持上游默认）。
+     *
+     * <p>为什么要这个：之前一个都没设，极端长思考没有任何上限。但注意**思考 token 也算进这个上限**——
+     * 实测"每3天"这类问题光思考就 1800+ token，所以结构化场景给的是**宽松的兜底值**（默认 4096），
+     * 而对话档默认仍然不设，免得把正常长回复截断。
+     */
+    public int maxTokensFor(LlmScenario scenario) {
+        if (scenario == LlmScenario.DIALOG_DEEP) {
+            return dialogDeepMaxTokens > 0 ? dialogDeepMaxTokens : structuredMaxTokens;
+        }
+        if (scenario == LlmScenario.DIALOG) {
+            return dialogMaxTokens;
+        }
+        return structuredMaxTokens;
     }
 
     /** 温度覆写；null = 用全局 {@code llm.temperature} */

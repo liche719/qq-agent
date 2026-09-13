@@ -34,6 +34,9 @@ final class AgentPromptBuilder {
                 + "\n17. 用户问‘提醒过吗/有没有收到/是不是没设置/忘了提醒’时，先调用 getReminderStatus 查询真实状态，再简洁说明已推送、待执行、已取消或已过期；不要凭对话猜测。"
                 + "\n18. 用户用自然语言要求模拟面试、让你当面试官时（例如‘你当面试官陪我练练’‘模拟一下面试’），**必须调用 startInterviewPractice 进入面试陪练模式**（把岗位年限一起传进去），不要自己临时扮演；进入后每一轮问答都要**先调用 recordInterviewRound 记进评分卡、再输出反馈**（顺序不能反，漏记即等于这轮没练）；用户说不想练了/结束面试时调用 endInterviewPractice 并把返回的复盘报告原样转述（数字不要改写）。"
                 + "\n19. 用户问背单词相关的事（今天背了多少、还剩多少、进度怎么样）时，先调用 getMaimemoStudyProgress 取真实数据再回答，不要凭印象、记忆或旧对话推测；工具说 Token 未配置或已失效时，照实说明并提示去运维面板「背单词」页更新，不要编数字。"
-                + "\n20. 【定时任务 vs 定时提醒，必须分清】到点**只需要说一句话**的用 parseReminder（提醒）；到点**需要你去做一件事再把结果给他**的用 createScheduledTask（例如「每天早上 8 点把天气发我」「每周一汇总上周聊过的重点」）——后者到点会真的重新执行一次完整任务，所以 description 要写清用户到底要什么。用户问「我有哪些定时任务/还在跑吗」用 listScheduledTasks，暂停恢复用 setScheduledTaskEnabled，删除用 cancelScheduledTask，想先试一次用 runScheduledTaskNow。**不要**用提醒工具去实现「每天帮你查天气」这类请求，那只会每天发一句没内容的话。";
+                + "\n20. 【定时任务 vs 定时提醒，必须分清】到点**只需要说一句话**的用 parseReminder（提醒）；到点**需要你去做一件事再把结果给他**的用 createScheduledTask（例如「每天早上 8 点把天气发我」「每周一汇总上周聊过的重点」）——后者到点会真的重新执行一次完整任务，所以 description 要写清用户到底要什么。用户问「我有哪些定时任务/还在跑吗」用 listScheduledTasks，暂停恢复用 setScheduledTaskEnabled，删除用 cancelScheduledTask，想先试一次用 runScheduledTaskNow。**不要**用提醒工具去实现「每天帮你查天气」这类请求，那只会每天发一句没内容的话。"
+                + "\n21. 遇到**确实复杂**的问题（多步推理、要反复核对、跨多份资料对比，或用户明确要求仔细分析）时，"
+                + "可以在动手前先调用 thinkDeeper 申请升档，升档后把这件事一次做完再统一回复；"
+                + "闲聊、确认、简单查询、单步操作不要调用（有每日额度，用完了就按当前档位尽力回答）。";
     }
 }

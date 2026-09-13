@@ -60,6 +60,14 @@ services:
       LLM_THINKING_DISABLED_BODY: ${LLM_THINKING_DISABLED_BODY:-}
       LLM_THINKING_ENABLED_BODY: ${LLM_THINKING_ENABLED_BODY:-}
       LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
+      # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
+      LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-4096}
+      LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
+      LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
+      # thinkDeeper（模型自己申请升档）的预算与额度
+      AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
+      AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
+      THINKING_DAILY_LIMIT_PER_USER: ${THINKING_DAILY_LIMIT_PER_USER:-5}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。

@@ -76,9 +76,10 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     @Override
     public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
         long started = System.nanoTime();
-        LlmScenario scenario = LlmScenario.current();
+        LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
         JsonNode extraBody = scenarioSettings == null ? null : scenarioSettings.extraBody(scenario);
+        int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         int reasoningChars = 0;
         try {
             Request req = new Request.Builder()
@@ -86,13 +87,13 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(
-                            OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true, extraBody)
-                                    .toString(),
+                            OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true, extraBody,
+                                    maxTokens).toString(),
                             MediaType.parse("application/json; charset=utf-8")))
                     .build();
             try (Response response = client.newCall(req).execute()) {
                 if (!response.isSuccessful() || response.body() == null) {
-                    record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, 0, 0);
+                    record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0);
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
                     return;
                 }
@@ -171,10 +172,10 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                         ? AiMessage.from(fullText)
                         : (fullText.isEmpty() ? AiMessage.from(toolRequests) : AiMessage.from(fullText, toolRequests));
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage).build());
-                record(true, started, null, scenario, effectiveTemperature, reasoningChars, fullText.length());
+                record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length());
             }
         } catch (Exception e) {
-            record(false, started, e.getMessage(), scenario, effectiveTemperature, reasoningChars, 0);
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0);
             handler.onError(e);
         }
     }
@@ -189,16 +190,16 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
-                        double effectiveTemperature, int reasoningChars, int contentChars) {
+                        double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
             // 流式响应没有 usage（除非开 stream_options），所以 token 记 0，思考量用字符数代替
             metrics.recordLlm(true, ok, millis, error, scenario.label(), 0, 0, 0);
         }
         if (ok) {
-            log.info("LLM 流式调用 scenario={} ms={} temperature={} thinking={} 正文={}字 思考={}字",
-                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), contentChars,
-                    reasoningChars);
+            log.info("LLM 流式调用 scenario={} ms={} temperature={} thinking={} maxTokens={} 正文={}字 思考={}字",
+                    scenario.label(), millis, effectiveTemperature, thinkingLabel(scenario), maxTokens,
+                    contentChars, reasoningChars);
         } else {
             log.warn("LLM 流式调用失败 scenario={} ms={} thinking={} error={}", scenario.label(), millis,
                     thinkingLabel(scenario), error);
