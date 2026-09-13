@@ -1337,7 +1337,7 @@ public class QqChannel implements WeChatChannel {
         String orphanMessageId = extractMessageId(cause);
         if (!orphanMessageId.isBlank()) {
             deleteMessage(null, userId, orphanMessageId);
-        } else if (!isDefiniteRejection(cause)) {
+        } else if (!isDefiniteRejection(cause) && !neverReachedServer(cause)) {
             sendResultUnknownCount.incrementAndGet();
             log.warn("[qq] {}发送结果未知（{}），不再重发以免重复 user={}{}",
                     wasPassive ? "被动" : "主动", cause.getClass().getSimpleName(), userId, quotaSuffix());
@@ -1359,6 +1359,31 @@ public class QqChannel implements WeChatChannel {
     private boolean isDefiniteRejection(Throwable error) {
         return error instanceof RestClientResponseException response
                 && response.getStatusCode().is4xxClientError();
+    }
+
+    /**
+     * 连接阶段就失败（连接超时 / 连接被拒 / 域名解析不了）＝ 请求**一个字节都没送到**服务端，重发不会重复。
+     *
+     * <p>必须和"读超时"分开：**读超时**是请求已经发出去、只是没等到响应，结果未知（可能已经送达）；
+     * 而连接没建立起来的请求根本没被处理过。实测踩到的正是这一条：掐断到 QQ API 的出站后，
+     * 所有发送都是 `Connect timed out`，原来的"结果未知"分支会**白白丢掉一条能安全补发的回复**。
+     * 区分方法：连接失败的 {@code SocketTimeoutException} 消息是 "connect timed out"，
+     * 读超时是 "Read timed out"。
+     */
+    private boolean neverReachedServer(Throwable error) {
+        Throwable cause = error;
+        for (int depth = 0; cause != null && depth < 5; depth++, cause = cause.getCause()) {
+            if (cause instanceof java.net.ConnectException
+                    || cause instanceof java.net.UnknownHostException
+                    || cause instanceof java.net.NoRouteToHostException) {
+                return true;
+            }
+            if (cause instanceof java.net.SocketTimeoutException && cause.getMessage() != null
+                    && cause.getMessage().toLowerCase(java.util.Locale.ROOT).contains("connect")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String extractMessageId(Exception exception) {
@@ -1509,15 +1534,19 @@ public class QqChannel implements WeChatChannel {
                 streamStates.remove(userId);
                 if (sent) {
                     log.info("[qq] stream session done user={}", userId);
-                } else if (state.deliveryUncertain && !removeIncompleteStream(userId, state)) {
-                    // 结果未知（超时/中断）且拿不到 stream_msg_id、撤不回：QQ 侧可能已经显示了一部分内容。
-                    // 这时让 orchestrator 再补一条完整回复 = 用户看到"半截 + 完整"两条。按已发出处理。
-                    state.failed = false;
-                    state.done = true;
-                    sendResultUnknownCount.incrementAndGet();
-                    log.warn("[qq] 流式最终帧结果未知且无法撤回，视为已发出以免重复 user={}", userId);
                 } else {
-                    log.warn("[qq] stream final delivery failed; orchestrator will use standard reply user={}", userId);
+                    // 无论走哪条分支都要先尽力撤掉半截消息：撤干净了才能安全地让 orchestrator 补一条完整的
+                    boolean cleaned = removeIncompleteStream(userId, state);
+                    if (state.deliveryUncertain && !cleaned) {
+                        // 结果未知（超时/中断）且拿不到 stream_msg_id、撤不回：QQ 侧可能已经显示了一部分内容。
+                        // 这时让 orchestrator 再补一条完整回复 = 用户看到"半截 + 完整"两条。按已发出处理。
+                        state.failed = false;
+                        state.done = true;
+                        sendResultUnknownCount.incrementAndGet();
+                        log.warn("[qq] 流式最终帧结果未知且无法撤回，视为已发出以免重复 user={}", userId);
+                    } else {
+                        log.warn("[qq] stream final delivery failed; orchestrator will use standard reply user={}", userId);
+                    }
                 }
             }
 
@@ -1570,7 +1599,7 @@ public class QqChannel implements WeChatChannel {
             return true;
         } catch (Exception e) {
             state.failed = true;
-            if (!isDefiniteRejection(e)) {
+            if (!isDefiniteRejection(e) && !neverReachedServer(e)) {
                 // 超时/中断/5xx：这一帧可能已经生效，QQ 侧可能已经显示了内容
                 state.deliveryUncertain = true;
             }
