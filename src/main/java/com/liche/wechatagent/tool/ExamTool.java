@@ -70,7 +70,8 @@ public class ExamTool implements AgentToolProvider {
     }
 
     @Tool(value = "把考研任务标记成完成/跳过/未完成。优先传 taskId（listExamTasks 里能看到），记不住 id 时传 keyword "
-            + "（科目或内容的片段，只会在今天的任务里找）。status 传 完成/跳过/未完成。"
+            + "（科目或内容的片段，只会在今天的任务里找）。status 传 DONE/SKIPPED/PENDING（写成 完成/做完/跳过/未完成 也行；"
+            + "不传就按「完成」处理，因为用户说「XX 做完了」时通常就是来勾掉的）。"
             + "用户说「数学那项做完了」「英语今天不做了」时调用。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)

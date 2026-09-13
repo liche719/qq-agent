@@ -638,18 +638,24 @@ public class ExamService {
     }
 
     private String normalizeStatus(String status) {
-        if (status == null) {
-            return null;
-        }
-        String value = status.trim().toUpperCase();
-        if (value.contains("DONE") || value.contains("完成") || value.contains("做完") || value.equals("OK")) {
+        if (status == null || status.isBlank()) {
+            // 只说「数学那项做完了」时模型经常不传状态——这个工具的默认意图就是"标记完成"
             return ExamTask.STATUS_DONE;
         }
+        String value = status.trim().toUpperCase(java.util.Locale.ROOT);
+        // 顺序有讲究：「UNDONE / NOT_DONE」里也含 "DONE"，必须先判否定形式
         if (value.contains("SKIP") || value.contains("跳过") || value.contains("不做")) {
             return ExamTask.STATUS_SKIPPED;
         }
-        if (value.contains("PENDING") || value.contains("未完成") || value.contains("没做") || value.contains("重置")) {
+        if (value.contains("UNDONE") || value.contains("NOT_DONE") || value.contains("PENDING")
+                || value.contains("未完成") || value.contains("没做") || value.contains("重置")
+                || value.contains("取消完成")) {
             return ExamTask.STATUS_PENDING;
+        }
+        if (value.contains("DONE") || value.contains("COMPLETE") || value.contains("FINISH")
+                || value.contains("完成") || value.contains("做完") || value.contains("做好")
+                || value.contains("搞完") || value.equals("OK")) {
+            return ExamTask.STATUS_DONE;
         }
         return null;
     }
