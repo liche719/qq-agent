@@ -711,7 +711,12 @@ public class MemoryExtractor {
                 .append("9. 闲聊、一次性问答和孤立情绪感叹不得新建事实记忆；已完成但具有人生连续性价值的事情可以只写入 episodes。\n")
                 .append("10. 对每个新建、更新或完成项，sourceMessageIds 只能从该 user 消息行中方括号给出的 ID 选择。不得编造 ID；无可用 ID 时返回空数组。\n")
                 .append("11. 与已有记忆语义重复度超过 ")
-                .append(Math.round(dedupThreshold * 100)).append("% 时不新增，把原文放入 duplicates；重复的核心目标仍可放入 coreCandidates 以更新最后确认时间。\n\n");
+                .append(Math.round(dedupThreshold * 100)).append("% 时不新增，把原文放入 duplicates；重复的核心目标仍可放入 coreCandidates 以更新最后确认时间。\n")
+                .append("12. 【不要记会变的信息】课表、教室号/上课地点、第几节课的时间、临时日程、一次性的具体数字（如今天学了几小时、几点下课），"
+                        + "**一律不要写进 coreCandidates 或 newWorkItems**，也不要写进 episodes——它们要么每周都在变、要么过期就成了错信息。"
+                        + "用户问课表时系统会直接读他保存的课表图片，不需要靠记忆。\n")
+                .append("13. 【只有用户明确要你记的才记】用户说「记一下/记住/以后都这样」这类明确要求，才算值得长期保留；"
+                        + "你从图片、文件里自己看出来的事实（哪怕核对得很准）也不写记忆，除非用户明确要求记住它。\n\n");
         prompt.append("已存在的核心记忆：\n");
         if (cores.isEmpty()) {
             prompt.append("（无）\n");
