@@ -144,8 +144,8 @@ media:
     pending-ttl-minutes: ${MEDIA_CONTEXT_PENDING_TTL_MINUTES:30}
     max-pending-per-conversation: ${MEDIA_CONTEXT_MAX_PENDING_PER_CONVERSATION:8}
     excerpt-max-chars: ${MEDIA_CONTEXT_EXCERPT_MAX_CHARS:4000}
-    # 一次任务最多把几张已保存图片交给视觉模型（超出只给文件名/摘要，防止上下文被原图撑爆）
-    max-images-per-task: ${MEDIA_CONTEXT_MAX_IMAGES_PER_TASK:3}
+    # 一次任务最多读几个已保存文件给模型（图片也算文件，按 mediaId 去重；超出直接拒绝，防止上下文被原图/正文撑爆）
+    max-files-per-task: ${MEDIA_CONTEXT_MAX_FILES_PER_TASK:10}
   storage:
     root: ${MEDIA_STORAGE_ROOT:stored-media}
     max-file-bytes: ${MEDIA_STORAGE_MAX_FILE_BYTES:20971520}
