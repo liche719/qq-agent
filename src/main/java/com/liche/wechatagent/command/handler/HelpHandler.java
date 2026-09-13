@@ -39,6 +39,8 @@ public class HelpHandler implements CommandHandler {
                 + "/exam-today — 今天的考研任务（没有就按计划生成，也可发「今日任务」）\n"
                 + "/exam-progress — 考研进度（也可发「考研进度」）\n"
                 + "/checkin [时长] — 考研打卡，例如「打卡 150」或「打卡 3 小时」\n"
+                + "/exam-study-start|end — 开始/结束学习计时（直接发「开始学数学」「结束学习」也行）\n"
+                + "/exam-mistakes — 错题本；发「错题 快排推导错了」直接记一条\n"
                 + "/set-prompt 内容 — 调整我的身份和说话方式\n"
                 + "/help — 再看一次这份说明";
     }

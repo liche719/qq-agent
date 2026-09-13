@@ -40,19 +40,25 @@ public class ExamService {
     private final ExamPlanRepository plans;
     private final ExamTaskRepository tasks;
     private final ExamCheckinRepository checkins;
+    private final ExamTrackService trackService;
+    private final boolean carryOver;
     private final ObjectMapper mapper = new ObjectMapper();
     private final ZoneId zone;
 
     public ExamService(ExamPlanRepository plans, ExamTaskRepository tasks, ExamCheckinRepository checkins,
+                       ExamTrackService trackService,
+                       @Value("${exam.carry-over:true}") boolean carryOver,
                        @Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.plans = plans;
         this.tasks = tasks;
         this.checkins = checkins;
+        this.trackService = trackService;
+        this.carryOver = carryOver;
         this.zone = parseZone(timeZone);
     }
 
-    /** 计划里的一个科目 */
-    public record Subject(String name, Integer targetScore, Integer dailyMinutes, String dailyPlan) {
+    /** 计划里的一个科目（group 是归组：408 / 数学 / 英语 / 政治…） */
+    public record Subject(String name, Integer targetScore, Integer dailyMinutes, String dailyPlan, String group) {
     }
 
     public ExamPlan plan(String userId) {
@@ -142,6 +148,38 @@ public class ExamService {
         // 读库必须走 readSubjects（列里存的是 JSON）：用明文解析器会把整段 JSON 当成一个科目名，
         // 生成的每日任务标题就变成 [{"name"… 那种乱码（实测踩过一次）。
         return plan == null ? List.of() : readSubjects(plan.getSubjects(), plan.getDailyMinutes());
+    }
+
+    /**
+     * 把科目还原成可编辑的文本（面板表单预填用）：{@code 数学:120:120:强化第3章;英语:70:60:阅读2篇}。
+     * 归组与自动推断不同时才额外写 {@code @组}，这样表单里看到的就是"最少必要信息"。
+     */
+    public String subjectsText(String userId) {
+        List<Subject> subjects = subjects(userId);
+        StringBuilder sb = new StringBuilder();
+        for (Subject subject : subjects) {
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(subject.name());
+            if (subject.group() != null && !subject.group().isBlank()
+                    && !subject.group().equals(inferGroup(subject.name()))) {
+                sb.append('@').append(subject.group());
+            }
+            sb.append(':');
+            if (subject.targetScore() != null) {
+                sb.append(subject.targetScore());
+            }
+            sb.append(':');
+            if (subject.dailyMinutes() != null) {
+                sb.append(subject.dailyMinutes());
+            }
+            sb.append(':');
+            if (subject.dailyPlan() != null) {
+                sb.append(subject.dailyPlan());
+            }
+        }
+        return sb.toString();
     }
 
     // ==================== 每日任务 ====================
@@ -433,7 +471,11 @@ public class ExamService {
         if (!subjects.isEmpty()) {
             sb.append("科目：\n");
             for (Subject subject : subjects) {
-                sb.append("· ").append(subject.name());
+                sb.append("· ");
+                if (subject.group() != null && !subject.group().isBlank()) {
+                    sb.append("[").append(subject.group()).append("] ");
+                }
+                sb.append(subject.name());
                 if (subject.targetScore() != null) {
                     sb.append("（目标 ").append(subject.targetScore()).append(" 分）");
                 }
@@ -532,12 +574,63 @@ public class ExamService {
         if (((Number) stats.get("pendingOverdue")).intValue() > 0) {
             sb.append("\n⚠️ 有 ").append(stats.get("pendingOverdue")).append(" 项以前的任务还没完成，要么补上要么让我跳过。");
         }
+        if (trackService != null) {
+            List<ExamProgress> progress = trackService.progress(userId);
+            if (!progress.isEmpty()) {
+                sb.append("\n📚 章节进度（").append(progress.size()).append(" 个单元）：");
+                sb.append(trackService.groupPercents(userId).stream()
+                        .map(item -> item.get("label") + " " + item.get("value") + "%")
+                        .reduce((a, b) -> a + "　" + b).orElse("—"));
+            }
+            int dueMistakes = trackService.dueMistakeCount(userId);
+            if (dueMistakes > 0) {
+                sb.append("\n📕 错题今天到期 ").append(dueMistakes).append(" 条。");
+            }
+            List<ExamMilestone> milestones = trackService.milestones(userId);
+            if (!milestones.isEmpty()) {
+                sb.append("\n🎯 ").append(milestones.stream().limit(3)
+                        .map(item -> item.getName() + (item.getDoneAt() != null ? " ✅"
+                                : item.getDueDate() == null ? "" : "（" + item.getDueDate().format(DATE) + "）"))
+                        .reduce((a, b) -> a + "　" + b).orElse(""));
+            }
+        }
         return sb.toString();
+    }
+
+    /**
+     * 把近 7 天没完成的旧任务顺延到今天（用户不用手动改），任务备注里标注原来哪天。
+     * 只顺延 7 天以内的，避免陈年欠账无限堆积。
+     */
+    @Transactional
+    public int carryOverPending(String userId) {
+        LocalDate date = today();
+        LocalDate from = date.minusDays(7);
+        List<ExamTask> pending = tasks.findByUserIdAndStatusOrderByPlanDateAscIdAsc(userId, ExamTask.STATUS_PENDING).stream()
+                .filter(task -> task.getPlanDate() != null && task.getPlanDate().isBefore(date)
+                        && !task.getPlanDate().isBefore(from))
+                .toList();
+        if (pending.isEmpty()) {
+            return 0;
+        }
+        LocalDateTime now = LocalDateTime.now(zone);
+        for (ExamTask task : pending) {
+            String label = task.getPlanDate().format(DATE);
+            task.setPlanDate(date);
+            String note = task.getNote() == null ? "" : task.getNote();
+            if (!note.contains("顺延")) {
+                task.setNote(clip((note.isBlank() ? "" : note + "｜") + "从 " + label + " 顺延", MAX_NOTE_CHARS));
+            }
+            task.setUpdatedAt(now);
+            tasks.save(task);
+        }
+        log.info("考研任务顺延 user={} count={}", userId, pending.size());
+        return pending.size();
     }
 
     /** 早推送：今天的计划 + 倒计时 + 一句催。 */
     public String morningText(String userId) {
         ExamPlan plan = plan(userId);
+        int carried = carryOver ? carryOverPending(userId) : 0;
         int created = generateTodayTasks(userId);
         StringBuilder sb = new StringBuilder("☀️ ").append(today().format(DATE)).append(" 计划");
         if (plan != null && plan.getExamDate() != null) {
@@ -563,11 +656,44 @@ public class ExamService {
         if (created > 0) {
             sb.append("\n（这是按你的计划新生成的）");
         }
+        if (carried > 0) {
+            sb.append("\n（").append(carried).append(" 项是昨天没做完、我顺延过来的）");
+        }
         int overdue = pendingOverdue(userId, today());
         if (overdue > 0) {
-            sb.append("\n另外还有 ").append(overdue).append(" 项旧任务没勾掉，今天顺手清一下。");
+            sb.append("\n另外还有 ").append(overdue).append(" 项更早的没勾掉，今天顺手清一下。");
         }
+        sb.append(trackSummary(userId));
         return sb.toString();
+    }
+
+    /** 跟踪信息（错题到期、超期进度、里程碑欠账）——拼在早/晚推送与进度文案后面 */
+    private String trackSummary(String userId) {
+        if (trackService == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        List<String> dueMistakes = trackService.dueMistakeLines(userId);
+        if (!dueMistakes.isEmpty()) {
+            sb.append("\n📕 错题回收（").append(trackService.dueMistakeCount(userId)).append(" 条到期）：\n");
+            dueMistakes.forEach(line -> sb.append("· ").append(line).append("\n"));
+            sb.append("复习完说「错题 #编号 记得」或「又错了」。");
+        }
+        List<ExamProgress> overdueProgress = trackService.overdueProgress(userId);
+        if (!overdueProgress.isEmpty()) {
+            sb.append("\n⚠️ 进度超期：");
+            sb.append(overdueProgress.stream().limit(3)
+                    .map(item -> item.getTitle() + "（计划 " + item.getDueDate().format(DATE) + "）")
+                    .reduce((a, b) -> a + "、" + b).orElse(""));
+        }
+        List<ExamMilestone> overdueMilestones = trackService.overdueMilestones(userId);
+        if (!overdueMilestones.isEmpty()) {
+            sb.append("\n🎯 里程碑超期：");
+            sb.append(overdueMilestones.stream().limit(2)
+                    .map(item -> item.getName() + "（" + item.getDueDate().format(FULL) + "）")
+                    .reduce((a, b) -> a + "、" + b).orElse(""));
+        }
+        return sb.isEmpty() ? "" : sb.toString();
     }
 
     /** 晚推送：今天完成情况 + 未完成清单 + 打卡引导。 */
@@ -593,7 +719,20 @@ public class ExamService {
             pending.forEach(item -> sb.append("⬜ ").append(item).append("\n"));
         }
         sb.append("今天学了多久？回一句「打卡 150」我就记上（连着 ").append(stats.get("streak")).append(" 天了）。");
+        String maimemo = maimemoLine(userId);
+        if (maimemo != null) {
+            sb.append("\n").append(maimemo);
+        }
+        int dueMistakes = trackService == null ? 0 : trackService.dueMistakeCount(userId);
+        if (dueMistakes > 0) {
+            sb.append("\n📕 错题本今天还有 ").append(dueMistakes).append(" 条到期，睡前抽五分钟过一遍。");
+        }
         return sb.toString();
+    }
+
+    /** 墨墨今日进度行（顺便把今天的背单词任务勾掉）；拿不到数据返回 null */
+    private String maimemoLine(String userId) {
+        return trackService == null ? null : trackService.syncMaimemo(userId);
     }
 
     /** 周复盘：程序算出来的数字 + 下周重点。 */
@@ -616,6 +755,26 @@ public class ExamService {
         int overdue = pendingOverdue(userId, today());
         if (overdue > 0) {
             sb.append("有 ").append(overdue).append(" 项遗留任务，别装作没看见——补掉或者明确跳过。\n");
+        }
+        if (trackService != null) {
+            List<ExamProgress> progress = trackService.progress(userId);
+            if (!progress.isEmpty()) {
+                sb.append("章节进度：").append(trackService.groupPercents(userId).stream()
+                        .map(item -> item.get("label") + " " + item.get("value") + "%")
+                        .reduce((a, b) -> a + "　" + b).orElse("—")).append("\n");
+            }
+            List<ExamMilestone> milestones = trackService.milestones(userId);
+            if (!milestones.isEmpty()) {
+                sb.append("里程碑：").append(milestones.stream().limit(4)
+                        .map(item -> item.getName() + (item.getDoneAt() != null ? " ✅"
+                                : item.getDueDate() == null ? "" : "（" + item.getDueDate().format(DATE) + "）"))
+                        .reduce((a, b) -> a + "　" + b).orElse("")).append("\n");
+            }
+            long openMistakes = trackService.openMistakes(userId).size();
+            if (openMistakes > 0) {
+                sb.append("错题本待回收 ").append(openMistakes).append(" 条，今天到期 ")
+                        .append(trackService.dueMistakeCount(userId)).append(" 条\n");
+            }
         }
         sb.append(weekPercent >= 80 ? "这周执行力在线，保持节奏就行。"
                 : weekPercent >= 50 ? "这周勉强及格，下周把最弱的那科提前到早上。"
@@ -680,18 +839,23 @@ public class ExamService {
     }
 
     private LocalDate parseDate(String text) {
+        return parseDate(text, today());
+    }
+
+    /** 宽松日期解析：2027-12-25 / 2027/12/25 / 12-25 / 20271225 / 今天 / 明天 / 昨天；认不出返回 null。 */
+    static LocalDate parseDate(String text, LocalDate today) {
         if (text == null || text.isBlank()) {
             return null;
         }
         String value = text.trim().replace('/', '-').replace('.', '-');
         if (value.contains("今天")) {
-            return today();
+            return today;
         }
         if (value.contains("明天")) {
-            return today().plusDays(1);
+            return today.plusDays(1);
         }
         if (value.contains("昨天")) {
-            return today().minusDays(1);
+            return today.minusDays(1);
         }
         try {
             String[] parts = value.split("-");
@@ -699,7 +863,7 @@ public class ExamService {
                 return LocalDate.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
             }
             if (parts.length == 2) {
-                return LocalDate.of(today().getYear(), Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+                return LocalDate.of(today.getYear(), Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
             }
             if (parts.length == 1 && parts[0].length() == 8) {
                 return LocalDate.of(Integer.parseInt(parts[0].substring(0, 4)),
@@ -709,6 +873,46 @@ public class ExamService {
             // 日期写得不规范，交给调用方提示
         }
         return null;
+    }
+
+    /**
+     * 科目归组：面板统计与"最弱科目"要按组聚合，否则 408 四科各算各的会看不出问题在哪。
+     * 认不出来的科目就用科目名本身当组（自定义科目也能单独统计）。
+     */
+    static String inferGroup(String subject) {
+        if (subject == null || subject.isBlank()) {
+            return "其它";
+        }
+        String name = subject.trim();
+        if (name.contains("数据结构") || name.contains("组成") || name.contains("操作系统")
+                || name.contains("计算机网") || name.contains("计网") || name.contains("计组")
+                || name.contains("408") || name.contains("王道") || name.contains("天勤")) {
+            return "408";
+        }
+        if (name.contains("高数") || name.contains("高等数学") || name.contains("线代")
+                || name.contains("线性代数") || name.contains("概率") || name.contains("数学")) {
+            return "数学";
+        }
+        if (name.contains("英语") || name.contains("单词") || name.contains("词汇") || name.contains("阅读")
+                || name.contains("作文") || name.contains("翻译") || name.contains("完形") || name.contains("长难句")) {
+            return "英语";
+        }
+        if (name.contains("政治") || name.contains("马原") || name.contains("毛中特") || name.contains("史纲")
+                || name.contains("思修") || name.contains("时政") || name.contains("肖")) {
+            return "政治";
+        }
+        if (name.contains("专业课") || name.contains("自命题")) {
+            return "专业课";
+        }
+        return name;
+    }
+
+    static String clip(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max - 1) + "…";
     }
 
     /** 解析科目串：{@code 数学:120:120:强化第3章;英语:70:60:阅读2篇} */
@@ -723,7 +927,15 @@ public class ExamService {
                 continue;
             }
             String[] fields = part.split("[:：]", 4);
-            String name = fields[0].trim();
+            String rawName = fields[0].trim();
+            // 可选归组：「数据结构@408」。不写就按科目名自动归组（见 inferGroup）。
+            String group = null;
+            int at = rawName.indexOf('@');
+            if (at > 0) {
+                group = rawName.substring(at + 1).trim();
+                rawName = rawName.substring(0, at).trim();
+            }
+            String name = rawName;
             if (name.isEmpty()) {
                 continue;
             }
@@ -733,7 +945,8 @@ public class ExamService {
             if (minutes == null && fallbackMinutes != null && fallbackMinutes > 0) {
                 minutes = Math.max(10, fallbackMinutes / Math.max(1, countSubjects(text)));
             }
-            subjects.add(new Subject(clip(name, 60), targetScore, minutes, clip(dailyPlan, 200)));
+            subjects.add(new Subject(clip(name, 60), targetScore, minutes, clip(dailyPlan, 200),
+                    clip(group == null || group.isBlank() ? inferGroup(name) : group, 60)));
             if (subjects.size() >= MAX_SUBJECTS) {
                 break;
             }
@@ -772,6 +985,7 @@ public class ExamService {
                 item.put("targetScore", subject.targetScore());
                 item.put("dailyMinutes", subject.dailyMinutes());
                 item.put("dailyPlan", subject.dailyPlan());
+                item.put("group", subject.group());
                 raw.add(item);
             }
             return clip(mapper.writeValueAsString(raw), 2000);
@@ -800,9 +1014,13 @@ public class ExamService {
                 if (name == null || String.valueOf(name).isBlank()) {
                     continue;
                 }
-                subjects.add(new Subject(clip(String.valueOf(name), 60),
+                String subjectName = clip(String.valueOf(name), 60);
+                Object group = item.get("group");
+                subjects.add(new Subject(subjectName,
                         asInt(item.get("targetScore")), asInt(item.get("dailyMinutes")),
-                        clip(item.get("dailyPlan") == null ? "" : String.valueOf(item.get("dailyPlan")), 200)));
+                        clip(item.get("dailyPlan") == null ? "" : String.valueOf(item.get("dailyPlan")), 200),
+                        clip(group == null || String.valueOf(group).isBlank()
+                                ? inferGroup(subjectName) : String.valueOf(group), 60)));
             }
             return subjects;
         } catch (Exception exception) {
@@ -816,14 +1034,6 @@ public class ExamService {
             return number.intValue();
         }
         return value == null ? null : intOrNull(String.valueOf(value), 0, 24 * 60);
-    }
-
-    private String clip(String value, int max) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, max - 1) + "…";
     }
 
     /** 计划是否需要今天的早推送 */
@@ -888,8 +1098,11 @@ public class ExamService {
 
     private String subjectText(Subject subject) {
         StringBuilder sb = new StringBuilder();
+        if (subject.group() != null && !subject.group().isBlank()) {
+            sb.append("[").append(subject.group()).append("]");
+        }
         if (subject.targetScore() != null) {
-            sb.append("目标 ").append(subject.targetScore()).append(" 分");
+            sb.append(sb.isEmpty() ? "" : "　").append("目标 ").append(subject.targetScore()).append(" 分");
         }
         if (subject.dailyMinutes() != null) {
             sb.append(sb.isEmpty() ? "" : "　").append("每天 ").append(subject.dailyMinutes()).append(" 分钟");

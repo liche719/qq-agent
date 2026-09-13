@@ -1,6 +1,7 @@
 package com.liche.wechatagent.tool;
 
 import com.liche.wechatagent.exam.ExamService;
+import com.liche.wechatagent.exam.ExamTrackService;
 import dev.langchain4j.agent.tool.Tool;
 import org.springframework.stereotype.Component;
 
@@ -15,10 +16,12 @@ import org.springframework.stereotype.Component;
 public class ExamTool implements AgentToolProvider {
 
     private final ExamService examService;
+    private final ExamTrackService examTrackService;
     private final ToolStatusService statusService;
 
-    public ExamTool(ExamService examService, ToolStatusService statusService) {
+    public ExamTool(ExamService examService, ExamTrackService examTrackService, ToolStatusService statusService) {
         this.examService = examService;
+        this.examTrackService = examTrackService;
         this.statusService = statusService;
     }
 
@@ -103,6 +106,116 @@ public class ExamTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult setExamPush(Boolean enabled) {
         return ToolBusinessResult.success(examService.setEnabled(requireCurrentUser(), !Boolean.FALSE.equals(enabled)));
+    }
+
+    // ==================== 章节/轮次进度 ====================
+
+    @Tool(value = "记录或更新一个复习单元的进度（章节/轮次）。例如「数学二高数第三章 120 题做到 40 题」→ "
+            + "subject=高数, phase=基础, title=第三章, total=120, done=40, unit=题；「408 数据结构王道 8 章做了 3 章」→ "
+            + "subject=数据结构, group=408, title=王道一轮, total=8, done=3, unit=章。"
+            + "group 不传就按科目名自动归组（数据结构/组成/操作系统/网络→408，高数/线代→数学，单词/阅读→英语…）。"
+            + "dueDate 是打算哪天做完（YYYY-MM-DD，可不传）。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult saveExamProgress(String subject, String group, String phase, String title,
+                                               Integer total, Integer done, String unit, String dueDate, String note) {
+        return ToolBusinessResult.success(examTrackService.saveProgress(requireCurrentUser(), subject, group, phase,
+                title, total, done, unit, dueDate, note));
+    }
+
+    @Tool(value = "推进某条进度的完成量：delta 传增量（例如做了 5 题传 5），或者 done 直接传新的完成量"
+            + "（「这一章做完了」就传 done=total）。id 从 viewExamProgress 的结果里拿。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult updateExamProgress(Long id, Integer delta, Integer done) {
+        return ToolBusinessResult.success(examTrackService.bumpProgress(requireCurrentUser(), id, delta, done));
+    }
+
+    @Tool(value = "查看复习进度：按科目/科目组列出每个单元的完成量与百分比、超期未完成的单元。"
+            + "用户问「我复习到哪了」「进度怎么样」时调用。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
+    public ToolBusinessResult viewExamProgress() {
+        return ToolBusinessResult.success(examTrackService.progressText(requireCurrentUser()));
+    }
+
+    // ==================== 错题回收 ====================
+
+    @Tool(value = "记一条错题或顽固知识点，之后按 1/3/7/15/30 天自动抽你复习。用户说「这题我错了」「记个错题：快排最坏复杂度推导」"
+            + "或把某道题的错因讲给你听时调用。title 是题目/知识点的简短摘要，detail 记错在哪、正确思路，source 记来源（660/王道/真题2015）。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult addExamMistake(String subject, String title, String detail, String source) {
+        return ToolBusinessResult.success(examTrackService.addMistake(requireCurrentUser(), subject, title, detail, source));
+    }
+
+    @Tool(value = "记录一条错题的复习结果：result 传 RIGHT（做对了，往后推一个间隔）或 WRONG（又错了，回到第一天）。"
+            + "用户说「错题 #3 记得」「那道快排的又错了」时调用；id 从 viewExamMistakes 里拿。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult reviewExamMistake(Long id, String result) {
+        return ToolBusinessResult.success(examTrackService.reviewMistake(requireCurrentUser(), id, result));
+    }
+
+    @Tool(value = "查看错题本：今天到期要复习的、之后要复习的、已掌握的条数。用户问「错题本」「今天要复习什么」时调用。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
+    public ToolBusinessResult viewExamMistakes() {
+        return ToolBusinessResult.success(examTrackService.mistakesText(requireCurrentUser()));
+    }
+
+    // ==================== 阶段里程碑 ====================
+
+    @Tool(value = "设置一个阶段里程碑（带截止日的检查点），例如「基础一轮 2027-03-31」「408 一轮 2027-06-30」"
+            + "「真题一遍 2027-11-30」。用户定目标、说某个阶段什么时候之前要完成时调用；超期未完成会在推送里点名。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult saveExamMilestone(String name, String dueDate, String note) {
+        return ToolBusinessResult.success(examTrackService.saveMilestone(requireCurrentUser(), name, dueDate, note));
+    }
+
+    @Tool(value = "把里程碑标记成完成（done=true）或改回未完成（done=false）。id 从 viewExamMilestones 里拿。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult completeExamMilestone(Long id, Boolean done) {
+        return ToolBusinessResult.success(examTrackService.completeMilestone(requireCurrentUser(), id,
+                !Boolean.FALSE.equals(done)));
+    }
+
+    @Tool(value = "查看阶段里程碑：名字、截止日、剩余天数、是否超期。用户问「我的阶段目标」「里程碑」时调用。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
+    public ToolBusinessResult viewExamMilestones() {
+        return ToolBusinessResult.success(examTrackService.milestonesText(requireCurrentUser()));
+    }
+
+    // ==================== 学习计时 ====================
+
+    @Tool(value = "开始一段学习计时（用户说「开始学数学」「我开始刷 408 了」时调用）。subject 传学什么，例如「数学二 高数」。"
+            + "结束时要调 endExamStudy 把这段时长记进当天打卡。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult startExamStudy(String subject) {
+        return ToolBusinessResult.success(examTrackService.startStudy(requireCurrentUser(), subject));
+    }
+
+    @Tool(value = "结束学习计时，把这一段的分钟数记进当天打卡（并返回今天累计与连续天数）。用户说「结束学习」「学完了」时调用。"
+            + "没有在计时时会告知无法记录，此时可以改用 examCheckin 让用户直接报时长。")
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
+            riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult endExamStudy() {
+        String userId = requireCurrentUser();
+        ExamTrackService.StudyStop stop = examTrackService.stopStudy(userId);
+        if (stop == null) {
+            return ToolBusinessResult.success("现在没有在计时的学习段。让用户说「打卡 时长」直接记分钟，或者说「开始学XX」开始计时。");
+        }
+        String checkin = examService.checkin(userId, (int) stop.minutes(), "计时：" + stop.subject());
+        return ToolBusinessResult.success("⏱「" + stop.subject() + "」记了 " + stop.minutes() + " 分钟。\n" + checkin);
     }
 
     private String requireCurrentUser() {

@@ -206,6 +206,8 @@ exam:
   evening-time: ${EXAM_EVENING_TIME:22:00}
   weekly-time: ${EXAM_WEEKLY_TIME:21:00}
   weekly-day: ${EXAM_WEEKLY_DAY:SUNDAY}
+  # 昨天没做完的旧任务（7 天以内）自动顺延到今天
+  carry-over: ${EXAM_CARRY_OVER:true}
   push-scan-interval-ms: ${EXAM_PUSH_SCAN_INTERVAL_MS:60000}
   push-initial-delay-ms: ${EXAM_PUSH_INITIAL_DELAY_MS:60000}
 
