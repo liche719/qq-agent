@@ -118,7 +118,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
 - 构建步骤用钉到 SHA 的 `docker/build-push-action` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（纯后端约 192 秒、含前端约 240 秒）。
-- 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f` → 按创建时间只保留最新两个 tag。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
+- 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f` → **按 image id 保留两代镜像的 tag**（坑 17）。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
 - 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥已删除，轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）、`DEPLOY_HOST_KEY`（服务器主机指纹，替代 `ssh-keyscan`，见坑 50）。
 - **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（备案期间自动跳过，通过后自动生效）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
 - **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
@@ -147,7 +147,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 14. **经 stdin 传给 `bash` 的远程脚本里不能直接用 `docker exec -i`**：它会读走 stdin（也就是脚本剩下的部分），导致脚本在后面某行静默中断。要么 `< /dev/null`，要么把整段 SQL 用 heredoc（heredoc 会把该命令的 stdin 换成 here-doc，反而正常）。
 15. 后端 `AdminDashboardController.userList()` 用 `String.valueOf(u.getLastSeenAt())`，空值会序列化成**字符串 `"null"`**，前端按字符串排序时 `"null"` 会排到最前（`'n' > '2'`）。前端 `labels.js` 已把 `"null"/"undefined"/"NaN"` 当空值处理，用户列表也只用合法日期参与排序。
 16. 用户记忆/微信数据：`user_profile.last_channel IS NULL` 的历史账号都是微信时代的测试账号（`wx_*` / `*@im.wechat`），2026-09-12 已按要求清空（留全库备份 `/root/wechat-agent-backup-20260912015146.sql.gz`，98KB，600）；模拟器测试账号 `sim-user-qq` 同日删除。
-17. **服务器旧镜像会累积**（已根治）：`docker image prune -f` 只删悬空镜像，带 tag 的 `wechat-agent:<sha>` 永远不算悬空。部署步骤现在「只保留最新两个 tag」，回滚：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
+17. **服务器旧镜像会累积**（已根治）：`docker image prune -f` 只删悬空镜像，带 tag 的 `wechat-agent:<sha>` 永远不算悬空。部署步骤改成**按 image id 保留「当前容器镜像 + 次新镜像」的 tag**（2026-09-14 修：原来按 tag 行数 `tail -n +3`，新构建与上次内容一样时反而会把刚部署的 tag 删掉），回滚：`AGENT_IMAGE=wechat-agent:<上一个sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`。
 18. **数据卷 ≠ 备份**：卷和数据库在同一台机器、同一块盘上，只扛得住「容器重装」，扛不住误删/误迁移/整机故障。`mysqldump` 的 dump 才是备份，**别因为「有卷」就删备份**；更强的做法是定期导出并异地加密存放。
 19. 服务器上的旧 `.env.bak-*` 会带着历史口令，**只留最近 1 个**用于回滚即可（2026-09-12 已清理到只剩最新那份）。
 20. **容器 json-file 日志默认不轮转**：没有 `max-size` 时容器 stdout 会无限增长（root appender 也挂控制台）。4 个服务已统一配 `logging.options: {max-size: 10m, max-file: 3}`。应用自己的文件日志由 logback 按 30 天轮转，面板「日志」页读的就是它（已挂到宿主机 `logs/`，见坑 38）。
@@ -218,16 +218,16 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
-## 7. 当前状态（2026-09-13 傍晚 · 考研模块第二批之后）
+## 7. 当前状态（2026-09-14 · 记忆链路收口之后）
 
 - **4 个容器全部 running**，应用跑 **`production` profile**（`ddl-auto=validate`，冷启动约 35 秒，零 ERROR），无告警。
 - **面板入口 `https://120.25.170.92/`**（备案期间：根路径 200、**编码路径 `/api/adm%69n/overview` = 401**）。用域名会提示证书不匹配，且**带 `liche.cloud` SNI 会被阿里云掐断**（坑 47）。
 - **用户的考研数据（真实数据，别乱动）**：`exam_plan` 1 行（南京理工大学 · 计算机专硕 22408，阶段 BASIC，每天 300 分钟，四科 数学 130/英语 70/408 120/政治 70，**考试日期 2027-12-25**）；`exam_task` 今天 3 条；进度/错题/里程碑/打卡都是 0。**他自己用聊天让 agent 改过一次计划**（09-13 18:03），所以"只改某一项"这条路是通的。
-- 其余数据（09-13 晚）：`user_profile` 3、`conversation_memory` 652、`user_core_memory` 25、`user_work_memory` 60、`reminder_task` 18、`scheduled_task` 2、`stored_media` 6、`memory_archive` 3。**用户自建任务 #5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）都是他的数据，不要删。** 墨墨 token 在**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（**有效期约一天，随时可能过期**）。
+- 其余数据（09-14 复查）：`user_profile` 3、`conversation_memory` 662、`user_core_memory` 25、`user_work_memory` 60、`reminder_task` 18、`scheduled_task` 2、`stored_media` 6、`memory_archive` 3。**用户自建任务 #5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）都是他的数据，不要删。** 墨墨 token 在**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（**有效期约一天，随时可能过期**）。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI 自验证**：push `main` → 构建 → 部署 → 自检（无口令各项走 IP 直连，带口令两项在服务器本机跑）；action 钉 SHA、主机指纹靠 `DEPLOY_HOST_KEY`、旧镜像只留两个 tag。**09-13 GitHub 抽风过一轮（坑 56）。**
-- **本轮（09-13）已完成**：① 基础设施加固（坑 53）；② 通道健壮性（坑 54 → `docs/channel-robustness.md`）；⑤ 网关半开自愈（坑 51）；⑥ 定时任务写回不再整行 save（坑 55）；⑦ 考研模块**两批**（→ `docs/exam-module.md`）；⑧ 面板不再闪屏、表单不被刷新冲掉（坑 57）；⑨ 备份改 zip + 媒体共享（坑 58 → `docs/backup.md`）；⑩ 媒体记忆：最多读 10 个文件 + 内容写回库（坑 59 → `docs/media-memory.md`）；⑪ 调用档位 / 对话省电档 / 工具裁剪（坑 60、61 → `docs/llm-call-modes.md`）。
-- **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；④ SearXNG `secret_key` 出仓库（方案已定，见坑 3）；⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。
+- **09-13 已完成**：基础设施加固(53)、通道健壮性(54)、网关半开自愈(51)、定时任务写回(55)、考研模块两批、面板不闪屏(57)、备份改 zip(58)、媒体记忆(59)、调用档位与工具裁剪(60、61)；对应文档都在 `docs/`。
+- **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。
 - 本地：Docker Desktop 未启动、本地 JAR 未运行（与远程**共用同一个 QQ AppID，不要同时启动**）。
 
 ## 8. 凭据索引
@@ -240,6 +240,6 @@ Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格�
 
 ## 10. 工作区结构（约 59MB）
 
-- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `tools\ui-verify\`（面板验证工具，**已入库**，只提交脚本、png 不入库）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；`web\node_modules` 约 53MB，可重建）。
+- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。2026-09-14 清过一次：根目录的探针脚本、旧截图目录、带明文口令的 `.sshchk2\` 已删。
 - 整理时删掉的都是可重建物（`target/`、本地 `logs/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份，本地调试完顺手删。
 

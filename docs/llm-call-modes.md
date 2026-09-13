@@ -284,7 +284,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 **发现的经过**：复查时有人指出「面板『按场景』表格里 `dialog` / `dialog_fast` / `dialog_deep` 三行的 token 恒为 0，
 而这三行恰恰是用来判断『升档值不值』的」。原来的注释写的是"流式响应没有 usage（除非开 `stream_options.include_usage`）"。
 
-**直接问接口**（`probe-stream-usage.js`，三次流式请求，一次不加任何字段）：
+**直接问接口**（一次性的 Node 脚本，三次流式请求，一次不加任何字段；脚本是临时实验、没入库）：
 
 ```
 流式（现状：不带 usage）        usageChunks=1 prompt=38 completion=82 reasoning=56
