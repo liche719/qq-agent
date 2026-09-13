@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 判断这一轮对话要不要用"省电档"（关掉深度思考）。
@@ -17,10 +18,12 @@ import java.util.Set;
  * <ol>
  *   <li>没有附件/引用内容（有资料要读，必须认真对待）；</li>
  *   <li>很短（去空白后 ≤ {@value #MAX_FAST_CHARS} 字）；</li>
- *   <li>整句就是寒暄/确认（白名单匹配）；</li>
- *   <li>不含任何"要做事情"的线索词（提醒/查/搜/记/任务/文件/为什么……）。</li>
+ *   <li>整句就是寒暄/确认（白名单匹配，或纯粹的"哈哈哈"）；</li>
+ *   <li>不含任何"要做事情"的线索词（提醒/查/搜/记/任务/高数/冲刺……）；</li>
+ *   <li>**不是"在回答上一轮的问题"**——上一轮机器人问了句什么、用户只回一个"好/行/可以"，
+ *       这种"裸答应"很可能需要真的去做事（建提醒、改计划），所以一律回默认档。</li>
  * </ol>
- * 命中任一"要做事情"的线索就回默认档——**方向永远是"宁可不省电"**。
+ * 命中任一条件就回默认档——**方向永远是"宁可不省电"**。
  *
  * <p>省电档用独立场景 {@code dialog_fast} 记账，所以面板能直接看出"省电档占多少、效果如何"，
  * 不合适就把 {@code llm.dialog-fast.enabled} 关掉（一行配置回滚）。
@@ -42,12 +45,21 @@ public class DialogModeDecider {
             "拜拜", "再见", "回聊", "先这样", "ok", "okk", "okay", "nice", "good",
             "好，谢谢", "好的谢谢", "谢谢啦", "3q", "thx");
 
+    /** 纯粹的"哈哈哈/嘿嘿/嘻嘻"这类：长度不定，用模式匹配（不然"哈哈哈哈哈"会掉出白名单） */
+    private static final Pattern PURE_LAUGHTER = Pattern.compile("^[哈嘻嘿呵]{2,}$");
+
+    /** 这些是"裸答应"：如果上一轮机器人在问问题，用户这么回就意味着要真的去做事 */
+    private static final Set<String> BARE_YES = Set.of(
+            "好", "好的", "好吧", "行", "可以", "中", "嗯", "嗯嗯", "对", "是的", "要", "需要",
+            "没问题", "ok", "okk", "okay", "好滴", "好嘞", "好哒");
+
     /** 命中任何一个就回默认档：这些词意味着"有事要做" */
     private static final List<String> ACTION_HINTS = List.of(
             "提醒", "记住", "记一下", "记个", "帮我", "帮忙", "帮", "查", "搜", "找一下", "看看", "看一下",
             "文件", "图片", "图", "课表", "资料", "文档", "pdf", "excel", "表格",
             "考研", "备考", "考试", "复习", "学习", "打卡", "错题", "进度", "里程碑", "科目", "数学", "英语",
             "政治", "408", "真题", "初试", "复试", "刷题", "背单词", "单词", "墨墨",
+            "高数", "线代", "概率", "单词书", "网课", "二刷", "一轮", "二轮", "三轮", "冲刺", "真题卷", "套卷",
             "任务", "计划", "定时", "日程", "安排", "几点", "几号", "星期几", "什么时候", "多久",
             "怎么", "为什么", "能不能", "可不可以", "是不是", "多少", "几个", "哪个", "哪里",
             "改", "删", "加", "新建", "创建", "设置", "取消", "暂停", "开启", "打开", "关闭",
@@ -64,10 +76,11 @@ public class DialogModeDecider {
     }
 
     /**
-     * @param userText       用户这一条消息
-     * @param hasAttachments 是否带图片/文档/引用内容
+     * @param userText              用户这一条消息
+     * @param hasAttachments        是否带图片/文档/引用内容
+     * @param previousAssistantText 机器人上一轮说的话（可空），用来识别"裸答应"
      */
-    public Decision decide(String userText, boolean hasAttachments) {
+    public Decision decide(String userText, boolean hasAttachments, String previousAssistantText) {
         if (!enabled) {
             return new Decision(false, "省电档已关闭");
         }
@@ -90,9 +103,25 @@ public class DialogModeDecider {
                 return new Decision(false, "含线索词「" + hint + "」");
             }
         }
-        if (GREETINGS.contains(stripped) || GREETINGS.contains(normalized)) {
-            return new Decision(true, "寒暄/确认类短句");
+        boolean greeting = GREETINGS.contains(stripped) || GREETINGS.contains(normalized)
+                || PURE_LAUGHTER.matcher(stripped).matches();
+        if (!greeting) {
+            return new Decision(false, "不在寒暄白名单里");
         }
-        return new Decision(false, "不在寒暄白名单里");
+        if (BARE_YES.contains(stripped) && askedSomething(previousAssistantText)) {
+            return new Decision(false, "在回答上一轮的问题，可能要真去做事");
+        }
+        return new Decision(true, "寒暄/确认类短句");
+    }
+
+    /** 上一轮机器人是不是在问用户问题（看结尾一段里有没有问号） */
+    private boolean askedSomething(String previousAssistantText) {
+        if (previousAssistantText == null || previousAssistantText.isBlank()) {
+            return false;
+        }
+        String tail = previousAssistantText.strip();
+        int from = Math.max(0, tail.length() - 200);
+        String window = tail.substring(from);
+        return window.contains("？") || window.contains("?");
     }
 }

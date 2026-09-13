@@ -190,7 +190,7 @@ public class AgentLoop {
         boolean hasAttachments = (images != null && !images.isEmpty()) || (documents != null && !documents.isEmpty());
         DialogModeDecider.Decision dialogMode = dialogModeDecider == null
                 ? new DialogModeDecider.Decision(false, "未配置")
-                : dialogModeDecider.decide(userText, hasAttachments);
+                : dialogModeDecider.decide(userText, hasAttachments, lastAssistantText(history));
         LlmScenario.bind(dialogMode.fast() ? LlmScenario.DIALOG_FAST : LlmScenario.DIALOG);
         log.info("对话档位 user={} mode={} reason={}", userId, dialogMode.fast() ? "fast" : "normal",
                 dialogMode.reason());
@@ -280,6 +280,20 @@ public class AgentLoop {
             }
         }
         return text.toString();
+    }
+
+    /** 机器人上一轮说的话（用来识别"用户只回一个『好』其实是在回答提问"） */
+    private String lastAssistantText(List<ContextTurn> history) {
+        if (history == null) {
+            return "";
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            ContextTurn turn = history.get(i);
+            if (turn != null && "assistant".equals(turn.role()) && turn.text() != null) {
+                return turn.text();
+            }
+        }
+        return "";
     }
 
     /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */

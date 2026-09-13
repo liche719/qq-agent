@@ -46,6 +46,12 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       SEARXNG_BASE_URL: http://127.0.0.1:8888
+      # 媒体上下文：以前一个都没透传，服务器 .env 改了不生效（坑 36 同类）
+      MEDIA_CONTEXT_MAX_FILES_PER_TASK: ${MEDIA_CONTEXT_MAX_FILES_PER_TASK:-10}
+      MEDIA_CONTEXT_PENDING_TTL_MINUTES: ${MEDIA_CONTEXT_PENDING_TTL_MINUTES:-30}
+      MEDIA_CONTEXT_MAX_PENDING_PER_CONVERSATION: ${MEDIA_CONTEXT_MAX_PENDING_PER_CONVERSATION:-8}
+      MEDIA_CONTEXT_EXCERPT_MAX_CHARS: ${MEDIA_CONTEXT_EXCERPT_MAX_CHARS:-4000}
+      MEDIA_STORAGE_MAX_FILE_BYTES: ${MEDIA_STORAGE_MAX_FILE_BYTES:-20971520}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -72,6 +78,8 @@ services:
       LLM_DIALOG_FAST_ENABLED: ${LLM_DIALOG_FAST_ENABLED:-true}
       AGENT_TOOL_TRIM_ENABLED: ${AGENT_TOOL_TRIM_ENABLED:-true}
       AGENT_TOOL_TRIM_HISTORY_TURNS: ${AGENT_TOOL_TRIM_HISTORY_TURNS:-4}
+      # 升档后要不要先发一句"稍等，我仔细想想"（否则用户会盯着 10~30 秒没有任何反馈）
+      AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。

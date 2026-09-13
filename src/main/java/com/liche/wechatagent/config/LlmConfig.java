@@ -12,8 +12,8 @@ public class LlmConfig {
 
     /**
      * 场景档位：哪些场景关掉"深度思考"、哪些场景用温度 0。
-     * 留空的键由 {@link LlmScenarioSettings} 用内置默认值兜底（默认关思考的是 extract / reminder_parse /
-     * schedule_parse / archive，对话 dialog 保持模型默认档）。
+     * 留空的键由 {@link LlmScenarioSettings} 用内置默认值兜底（默认关思考的是 extract / schedule_parse /
+     * dialog_fast；reminder_parse 与 archive 保持思考，dialogue 默认档也保持思考）。
      */
     @Bean
     public LlmScenarioSettings llmScenarioSettings(

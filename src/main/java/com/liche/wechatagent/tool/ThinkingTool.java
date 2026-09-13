@@ -30,6 +30,10 @@ public class ThinkingTool implements AgentToolProvider {
         this.statusService = statusService;
     }
 
+    @com.liche.wechatagent.tool.ToolExecutionPolicy(value = com.liche.wechatagent.tool.ToolExecutionClass.FAST,
+            hasSideEffect = true, retryable = false, riskLevel = com.liche.wechatagent.tool.ToolRiskLevel.LOW,
+            allowParallel = false)
+    @com.liche.wechatagent.tool.NonIdempotentTool
     @Tool(value = "申请把当前这一轮升级到更深的思考档：后续轮次会用深度思考、允许更多工具轮、更长的超时。"
             + "只在问题确实复杂时调用——需要多步推理、反复核对、跨多份资料对比，或用户明确要求仔细分析/认真想想。"
             + "闲聊、确认、简单查询、单步操作**不要**调用（有每日额度）。同一轮最多调用一次，调用后继续把任务做完，"
@@ -49,6 +53,8 @@ public class ThinkingTool implements AgentToolProvider {
         }
         LlmEscalation.escalate();
         quota.record(userId);
+        // 升档后这一轮可能要跑十几秒到几十秒：先给用户一句反馈，别让他对着"正在输入"干等
+        statusService.pushNotice("这个我得仔细想想，稍等我一下…");
         log.info("已升档 user={} 今日第 {} 次（上限 {}）reason={}", userId, quota.used(userId), quota.limit(),
                 reason == null ? "" : reason.strip());
         return ToolBusinessResult.success("已升档：后面的轮次会用深度思考，也可以多用几轮工具，"

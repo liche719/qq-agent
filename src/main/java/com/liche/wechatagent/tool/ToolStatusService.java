@@ -2,6 +2,8 @@ package com.liche.wechatagent.tool;
 
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.channel.OutboundMedia;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -14,6 +16,8 @@ import java.util.List;
  */
 @Component
 public class ToolStatusService {
+
+    private static final Logger log = LoggerFactory.getLogger(ToolStatusService.class);
 
     private static final class StatusContext {
         private final String userId;
@@ -79,6 +83,25 @@ public class ToolStatusService {
             c.sendTextReplyFrom(context.botId, context.userId, context.replyToMsgId, text);
             context.sent = true;
         }
+    }
+
+    /**
+     * 发一条"我在忙"的提示：**不受 progressEnabled 开关限制**（那是给逐条工具进度用的），
+     * 但仍然每轮只发一条（{@code context.sent} 置位后不再重复）。用于升档这种长等待场景。
+     */
+    public boolean pushNotice(String text) {
+        StatusContext context = current.get();
+        if (context == null || context.sent || text == null || text.isBlank() || channels.isEmpty()) {
+            return false;
+        }
+        WeChatChannel channel = channelFor(context.channel);
+        if (channel == null) {
+            return false;
+        }
+        channel.sendTextReplyFrom(context.botId, context.userId, context.replyToMsgId, text);
+        context.sent = true;
+        log.info("已发送一次中途提示 user={} text={}", context.userId, text);
+        return true;
     }
 
     public boolean sendMedia(OutboundMedia media) {

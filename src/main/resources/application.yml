@@ -85,7 +85,7 @@ llm:
   # 关掉这个开关就完全回到"对话一直用默认档"。省电档在指标里是独立的 dialog_fast 场景。
   dialog-fast:
     enabled: ${LLM_DIALOG_FAST_ENABLED:true}
-  # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值（同上四个）
+  # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值（extract,reminder_parse,schedule_parse,archive）
   zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reminder_parse,schedule_parse,archive}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。

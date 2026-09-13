@@ -36,6 +36,10 @@ public class LlmScenarioSettings {
      */
     private static final Set<LlmScenario> DEFAULT_OFF = EnumSet.of(
             LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE, LlmScenario.DIALOG_FAST);
+    /** 默认温度 0 的场景：只要结构化输出正确，不需要发散。**不要复用 DEFAULT_OFF**：省电档应该还是 0.7 */
+    private static final Set<LlmScenario> DEFAULT_ZERO_TEMPERATURE = EnumSet.of(
+            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);
+
     /** 显式打开思考的场景：升档后要"确保开着"，不依赖上游默认 */
     private static final Set<LlmScenario> DEFAULT_ON = EnumSet.of(LlmScenario.DIALOG_DEEP);
     private static final String DEFAULT_OFF_BODY = "{\"thinking\":{\"type\":\"disabled\"}}";
@@ -59,7 +63,7 @@ public class LlmScenarioSettings {
         this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
         this.thinkingOff = parseScenarios(disabledScenarios, DEFAULT_OFF);
         this.thinkingOn = parseScenarios(enabledScenarios, DEFAULT_ON);
-        this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_OFF);
+        this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_ZERO_TEMPERATURE);
         this.offBody = readJson(disabledBody, DEFAULT_OFF_BODY);
         this.onBody = readJson(enabledBody, DEFAULT_ON_BODY);
     }
