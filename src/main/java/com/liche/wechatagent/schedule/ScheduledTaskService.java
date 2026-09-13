@@ -303,26 +303,16 @@ public class ScheduledTaskService {
                     ? text : text.substring(0, resultMaxChars - 1) + "…";
 
             boolean sent = sendToUser(userId, "⏰ 「" + current.getTitle() + "」\n" + text);
-            current.setLastRunAt(LocalDateTime.now(zone));
-            current.setStatus(sent ? ScheduledTask.STATUS_SUCCESS : ScheduledTask.STATUS_FAILED);
-            current.setLastResult(clipped);
-            current.setLastError(sent ? null : "推送未被通道接受（可能是主动消息额度限制）");
-            current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
-            current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
-            current.setUpdatedAt(LocalDateTime.now(zone));
-            persist(current);
+            persistRunResult(current, sent ? ScheduledTask.STATUS_SUCCESS : ScheduledTask.STATUS_FAILED, clipped,
+                    sent ? null : "推送未被通道接受（可能是主动消息额度限制）");
             userLogService.record(userId, "SCHEDULED_TASK_RUN",
                     Map.of("taskId", current.getId(), "sent", sent, "manual", manual));
             return "已执行「" + current.getTitle() + "」：" + text;
         } catch (RuntimeException exception) {
             log.warn("定时任务执行失败 id={} user={}: {}", current.getId(), userId, exception.toString());
-            current.setLastRunAt(LocalDateTime.now(zone));
-            current.setStatus(ScheduledTask.STATUS_FAILED);
-            current.setLastError(shorten(exception.getMessage(), 500));
-            current.setRunCount((current.getRunCount() == null ? 0 : current.getRunCount()) + 1);
-            current.setNextRunAt(ScheduledTaskParseService.nextRun(current.getCron(), zone));
-            current.setUpdatedAt(LocalDateTime.now(zone));
-            persist(current);
+            // 失败分支不动 lastResult（保留上一次的结果），所以要把快照里的旧值原样带过去
+            persistRunResult(current, ScheduledTask.STATUS_FAILED, current.getLastResult(),
+                    shorten(exception.getMessage(), 500));
             return "执行失败：" + exception.getMessage();
         } finally {
             MDC.remove("userScope");
@@ -330,15 +320,36 @@ public class ScheduledTaskService {
     }
 
     /**
-     * 写回执行结果前先确认这行还在：Agent 链路可能跑一分钟，期间用户完全可能把任务删了。
-     * 直接 save 一个已经不在库里的 detached 实体会被 merge 成 INSERT——"删掉的任务又自己回来了"。
+     * 写回这次执行的结果：**只更新执行拥有的那几列**（状态/时间/结果/次数），
+     * `enabled / title / instruction / cron` 一律不碰。
+     *
+     * <p>不能整行 save：Agent 链路可能跑一分钟，期间用户在面板上点「暂停」是写库 + 删 Quartz job，
+     * 而整行 save 会把执行前那份旧快照的 {@code enabled=true} 覆盖回去——面板显示"已启用 + 有下次时间"，
+     * 实际 job 已经被删、任务永远不会再跑（只有下次重启 resync 才自愈）。改标题/指令/cron 同理会被回滚。
+     *
+     * <p>行已被删除时定向 UPDATE 影响 0 行，等价于原来"删了就别写回"的保护——而且不会有
+     * merge 成 INSERT 把删掉的任务复活的风险。
      */
-    private void persist(ScheduledTask task) {
-        if (task.getId() != null && !repository.existsById(task.getId())) {
+    private void persistRunResult(ScheduledTask task, String status, String lastResult, String lastError) {
+        if (task.getId() == null) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now(zone);
+        Integer runCount = (task.getRunCount() == null ? 0 : task.getRunCount()) + 1;
+        LocalDateTime nextRunAt = ScheduledTaskParseService.nextRun(task.getCron(), zone);
+        int updated = repository.updateRunResult(task.getId(), status, now, lastResult, lastError, runCount,
+                nextRunAt, now);
+        if (updated == 0) {
             log.info("定时任务已在执行期间被删除，本次结果不再写回 id={}", task.getId());
             return;
         }
-        repository.save(task);
+        task.setStatus(status);
+        task.setLastRunAt(now);
+        task.setLastResult(lastResult);
+        task.setLastError(lastError);
+        task.setRunCount(runCount);
+        task.setNextRunAt(nextRunAt);
+        task.setUpdatedAt(now);
     }
 
     /** 投递到用户最近一次说话的通道（通道过期时由 ProactiveDelivery 保守兜底） */
