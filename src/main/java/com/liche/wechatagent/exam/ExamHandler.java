@@ -30,6 +30,12 @@ public class ExamHandler implements CommandHandler {
         return List.of("考研", "考研计划", "备考计划", "考研目标");
     }
 
+    /** 「考研 2026-12-20 报考XX大学 计算机，科目 数学:120:120:…」要交给模型去建计划，不能被这句吞掉 */
+    @Override
+    public boolean exactOnly() {
+        return true;
+    }
+
     @Override
     public String handle(String args, String userId) {
         String plan = examService.planText(userId);

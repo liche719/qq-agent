@@ -81,9 +81,12 @@ public class CommandRegistry {
         if (!slash) {
             name = aliasName(trimmed);
             if (handlers.get(name) == null) {
-                // 「中文指令 + 参数」形式（例如「陪练 面试」）：整串不是别名时退回按首词识别，余下作为参数
+                // 「中文指令 + 参数」形式（例如「陪练 面试」）：整串不是别名时退回按首词识别，余下作为参数。
+                // 但声明了 exactOnly 的入口不参与这个兜底——它的别名后面经常跟着用户要交代的内容
+                // （「考研 2026-12-20 报考XX大学 计算机」），吞掉整句会让模型拿不到信息。
                 String byHead = aliasName(parts[0]);
-                if (handlers.get(byHead) != null) {
+                CommandHandler byHeadHandler = handlers.get(byHead);
+                if (byHeadHandler != null && !byHeadHandler.exactOnly()) {
                     name = byHead;
                     args = parts.length > 1 ? parts[1] : "";
                 }

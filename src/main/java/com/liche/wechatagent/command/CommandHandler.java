@@ -22,6 +22,18 @@ public interface CommandHandler {
         return List.of();
     }
 
+    /**
+     * 是否只认「整串等于别名」，不要"首词命中 + 余下当参数"的兜底。
+     *
+     * <p>默认 false：像「打卡 150」「今日任务 明天」这种"指令 + 参数"要靠首词兜底。
+     * 但有的词天然会被用户接着写内容——例如「考研 2026-12-20 报考XX大学 计算机」，
+     * 若按首词命中就会**把后面的信息全吞掉**（只回一份计划概览，模型根本没机会解析）。
+     * 这类入口设成 {@code true}，带参数的整句就会落到大模型，由模型调工具处理。
+     */
+    default boolean exactOnly() {
+        return false;
+    }
+
     /** 执行指令，返回回复文本 */
     String handle(String args, String userId);
 }
