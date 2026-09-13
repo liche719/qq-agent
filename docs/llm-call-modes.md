@@ -229,7 +229,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 复查方式：三个独立子代理分别审「省电档规则 / 工具裁剪 / 媒体与提示词」，逐条**拿证据反驳**（能反驳掉的就不算 bug），
 再在真机上跑规则表与风险探针。结果是 **3 个真缺陷 + 1 个 UI 漏字 + 若干"确认但先不改"**。
 
-### 13.1 真缺陷（已修，commit `9301d82`）
+### 13.1 真缺陷（已修，commit `9301d82` + `f60e009`）
 
 1. **裸「好」在模型刚问过问题时会走省电档**（`DialogModeDecider`）：原来只看当前这一句，于是"要不要我提醒你？"→「好」被判成纯确认，
    而**确认之后往往正是要做事的时刻**（关思考还可能顺带少调工具）。现在多传一个参数 `previousAssistantText`：
@@ -254,3 +254,20 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 - `ToolSetTrimmer` 在"无关键词"的那一轮会查一次 `ExamService.plan(userId)`（DB）：一次轻查询，**先不缓存**。
 - 工具轮中途失败时用户只收到「抱歉，我这边出了点小问题」，**已经查到的结果没有给用户**——改法涉及失败的语义，另起一轮再说。
 - `DescriptorPanel.watch(tick)` 对**非当前页签**也会刷新（多打几次接口，不影响正确性）。
+
+### 13.3 复查的实测证据（2026-09-13 深夜，生产容器 `f60e009`）
+
+规则表：`DialogModeDecider` 17 条用例（含上面三条新增/修正的）**17/17 通过**。
+
+端到端（临时把 `WECHAT_CHANNEL_MODE` 改成 `simulator` 重建容器，跑完立刻改回 `disabled` 并删掉测试用户的行）：
+
+```
+「在吗」        mode=fast   reason=寒暄/确认类短句        → scenario=dialog_fast ms=677 thinking=off maxTokens=0 思考=0字
+「提醒我一下」  mode=normal reason=含线索词「提醒」        → 机器人反问了两个问题（结尾是「？」）
+「好」          mode=normal reason=在回答上一轮的问题，可能要真去做事   ← 新增的守卫在这里生效
+复杂问题        mode=normal reason=消息较长              → 模型自己调 thinkDeeper，scenario=dialog_deep ms=11800 thinking=on 思考=2148字
+                                                         → pushed 里有「这个我得仔细想想，稍等我一下…」← 升档提示真的发出去了
+```
+
+另外核对了：镜像 tag = `f60e009`；容器 env 里 `MEDIA_CONTEXT_MAX_FILES_PER_TASK=10`、`AGENT_DEEP_NOTICE_ENABLED=true`；
+前端 bundle 与本地构建产物 **sha256 完全一致**（`f4a6301d…`，也就是「省电档」那个标签确实进了线上）；0 条 ERROR；面板 200 / 编码路径 401；`reminder_task` 18、`stored_media` 6、`exam_plan` 1、`scheduled_task` 2、机主 `last_channel=qq`（测试数据已清、通道已复位）。
