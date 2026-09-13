@@ -91,7 +91,8 @@ public class LlmScenarioSettings {
             // 升档是"要更多预算"，所以默认**不设上限**（与普通对话一致）；要限制就显式配 dialog-deep
             return dialogDeepMaxTokens;
         }
-        if (scenario == LlmScenario.DIALOG) {
+        if (scenario == LlmScenario.DIALOG || scenario == LlmScenario.DIALOG_FAST) {
+            // 对话档（含省电档）默认不设上限：思考 token 也算进 max_tokens，加了会截断正常长回复
             return dialogMaxTokens;
         }
         return structuredMaxTokens;
