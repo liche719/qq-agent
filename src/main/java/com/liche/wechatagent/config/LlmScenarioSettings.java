@@ -33,9 +33,13 @@ public class LlmScenarioSettings {
      *
      * <p>**reminder_parse 与 archive 不关**：前者是提醒时间，解析错了用户会漏掉提醒（且调用很少，
      * 省下的 token 可以忽略）；后者是长期记忆的摘要，质量优先（第一优先级是"记忆不丢失"）。
+     *
+     * <p>**2026-09-14 把 extract 收回思考**：实测（6 条消息、真实提示词）关思考时复合消息会漏记待办、
+     * 「目标分改了」被记成「目标分是…」；而提取是**异步后台**跑的（{@code MemoryExtractionScheduler}），
+     * 省下的时间用户根本感觉不到，只省 token。按"记忆不丢失 > 省钱"把它收回来。
      */
     private static final Set<LlmScenario> DEFAULT_OFF = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.SCHEDULE_PARSE, LlmScenario.DIALOG_FAST);
+            LlmScenario.SCHEDULE_PARSE, LlmScenario.DIALOG_FAST);
     /** 默认温度 0 的场景：只要结构化输出正确，不需要发散。**不要复用 DEFAULT_OFF**：省电档应该还是 0.7 */
     private static final Set<LlmScenario> DEFAULT_ZERO_TEMPERATURE = EnumSet.of(
             LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);

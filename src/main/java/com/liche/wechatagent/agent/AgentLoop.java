@@ -82,6 +82,8 @@ public class AgentLoop {
     private final int streamChunkChars;
     private final long streamChunkDelayMillis;
     private final String imageUserAgent;
+    /** 工具失败详情要不要拼进给用户的回复（2026-09-14 默认关：只打 WARN 日志） */
+    private final boolean toolFailureNoticeEnabled;
     private final Pattern currentTimePattern;
     private final Map<String, String> toolDisplayNames;
     private final ConversationMemoryService conversationMemoryService;
@@ -107,6 +109,7 @@ public class AgentLoop {
                      @Value("${agent.stream-chunk-chars:24}") int streamChunkChars,
                      @Value("${agent.stream-chunk-delay-ms:120}") long streamChunkDelayMillis,
                      @Value("${media.storage.user-agent:Mozilla/5.0 (compatible; WechatAgent/1.0)}") String imageUserAgent,
+                     @Value("${agent.tool-failure-notice.enabled:false}") boolean toolFailureNoticeEnabled,
                      AgentPolicyProperties policyProperties,
                      ConversationMemoryService conversationMemoryService,
                      DialogModeDecider dialogModeDecider,
@@ -127,6 +130,7 @@ public class AgentLoop {
                 DEFAULT_STREAM_CHUNK_DELAY_MILLIS);
         this.imageUserAgent = imageUserAgent == null || imageUserAgent.isBlank()
                 ? DEFAULT_IMAGE_USER_AGENT : imageUserAgent.trim();
+        this.toolFailureNoticeEnabled = toolFailureNoticeEnabled;
         AgentPolicyProperties policies = policyProperties == null ? new AgentPolicyProperties() : policyProperties;
         this.currentTimePattern = compileCurrentTimePattern(policies.getCurrentTimePattern());
         Map<String, String> configuredDisplayNames = policies.getToolDisplayNames();
@@ -155,7 +159,7 @@ public class AgentLoop {
                 maxImageBytes, DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
-                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, new AgentPolicyProperties(), null,
+                DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, false, new AgentPolicyProperties(), null,
                 null, null);
     }
 
@@ -177,7 +181,7 @@ public class AgentLoop {
                 maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxToolRounds, streamTimeoutSeconds,
                 maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
-                streamChunkDelayMillis, imageUserAgent, new AgentPolicyProperties(), null, null, null);
+                streamChunkDelayMillis, imageUserAgent, false, new AgentPolicyProperties(), null, null, null);
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -315,7 +319,7 @@ public class AgentLoop {
         if (!notice.isBlank()) {
             replyText = replyText.stripTrailing() + "\n\n" + notice;
         }
-        replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames);
+        replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
         String reply = appendToolFooter(replyText, successfulTools, toolDisplayNames);
         reply = appendSearchSources(reply, toolResults);
         if (sink != null) {
@@ -332,7 +336,7 @@ public class AgentLoop {
         if (!notice.isBlank()) {
             fallback += "\n\n" + notice;
         }
-        fallback = appendToolFailureNotice(fallback, failedTools, toolDisplayNames);
+        fallback = appendToolFailureNotice(fallback, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
         fallback = appendToolFooter(fallback, successfulTools, toolDisplayNames);
         fallback = appendSearchSources(fallback, toolResults);
         if (sink != null) {
@@ -468,11 +472,24 @@ public class AgentLoop {
         return footer.toString();
     }
 
-    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {        return appendToolFailureNotice(reply, failedTools, AgentPolicyProperties.defaultToolDisplayNames());
+    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {
+        return appendToolFailureNotice(reply, failedTools, AgentPolicyProperties.defaultToolDisplayNames());
     }
 
     static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools,
                                           Map<String, String> displayNames) {
+        return appendToolFailureNotice(reply, failedTools, displayNames, true);
+    }
+
+    /**
+     * 失败详情拼给用户看的那段（{@code ⚠️ 工具调用未完成：…}）。
+     *
+     * <p>2026-09-14：默认**不再拼进回复**（{@code agent.tool-failure-notice.enabled=false}），只打 WARN 日志。
+     * 理由：实测用户会把这行读成"这机器人连工具都跑不明白"，而模型在正文里本来就会自然说明"这个文件读不出来"；
+     * 程序再追加一段内部状态既重复又难看。要恢复旧行为把开关设成 true 即可。
+     */
+    static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools,
+                                          Map<String, String> displayNames, boolean appendToReply) {
         if (reply == null || reply.isBlank() || failedTools == null || failedTools.isEmpty()) {
             return reply;
         }
@@ -504,6 +521,11 @@ public class AgentLoop {
             hasDetails = true;
         }
         if (!hasDetails) {
+            return reply;
+        }
+        if (!appendToReply) {
+            // 只留痕，不给用户看
+            log.warn("本轮有工具未完成（不给用户显示）{}", notice.substring(1));
             return reply;
         }
         if (reply.contains(notice.toString())) {

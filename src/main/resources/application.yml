@@ -71,11 +71,12 @@ llm:
   connect-timeout-seconds: ${LLM_CONNECT_TIMEOUT_SECONDS:5}
   # 深度思考档位。实测当前模型（deepseek-v4-flash-vision-exp）**默认就在思考**：结构化任务关掉后
   # 输出 token 少约 90%、快约 2.4 倍，JSON 依然合法；对话（dialog）保持默认档不动。
-  # 场景见 LlmScenario：dialog / extract / reminder_parse / schedule_parse / archive
+  # 场景见 LlmScenario：dialog / dialog_deep / dialog_fast / extract / reminder_parse / schedule_parse / archive
   thinking:
-    # 关思考的场景（逗号分隔）；留空 = 用内置默认值（extract,schedule_parse,dialog_fast）。reminder_parse/archive 不关：
-    # 前者解析错=用户漏提醒（且调用很少），后者是长期记忆摘要、质量优先
-    disabled-scenarios: ${LLM_THINKING_DISABLED_SCENARIOS:extract,schedule_parse,dialog_fast}
+    # 关思考的场景（逗号分隔）；留空 = 用内置默认值（schedule_parse,dialog_fast）。reminder_parse/archive 不关：
+    # 前者解析错=用户漏提醒（且调用很少），后者是长期记忆摘要、质量优先；
+    # extract 2026-09-14 也收回了思考——它是异步后台跑，省不到用户的等待时间，却会让复合消息漏记
+    disabled-scenarios: ${LLM_THINKING_DISABLED_SCENARIOS:schedule_parse,dialog_fast}
     # 要显式打开思考的场景（默认空 = 不额外塞字段，保持上游默认）
     enabled-scenarios: ${LLM_THINKING_ENABLED_SCENARIOS:}
     # 关/开思考时塞进请求体的额外字段（字段形状按上游文档，代码不写死；**留空 = 用内置默认值**）
@@ -119,6 +120,10 @@ agent:
   tool-trim:
     enabled: ${AGENT_TOOL_TRIM_ENABLED:true}
     history-turns: ${AGENT_TOOL_TRIM_HISTORY_TURNS:4}
+  # 工具失败详情（"⚠️ 工具调用未完成：…"）要不要拼进给用户的回复。
+  # 默认 false：只打 WARN 日志——模型在正文里本来就会自然说明失败，程序再追加内部状态既重复又难看
+  tool-failure-notice:
+    enabled: ${AGENT_TOOL_FAILURE_NOTICE_ENABLED:false}
   stream-timeout-seconds: ${AGENT_STREAM_TIMEOUT_SECONDS:120}
   image-max-redirects: ${AGENT_IMAGE_MAX_REDIRECTS:3}
   image-connect-timeout-seconds: ${AGENT_IMAGE_CONNECT_TIMEOUT_SECONDS:8}

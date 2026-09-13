@@ -59,9 +59,10 @@ services:
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
-      # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 extract/schedule_parse/
-      # dialog_fast；reminder_parse/archive 保持思考；请求体字段形状也由这里覆盖，上游换写法不用改代码）
-      LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-extract,schedule_parse,dialog_fast}
+      # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 schedule_parse/dialog_fast；
+      # extract/reminder_parse/archive 都保持思考——extract 是后台异步跑，省不到用户等待，只省 token）
+      # 请求体字段形状也由这里覆盖，上游换写法不用改代码
+      LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-schedule_parse,dialog_fast}
       LLM_THINKING_ENABLED_SCENARIOS: ${LLM_THINKING_ENABLED_SCENARIOS:-}
       LLM_THINKING_DISABLED_BODY: ${LLM_THINKING_DISABLED_BODY:-}
       LLM_THINKING_ENABLED_BODY: ${LLM_THINKING_ENABLED_BODY:-}
@@ -80,6 +81,8 @@ services:
       AGENT_TOOL_TRIM_HISTORY_TURNS: ${AGENT_TOOL_TRIM_HISTORY_TURNS:-4}
       # 升档后要不要先发一句"稍等，我仔细想想"（否则用户会盯着 10~30 秒没有任何反馈）
       AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
+      # 工具失败详情要不要拼进用户可见的回复（默认 false，只进日志）
+      AGENT_TOOL_FAILURE_NOTICE_ENABLED: ${AGENT_TOOL_FAILURE_NOTICE_ENABLED:-false}
       QQ_ENABLED: ${QQ_ENABLED:-false}
       # 必须透传：compose 只传列出的变量，以前没这一行，服务器 .env 写 QQ_SANDBOX=false 也不生效，
       # 容器里一直按 application.yml 的默认值连**沙箱**网关（日志里是 wss://sandbox.api.sgroup.qq.com）。
