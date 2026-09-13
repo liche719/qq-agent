@@ -265,6 +265,16 @@ memory:
   extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:150}
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
+  # 记忆归纳（consolidation，2026-09-14 加）：每天把零碎的核心/中期记忆归纳成少量"更高层稳定记忆"。
+  # 只在活跃核心记忆 ≥ min-active-cores 时才动模型；被取代的旧条目只置 SUPERSEDED，不删行。
+  # 详见 docs/memory-extraction.md。
+  consolidation:
+    enabled: ${MEMORY_CONSOLIDATION_ENABLED:true}
+    min-active-cores: ${MEMORY_CONSOLIDATION_MIN_ACTIVE_CORES:15}
+    max-output: ${MEMORY_CONSOLIDATION_MAX_OUTPUT:8}
+    max-input-cores: ${MEMORY_CONSOLIDATION_MAX_INPUT_CORES:60}
+    max-input-work: ${MEMORY_CONSOLIDATION_MAX_INPUT_WORK:20}
+  consolidation-cron: ${MEMORY_CONSOLIDATION_CRON:0 10 4 * * ?}
   dedup-threshold: ${MEMORY_DEDUP_THRESHOLD:0.8}
   usage-touch-interval-minutes: ${MEMORY_USAGE_TOUCH_INTERVAL_MINUTES:15}
   extraction-max-candidates: ${MEMORY_EXTRACTION_MAX_CANDIDATES:32}

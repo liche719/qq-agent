@@ -20,8 +20,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
+import java.time.format.DateTimeFormatter;import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +32,15 @@ public class MemoryExtractor {
     private static final Logger log = LoggerFactory.getLogger(MemoryExtractor.class);
     private static final String FENCE = "\u0060\u0060\u0060";
     private static final int DEFAULT_PRIORITY = 3;
+
+    /** 窗口内用户消息至少要有这么多"实字"才值得跑一次提取（见 worthExtracting） */
+    private static final int MIN_SUBSTANCE_CHARS = 5;
+
+    /**
+     * 新核心事实与已有核心记忆的相似度超过它 → 判定为"同一个事实的新版本"，走替换（旧条目 SUPERSEDED）而不是新增。
+     * 0.72 是在「考研数学目标分是130 / 目标分改成140」（≈0.75）与「不喜欢咖啡 / 喜欢喝茶」（≈0.2）之间取的。
+     */
+    private static final double CORE_CONFLICT_SIMILARITY = 0.72d;
 
     private final ChatModel chatModel;
     private final ContextStore contextStore;
@@ -180,6 +188,13 @@ public class MemoryExtractor {
                 recent = contextStore.getRecent(userId, recentTurns);
             }
             if (recent.isEmpty()) {
+                return true;
+            }
+            // 【2026-09-14】触发门槛：纯寒暄/应答的窗口不值得花一次（带思考的）LLM 调用。
+            // 实测日志里大量 completionTokens=40（模型返回全空）就是这种空跑。跳过不是"漏记"——提取窗口是最近
+            // N 轮，用户下一句有实质内容时会把这些短句一起带进去。
+            if (!worthExtracting(recent)) {
+                log.info("记忆提取跳过：窗口内没有值得记的内容 user={} turns={}", userId, recent.size());
                 return true;
             }
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
@@ -388,6 +403,18 @@ public class MemoryExtractor {
                     candidate.confidence());
             MemoryAttributes attributes = new MemoryAttributes(candidate.importance(), candidate.confidence(),
                     candidate.keywords());
+            // 【2026-09-14】确定性兜底：这条"新"核心事实其实和已有的某条是同一个主题（换了分数/日期/院校/称呼…）时，
+            // 走替换而不是新增——模型偶尔不把它写成 coreUpdates，就会留下"旧事实还在"的观感（用户明确报过这个症状）。
+            UserCoreMemory similar = mostSimilarCore(userId, candidate.content());
+            if (similar != null) {
+                log.info("核心记忆按新陈述替换旧条目 user={} old=\"{}\" new=\"{}\" similarity={}",
+                        userId, similar.getContent(), candidate.content(),
+                        String.format(java.util.Locale.ROOT, "%.2f",
+                                MemoryTextSimilarity.similarity(similar.getContent(), candidate.content())));
+                runSafely(userId, "替换核心记忆", () -> coreMemoryService.replaceFromExtraction(userId, similar.getId(),
+                        candidate.content(), "与已有同类记忆冲突或重复，按用户最新陈述替换", "AUTO", provenance, attributes));
+                continue;
+            }
             if (isDefaultAttributes(attributes, MemoryAttributes.coreDefaults())) {
                 runSafely(userId, "新增核心记忆", () -> coreMemoryService.add(userId, candidate.content(), "AUTO", provenance));
             } else {
@@ -542,6 +569,26 @@ public class MemoryExtractor {
         return parsed == null ? LocalDateTime.now(zone) : parsed;
     }
 
+    /** 已有核心记忆里跟这条新事实最像的一条（相似度不够就返回 null） */
+    private UserCoreMemory mostSimilarCore(String userId, String content) {
+        if (content == null || content.isBlank() || coreMemoryService == null) {
+            return null;
+        }
+        UserCoreMemory best = null;
+        double bestScore = CORE_CONFLICT_SIMILARITY;
+        for (UserCoreMemory memory : coreMemoryService.listActive(userId)) {
+            if (memory == null || memory.getContent() == null) {
+                continue;
+            }
+            double score = MemoryTextSimilarity.similarity(memory.getContent(), content);
+            if (score >= bestScore) {
+                bestScore = score;
+                best = memory;
+            }
+        }
+        return best;
+    }
+
     private boolean isDuplicate(String content, List<String> duplicates) {
         if (duplicates == null || duplicates.isEmpty()) {
             return false;
@@ -549,6 +596,28 @@ public class MemoryExtractor {
         for (String duplicate : duplicates) {
             if (duplicate != null && !duplicate.isBlank()
                     && (content.contains(duplicate) || duplicate.contains(content))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 窗口里有没有"值得记"的内容：只要有一条**用户消息**算实质内容就返回 true。
+     *
+     * <p>判定故意宽松（宁可多跑一次提取，也不要漏记）：去掉标点后 ≥ {@value #MIN_SUBSTANCE_CHARS} 个字、
+     * 或含数字（日期/分数/时长往往就靠这个）、或含「我/咱」（第一人称陈述）。所以
+     * 「好」「在吗」「嗯嗯」「谢谢」会被跳过，而「我不喝咖啡」「考试推迟了」不会。
+     */
+    private boolean worthExtracting(List<ContextTurn> recent) {
+        for (ContextTurn turn : recent) {
+            if (turn == null || !"user".equals(turn.role()) || turn.text() == null) {
+                continue;
+            }
+            String normalized = MemoryTextSimilarity.normalize(turn.text());
+            if (normalized.length() >= MIN_SUBSTANCE_CHARS
+                    || normalized.chars().anyMatch(Character::isDigit)
+                    || normalized.indexOf('我') >= 0 || normalized.indexOf('咱') >= 0) {
                 return true;
             }
         }
@@ -566,7 +635,7 @@ public class MemoryExtractor {
                 .append("3. 对未来交流有价值的完整经历写入 episodes：包含发生了什么、用户当时的处境/感受、结果或未决状态；一次性普通问答不要写。occurredAt 使用 yyyy-MM-ddTHH:mm:ss，episodeType 可用 EXPERIENCE、MILESTONE、RELATIONSHIP、DECISION 或 DOCUMENT。\n")
                 .append("4. 持续项目、明确尚未结束的任务写入 newWorkItems。用户给出具体日期/时间，或明确相对期限（如明天、下周、本月）时，按当前时间换算 validUntil，使用 yyyy-MM-ddTHH:mm:ss；没有明确期限就留空。\n")
                 .append("5. 用户明确说一个已有任务完成、取消或不再需要时，写入 completedWorkItems，existingId 必须来自已有中期记忆。不得因为你猜测或日期临近而标记完成。\n")
-                .append("6. 用户明确修正已有事实时，分别使用 coreUpdates 或 workConflicts；系统会留痕，不能新增互相矛盾的旧事实。\n")
+                .append("6. 用户明确修正已有事实时，分别使用 coreUpdates 或 workConflicts；系统会留痕，不能新增互相矛盾的旧事实。**如果新事实与「已存在的核心记忆」讲的是同一件事（改分数、改院校、改日期、改称呼、改偏好），必须写 coreUpdates 并把 oldContent 抄成那条已有记忆的原文，绝对不要新增一条平行的 coreCandidates**——否则旧事实会和新事实一起留在库里。\n")
                 .append("7. 每个候选都要给 importance（1-5）和 confidence（0-100）。只有用户明确表达、未来仍有价值且 confidence 至少 ")
                 .append(minConfidence).append(" 的内容才保留；拿不准时返回空数组。\n")
                 .append("8. keywords 填 1-").append(maxKeywords)

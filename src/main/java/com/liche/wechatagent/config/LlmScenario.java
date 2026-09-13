@@ -29,7 +29,9 @@ public enum LlmScenario {
     /** 定时任务解析（自然语言 → cron） */
     SCHEDULE_PARSE,
     /** 归档摘要 */
-    ARCHIVE;
+    ARCHIVE,
+    /** 记忆归纳：把零碎记忆合并成更高层的稳定记忆（每天一次，见 MemoryConsolidationService） */
+    CONSOLIDATE;
 
     private static final ThreadLocal<LlmScenario> CURRENT = new ThreadLocal<>();
 

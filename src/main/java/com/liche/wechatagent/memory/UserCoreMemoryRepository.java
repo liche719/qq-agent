@@ -18,6 +18,10 @@ public interface UserCoreMemoryRepository extends JpaRepository<UserCoreMemory, 
 
     long countByUserId(String userId);
 
+    /** 有核心记忆的用户（记忆归纳任务要按用户跑一遍） */
+    @Query("select distinct memory.userId from UserCoreMemory memory")
+    List<String> findDistinctUserIds();
+
     /** 只更新使用时间这一列，避免整实体回写把并发修改的状态列（SUPERSEDED 等）冲掉 */
     @Modifying
     @Query("update UserCoreMemory memory set memory.lastUsedAt = :now where memory.id in :ids")

@@ -18,7 +18,8 @@ public class LlmScenarioSettings {
 
     /** 默认温度 0 的场景：只要结构化输出正确，不需要发散 */
     private static final Set<LlmScenario> DEFAULT_ZERO_TEMPERATURE = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);
+            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE,
+            LlmScenario.CONSOLIDATE);
 
     private final Set<LlmScenario> zeroTemperature;
     private final int structuredMaxTokens;
