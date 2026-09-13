@@ -1343,8 +1343,10 @@ public class QqChannel implements WeChatChannel {
                     wasPassive ? "被动" : "主动", cause.getClass().getSimpleName(), userId, quotaSuffix());
             return wasPassive;
         }
-        log.warn("[qq] {}发送被拒 user={}: {} → 重发一次主动消息{}", wasPassive ? "被动" : "主动", userId,
-                cause.getMessage(), quotaSuffix());
+        String reason = !orphanMessageId.isBlank() ? "响应里带消息 id，已撤回"
+                : isDefiniteRejection(cause) ? "服务端明确拒收" : "连接未建立，肯定没送达";
+        log.warn("[qq] {}发送失败（{}）user={}: {} → 重发一次主动消息{}", wasPassive ? "被动" : "主动", reason,
+                userId, cause.getMessage(), quotaSuffix());
         try {
             return sendProactive(userId, text, markdown);
         } catch (Exception retryFailure) {
