@@ -4,7 +4,7 @@ import { api } from '../api'
 import DataTable from '../components/DataTable.vue'
 import InfoGrid from '../components/InfoGrid.vue'
 import JsonBlock from '../components/JsonBlock.vue'
-import { fmtMs, fmtNum } from '../labels'
+import { fmtMs, fmtNum, zh } from '../labels'
 
 const props = defineProps({
   tick: { type: Number, default: 0 }
@@ -48,18 +48,8 @@ const searchRows = computed(() => {
   ]
 })
 
-const SCENARIO_LABELS = {
-  dialog: '对话（默认档）',
-  dialog_deep: '对话（模型申请升档）',
-  dialog_fast: '对话（省电档：寒暄/确认类）',
-  extract: '记忆提取',
-  reminder_parse: '提醒解析',
-  schedule_parse: '定时任务解析',
-  archive: '归档摘要'
-}
-
 const scenarioColumns = [
-  { label: '调用场景', value: (row) => SCENARIO_LABELS[row.key] || row.key },
+  { label: '调用场景', value: (row) => zh('scenario', row.key) },
   { label: '次数', value: (row) => fmtNum(row.calls) },
   { label: '失败', value: (row) => fmtNum(row.failures) },
   { label: '平均耗时', value: (row) => (row.averageMs === null || row.averageMs === undefined ? '—' : fmtMs(row.averageMs)) },

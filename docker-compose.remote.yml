@@ -59,8 +59,8 @@ services:
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-60}
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
-      # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 extract/reminder_parse/
-      # schedule_parse/archive；请求体字段形状也由这里覆盖，上游换写法不用改代码）
+      # 深度思考档位：留空表示用 application.yml 的内置默认值（关思考的是 extract/schedule_parse/
+      # dialog_fast；reminder_parse/archive 保持思考；请求体字段形状也由这里覆盖，上游换写法不用改代码）
       LLM_THINKING_DISABLED_SCENARIOS: ${LLM_THINKING_DISABLED_SCENARIOS:-extract,schedule_parse,dialog_fast}
       LLM_THINKING_ENABLED_SCENARIOS: ${LLM_THINKING_ENABLED_SCENARIOS:-}
       LLM_THINKING_DISABLED_BODY: ${LLM_THINKING_DISABLED_BODY:-}

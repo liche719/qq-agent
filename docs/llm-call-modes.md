@@ -5,12 +5,13 @@
 项目用的 `deepseek-v4-flash-vision-exp`（api.deepseek.com）**默认就在思考**——不是"没开深度思考"，而是**一直在开**。
 所以这件事的本质不是"给 agent 加思考模式"，而是**"哪些调用应该把思考关掉"**：只要结构化输出的调用，**80%+ 的输出 token 都花在思考上**，关掉后实测快 2~3 倍、token 少 2/3，JSON 照样合法。
 
-**默认关思考的只有两个场景**（都是实测过、且失败代价小的）：
+**默认关思考的只有三个场景**（都是实测过、且失败代价小的）：
 
 | 场景 | 为什么关得起 |
 |---|---|
 | `extract`（记忆提取，每轮都跑） | 同一条消息实测开/关结果一致（`episodes/work/core` 数量相同），8194ms/1516tok → 2254ms/493tok |
 | `schedule_parse`（自然语言 → cron） | 8 个频率表达 **8/8 cron 完全正确**，且有 `isValidCron` 兜底（真错了只会反问用户） |
+| `dialog_fast`（寒暄/确认类短句，见 §8） | 只对"整句就是寒暄/确认 + ≤12 字 + 无附件 + 无做事线索词"的短句生效，判错也只是答得朴素一点 |
 
 **`reminder_parse` 与 `archive` 保持思考**：提醒时间解析错了=用户**漏掉提醒**，而且一天就几条、省下的 token 可以忽略；
 归档摘要进的是长期记忆（第一优先级是"记忆不丢失"），质量优先。对话回复（dialog）也保持默认档，这是用户明确选的。
@@ -44,8 +45,9 @@
 
 ## 3. 实现（改了什么）
 
-- `LlmScenario`（枚举 + ThreadLocal）：`DIALOG` / `EXTRACT` / `REMINDER_PARSE` / `SCHEDULE_PARSE` / `ARCHIVE`。
-  **没有给任何 Service 加构造器参数**（避开坑 45），只在四个调用点外面包一层 `LlmScenario.run(..., () -> chatModel.chat(...))`。
+- `LlmScenario`（枚举 + ThreadLocal）：`DIALOG` / `DIALOG_DEEP`（模型申请升档后）/ `DIALOG_FAST`（§8 省电档）/
+  `EXTRACT` / `REMINDER_PARSE` / `SCHEDULE_PARSE` / `ARCHIVE`。
+  **没有给任何 Service 加构造器参数**（避开坑 45），只在调用点外面包一层 `LlmScenario.run(..., () -> chatModel.chat(...))`。
   没标注时按 `DIALOG` 处理：漏标注只会"保持默认档"，不会误降档。
 - `LlmScenarioSettings`：**字段形状放在配置里**（`llm.thinking.disabled-body`），代码不写死；解析失败就当没配（宁可不塞字段）。
 - `OpenAiRequestFactory.buildPayload(..., JsonNode extraBody)`：把额外字段并进请求体；两个自研 ChatModel 在调用时按当前场景取。

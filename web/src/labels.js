@@ -38,7 +38,17 @@ const DICTIONARY = {
     COMPLETED: '已完成'
   },
   // 情景记忆的 MemoryStatus 取值
-  episodic: { ACTIVE: '生效中', ARCHIVED: '已归档', SUPERSEDED: '已被取代' }
+  episodic: { ACTIVE: '生效中', ARCHIVED: '已归档', SUPERSEDED: '已被取代' },
+  // LLM 调用场景（面板「模型与搜索」的按场景表格）
+  scenario: {
+    dialog: '对话（默认档）',
+    dialog_deep: '对话（模型申请升档）',
+    dialog_fast: '对话（省电档：寒暄/确认类）',
+    extract: '记忆提取',
+    reminder_parse: '提醒解析',
+    schedule_parse: '定时任务解析',
+    archive: '归档摘要'
+  }
 }
 
 export function zh(group, value) {
