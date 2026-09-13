@@ -153,7 +153,7 @@ public class AdminPanelController {
                         column("title", "错题/知识点", true),
                         column("stage", "轮次", false),
                         tagColumn("state", "状态", Map.<String, Object>of(
-                                "DUE", tag("today 该复习", "warn"),
+                                "DUE", tag("今天该复习", "warn"),
                                 "WAITING", tag("等待回收", "muted"))),
                         column("nextReviewDate", "下次复习", false),
                         column("source", "来源", false)), List.of(
