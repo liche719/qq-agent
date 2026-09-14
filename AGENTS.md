@@ -138,7 +138,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 5. 不要把密码放进命令行参数：会被本机安全策略拦截，也应避免；改用交互式 SSH 或 stdin 传参。
 6. 用管道把 `.env` 写到服务器会带 UTF-8 BOM，docker compose 读取前需去掉（`sed -i '1s/^\xEF\xBB\xBF//'`）。
 7. 提交信息风格：小写英文短句（例：`run remote agent on host network and document deploy secrets`）。
-8. 不要 `git commit`/建分支除非用户明确要求；本项目历史提交由用户账号 `YOLO <3372134858@qq.com>` 完成。
+8. 不要 `git commit`/建分支除非用户明确要求；**开发在 `next` 分支、main 只放已发布版本（发布打 tag，现有基线 `v1.0.0`）**；提交用 `YOLO <3372134858@qq.com>`。
 9. **`/api/admin/*` 的鉴权语义**（2026-09-12 修正）：`AdminAccessFilter` 原先对 dashboard 路径**只校验来源 IP 就直接放行**，密钥形同虚设（面板数据全靠 nginx Basic Auth 挡着）。现已统一为「带正确 `X-Agent-Admin-Key` 头，或在 require-key=false 时回环免密钥」；`require-key=true`（服务器 `.env`）时面板接口必须带口令。历史测试 `AdminAccessFilterTest` 正是按这个语义写的（其中「回环在 local 模式下免密钥」一条与项目文档相冲突，属预期差异）；CI 的 Dockerfile 用 `-DskipTests`，不跑测试。
 10. 失败封禁按**来源 IP** 计数：直连来源是回环时用 `X-Forwarded-For` 的**最后一段**（代理追加的那段才是真实地址；取第一段会被客户端伪造，既可能绕过封禁也可能反过来封禁别人）。实测：本机连错 5 次后本机 429，另一来源 IP 仍 200（别人乱输不会连累你）。
 11. **CSS 里只写标准 `backdrop-filter`**：手写一行 `-webkit-backdrop-filter` 会被 Vite 8 的 CSS 压缩（lightningcss）合并掉标准属性，构建产物里只剩带前缀的那条，而 Chromium 根本不认（`CSS.supports('-webkit-backdrop-filter')` 为 false）→ 毛玻璃**静默失效**。让构建工具自己加前缀即可。
