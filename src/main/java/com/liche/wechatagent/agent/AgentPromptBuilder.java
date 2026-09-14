@@ -6,8 +6,10 @@ final class AgentPromptBuilder {
     private AgentPromptBuilder() {
     }
 
-    static String build(String persona, String coreSection, String workSection, int retryAttempts) {
+    static String build(String persona, java.util.List<PromptSection> extraSections,
+                        String coreSection, String workSection, int retryAttempts) {
         return persona
+                + renderSections(extraSections)
                 + "\n\n【长期核心记忆】\n" + coreSection
                 + "\n\n【与当前问题相关的工作记忆】\n" + workSection
                 + "\n\n边界与行为规则："
@@ -49,5 +51,24 @@ final class AgentPromptBuilder {
                 + "\n25. 【别承诺做不到的事】**课表、教室、节次、上课时间、临时日程**这类会变的信息，系统**不会把它写进长期记忆**"
                 + "（要看就现场读他保存的课表图片）。所以用户顺口提到这类信息时，**不要说「我记住了/记下了」**，"
                 + "应该说成「我按这张课表来用，课表变了记得发我新的」——只有他说「记住」而且内容是稳定的偏好/事实时，才可以说记住了。";
+    }
+
+    /**
+     * 插件段落：按 {@code order} 拼装；空段落整块跳过。
+     *
+     * <p>**没有任何段落时返回空串**，于是整条提示词与"没有插件"时逐字节一致 ——
+     * 这样加插件不会改变现有行为，拔掉插件也不会留下痕迹。
+     */
+    private static String renderSections(java.util.List<PromptSection> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return "";
+        }
+        StringBuilder rendered = new StringBuilder();
+        sections.stream()
+                .filter(section -> section != null && !section.isBlank())
+                .sorted(java.util.Comparator.comparingInt(PromptSection::order))
+                .forEach(section -> rendered.append("\n\n").append(section.title()).append('\n')
+                        .append(section.body().trim()));
+        return rendered.toString();
     }
 }

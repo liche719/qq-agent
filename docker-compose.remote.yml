@@ -89,6 +89,14 @@ services:
       QQ_INBOUND_RATE_LIMIT_PER_MINUTE: ${QQ_INBOUND_RATE_LIMIT_PER_MINUTE:-20}
       # 主动消息每天上限（0 = 不限，只记账；面板「QQ 通道」页能看到当天发了多少条）
       QQ_PROACTIVE_DAILY_LIMIT: ${QQ_PROACTIVE_DAILY_LIMIT:-0}
+      # 自主模块（「它自己那一侧」）。**必须透传**：compose 只传列出的变量（坑 36）。
+      # MEMORY_SELF_OWNER_OPENID 留空 = 模块不工作（fail-closed）；要启用得在服务器 .env 配机主 openid。
+      MEMORY_SELF_ENABLED: ${MEMORY_SELF_ENABLED:-true}
+      MEMORY_SELF_OWNER_OPENID: ${MEMORY_SELF_OWNER_OPENID:-}
+      MEMORY_SELF_MAX_CHARS: ${MEMORY_SELF_MAX_CHARS:-800}
+      MEMORY_SELF_BLOCK_CHAR_LIMIT: ${MEMORY_SELF_BLOCK_CHAR_LIMIT:-1200}
+      MEMORY_SELF_MAX_COMMITMENTS: ${MEMORY_SELF_MAX_COMMITMENTS:-20}
+      MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT: ${MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT:-5}
       # QQ REST 超时：平时不用改，但**验证"超时不再重复发消息"必须能改**（同坑 36/46：
       # 不透传就没法在不改代码、不重新构建的前提下造出"结果未知"的发送失败）
       QQ_API_CONNECT_TIMEOUT_SECONDS: ${QQ_API_CONNECT_TIMEOUT_SECONDS:-5}

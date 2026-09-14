@@ -29,6 +29,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.time.Duration;
@@ -89,6 +90,8 @@ public class AgentLoop {
     private final ConversationMemoryService conversationMemoryService;
     /** 按用户状态裁剪工具集 */
     private final ToolSetTrimmer toolSetTrimmer;
+    /** 插件式提示词段落（自主模块的「我自己那侧」等）。没有任何实现时为空，输出与从前逐字节一致 */
+    private final ObjectProvider<PromptSectionProvider> promptSectionProviders;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AgentLoop(StreamingChatModel streamingChatModel,
@@ -110,7 +113,8 @@ public class AgentLoop {
                      @Value("${agent.tool-failure-notice.enabled:false}") boolean toolFailureNoticeEnabled,
                      AgentPolicyProperties policyProperties,
                      ConversationMemoryService conversationMemoryService,
-                     ToolSetTrimmer toolSetTrimmer) {
+                     ToolSetTrimmer toolSetTrimmer,
+                     ObjectProvider<PromptSectionProvider> promptSectionProviders) {
         this.streamingChatModel = streamingChatModel;
         this.toolRegistry = toolRegistry;
         this.toolStatusService = toolStatusService;
@@ -135,6 +139,7 @@ public class AgentLoop {
                 ? AgentPolicyProperties.defaultToolDisplayNames() : Map.copyOf(configuredDisplayNames);
         this.conversationMemoryService = conversationMemoryService;
         this.toolSetTrimmer = toolSetTrimmer;
+        this.promptSectionProviders = promptSectionProviders;
         this.imageHttpClient = new okhttp3.OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(bounded(imageConnectTimeoutSeconds, 1, 120, 8)))
                 .readTimeout(Duration.ofSeconds(bounded(imageReadTimeoutSeconds, 1, 300, 20)))
@@ -156,7 +161,7 @@ public class AgentLoop {
                 DEFAULT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_TIMEOUT_SECONDS,
                 DEFAULT_MAX_IMAGE_REDIRECTS, 8, 20, DEFAULT_STREAM_CHUNK_CHARS,
                 DEFAULT_STREAM_CHUNK_DELAY_MILLIS, DEFAULT_IMAGE_USER_AGENT, false, new AgentPolicyProperties(), null,
-                null);
+                null, null);
     }
 
     AgentLoop(StreamingChatModel streamingChatModel,
@@ -177,7 +182,7 @@ public class AgentLoop {
                 maxImageBytes, maxToolRounds, streamTimeoutSeconds, maxToolRounds, streamTimeoutSeconds,
                 maxImageRedirects,
                 imageConnectTimeoutSeconds, imageReadTimeoutSeconds, streamChunkChars,
-                streamChunkDelayMillis, imageUserAgent, false, new AgentPolicyProperties(), null, null);
+                streamChunkDelayMillis, imageUserAgent, false, new AgentPolicyProperties(), null, null, null);
     }
 
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
@@ -187,7 +192,7 @@ public class AgentLoop {
         LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
         try {
-            List<ChatMessage> messages = buildConversationMessages(persona, coreSection, workSection,
+            List<ChatMessage> messages = buildConversationMessages(userId, persona, coreSection, workSection,
                     history, userText, images, documents);
             Set<String> successfulTools = new LinkedHashSet<>();
             Map<String, ToolExecutionOutcome> failedTools = new java.util.LinkedHashMap<>();
@@ -204,11 +209,12 @@ public class AgentLoop {
     }
 
     // Builds the model conversation in one place, keeping chat focused on orchestration.
-    private List<ChatMessage> buildConversationMessages(String persona, String coreSection, String workSection,
+    private List<ChatMessage> buildConversationMessages(String userId, String persona, String coreSection,
+                                                        String workSection,
                                                         List<ContextTurn> history, String userText,
                                                         List<String> images, List<ExtractedDocument> documents) {
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(buildSystemPrompt(persona, coreSection, workSection)));
+        messages.add(SystemMessage.from(buildSystemPrompt(persona, coreSection, workSection, userId)));
         if (history != null) {
             for (ContextTurn turn : history) {
                 messages.add("assistant".equals(turn.role())
@@ -708,7 +714,29 @@ public class AgentLoop {
         return prompt.toString();
     }
 
-    private String buildSystemPrompt(String persona, String coreSection, String workSection) {
-        return AgentPromptBuilder.build(persona, coreSection, workSection, toolRegistry.retryAttempts());
+    private String buildSystemPrompt(String persona, String coreSection, String workSection, String userId) {
+        return AgentPromptBuilder.build(persona, promptSections(userId), coreSection, workSection,
+                toolRegistry.retryAttempts());
+    }
+
+    /**
+     * 收集插件式提示词段落（自主模块的「我自己那侧」等）。
+     *
+     * <p>没有任何实现、或实现返回 null／空 → 返回空列表，**提示词与"没有插件"时逐字节一致**；
+     * 插件抛异常也只记日志、不影响本轮对话（拔掉一个模块不该让机器人不能说话）。
+     */
+    private List<PromptSection> promptSections(String userId) {
+        if (promptSectionProviders == null) {
+            return List.of();
+        }
+        try {
+            return promptSectionProviders.orderedStream()
+                    .map(provider -> provider.section(userId))
+                    .filter(section -> section != null && !section.isBlank())
+                    .toList();
+        } catch (RuntimeException exception) {
+            log.warn("收集提示词插件段落失败，按没有插件处理: {}", exception.getMessage());
+            return List.of();
+        }
     }
 }

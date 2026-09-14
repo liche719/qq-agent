@@ -287,6 +287,14 @@ memory:
   archive-summary-target-chars: ${MEMORY_ARCHIVE_SUMMARY_TARGET_CHARS:100}
   archive-summary-max-chars: ${MEMORY_ARCHIVE_SUMMARY_MAX_CHARS:1000}
   archive-summary-confidence: ${MEMORY_ARCHIVE_SUMMARY_CONFIDENCE:70}
+  # 自主模块（「它自己那一侧」）：总开关 + 预算 + 归属人。
+  # 归属人留空时模块**整体不工作**（fail-closed：别人的对话不会污染它，它也不会把机主的事带到别人那里）。
+  self-enabled: ${MEMORY_SELF_ENABLED:true}
+  self-owner-openid: ${MEMORY_SELF_OWNER_OPENID:}
+  self-max-chars: ${MEMORY_SELF_MAX_CHARS:800}
+  self-block-char-limit: ${MEMORY_SELF_BLOCK_CHAR_LIMIT:1200}
+  self-max-commitments: ${MEMORY_SELF_MAX_COMMITMENTS:20}
+  self-max-commitments-in-prompt: ${MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT:5}
   # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
   history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
   conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}

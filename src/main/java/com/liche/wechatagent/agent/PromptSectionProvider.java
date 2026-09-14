@@ -1,0 +1,21 @@
+package com.liche.wechatagent.agent;
+
+/**
+ * 「我能往系统提示词里加一段」的扩展点（插件挂点）。
+ *
+ * <p>为什么要有它：自留地、以后的产出层都需要往提示词里塞东西。如果每加一个模块就去改
+ * {@code AgentPromptBuilder} 和 {@code AgentOrchestrator}，模块就永远拔不干净。
+ * 现在核心只收集所有实现类、按 {@code order} 拼装——**模块加进来/拔出去都不用动核心**。
+ *
+ * <p>约定：
+ * <ul>
+ *   <li>返回 {@code null} 或 body 为空 → 该段整块不出现（不要返回"（空）"这种占位文字）</li>
+ *   <li>实现类必须自己控制长度（核心不替它截断），并遵守提示词既有的语气与规则编号</li>
+ *   <li>实现类建议标 {@code @ConditionalOnProperty}，这样能用开关把整个模块拔掉</li>
+ * </ul>
+ */
+public interface PromptSectionProvider {
+
+    /** 当前用户这一轮的动态段落；没有内容就返回 null。 */
+    PromptSection section(String userId);
+}

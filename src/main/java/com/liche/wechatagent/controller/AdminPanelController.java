@@ -46,6 +46,7 @@ public class AdminPanelController {
         tabs.add(core("tasks", "任务"));
         tabs.add(core("scheduled", "定时任务"));
         tabs.add(examTab());
+        tabs.add(selfTab());
         tabs.add(core("users", "用户与记忆"));
         tabs.add(core("logs", "日志"));
         Map<String, Object> result = new LinkedHashMap<>();
@@ -59,6 +60,35 @@ public class AdminPanelController {
         tab.put("key", key);
         tab.put("label", label);
         tab.put("kind", "core");
+        return tab;
+    }
+
+    /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */
+    /** 自主模块：只读页签——「它自己那一侧」（编辑一律走对话，见 docs/self-layer-spec.md §10） */
+    private Map<String, Object> selfTab() {
+        Map<String, Object> tab = new LinkedHashMap<>();
+        tab.put("key", "self");
+        tab.put("label", "它自己");
+        tab.put("kind", "descriptor");
+        tab.put("sections", List.of(
+                section("info", "状态", "/api/admin/self/overview", null),
+                table("它自己的块", "/api/admin/self/blocks", List.of(
+                        column("type", "类型", false),
+                        column("usage", "用量", false),
+                        column("version", "版本", false),
+                        column("updatedAt", "最后修改", false),
+                        column("value", "内容", true)), List.of()),
+                table("时间线", "/api/admin/self/events?limit=50", List.of(
+                        column("id", "#", false),
+                        column("kind", "类型", false),
+                        column("content", "内容", true),
+                        column("evidence", "证据", false),
+                        column("createdAt", "时间", false)), List.of()),
+                table("我欠着", "/api/admin/self/commitments", List.of(
+                        column("id", "#", false),
+                        column("content", "内容", true),
+                        column("due", "截止", false),
+                        column("status", "状态", false)), List.of())));
         return tab;
     }
 
