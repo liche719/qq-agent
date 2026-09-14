@@ -34,7 +34,7 @@
 | 表 | 作用 | 关键字段 | 对应外部先例 |
 |---|---|---|---|
 | `agent_self_block` | **它自己的块**（有类型、可读写、**有长度上限**） | `id, block_type(PERSONA/TASK/PROJECT/STANCE/NOTE), label, value, char_limit, description, version, updated_at` | [Letta memory blocks](https://cdn.jsdelivr.net/gh/rohitg00/ai-engineering-from-scratch@be7e637b7ce54c47ea080cc163c28ac2614fd457/phases/14-agent-engineering/08-memory-blocks-sleep-time-compute/docs/en.md) 的 Persona/自定义块 |
-| `agent_self_event` | **它自己那侧的时间线**（也是倾向的证据链） | `id, kind(GOAL_SET/GOAL_CHANGED/GOAL_DROPPED/COMMIT/PREDICT/JUDGE/REFLECT/STANCE_FORMED/STANCE_REVISED/NOTE), **topic**(判断类别), **stance**(方向: A/B/中立), content, evidence(json: 引用的对话id或event id), importance, created_at` | [Generative Agents](https://arxiv.org/abs/2304.03442) 的 memory stream |
+| `agent_self_event` | **它自己那侧的时间线**（也是倾向的证据链） | `id, kind(GOAL_SET/GOAL_CHANGED/GOAL_DROPPED/COMMIT/PREDICT/JUDGE/DISAGREE/REFLECT/STANCE_FORMED/STANCE_REVISED/NOTE), **topic**(判断类别), **stance**(方向: A/B/中立), content, evidence(json: 引用的对话id或event id), importance, created_at` | [Generative Agents](https://arxiv.org/abs/2304.03442) 的 memory stream |
 | `agent_commitment` | **账**：许过的诺、做过的预测 | `id, content, due_at, status(OPEN/KEPT/BROKEN/ABANDONED), evidence, resolved_at` | 本方案 D 层（无直接先例，属自研） |
 | `agent_reflection` | **反思产物**（带证据链，可回溯） | `id, level(1/2/3), input_event_ids(json), conclusion, importance, written_back(block_id), created_at` | Generative Agents 的 reflection（多层、有引用） |
 
@@ -108,6 +108,27 @@
 看起来"长出来了"，其实是**一个人的回音室**。所以：反例优先是硬规则、证据链必须可查、倾向必须可被推翻。
 判据见 §4 的「反例测试」。
 
+### 2.6 分歧的强度（坚持 vs 顺从）——不拍死，做成旋钮
+
+用户在这题上的回答是"看情况，我也不知道"，所以**现在不定死**，定成三档 + 默认值 + 观察指标。
+
+| 档 | 行为 | 默认用在 |
+|---|---|---|
+| **0 顺从** | 提一句不同意见，然后照办（≈ 现状） | 用户的事：他的安排、偏好、想要什么 |
+| **1 记账式保留**（**默认全场景**） | 说清"我不同意，理由 X"，然后照办；把这次分歧记成 `DISAGREE` 事件。同类事再出现时**可以说**"我上次也反对过" | 默认 |
+| **2 坚持到被说服** | 不改口，直到用户给出**新证据/新理由**；被说服就修订倾向（`STANCE_REVISED`），没被说服就维持并记账 | 仅限**它自己的事**：它立的目标、它的时间与额度怎么花 |
+
+**四条硬规则：**
+1. **分歧只讲一次**，不重复唠叨（沿用现有"回复要短、别烦人"的约束）
+2. **"坚持"= 不下调它的判断，不是拒绝执行**：用户的指令仍然执行；它能拒绝的是改口，不是用户。
+   用户说"就这样办"就是终局（它不是监护人），但这次分歧留在账上
+3. **它不能靠"我是为你好"绕过用户**：涉及用户本人的事一律 0/1 档
+4. **不能两全的地方要说清**：如果它在任何情况下都不会让用户不舒服，那它就没有自己的东西。
+   所以真正要选的不是"要不要坚持"，而是"多久出现一次分歧"。
+
+**观察指标**（跑一个月再决定往上还是往下调）：每周 `DISAGREE` 次数、其中被用户说服的比例、
+以及用户对分歧的反应（是否表现出烦躁 → 面板上看得到）。**先按默认跑，用数据调，不靠现在猜。**
+
 ## 3. 分三期（有依赖，顺序不能反）
 
 | 期 | 内容 | 完成标准 |
@@ -148,7 +169,8 @@
 2. **资源额度**：每天允许它花多少次 LLM 调用 / 多少 token 在"自己的事"上？
 3. **可见性**：面板上给它自己那侧开一个页签？还是要不要让它主动告诉你它的进展（会占用主动消息额度）？
 4. **得失的强度**：`BROKEN` 的承诺要不要影响它对用户的开场（比如"我上次答应的事没做完"）？
-5. **倾向的强度**：倾向要不要在**与你意见相反**时也坚持（这决定它是不是真的"有自己的东西"）？
+5. **倾向的强度**：**已给默认值**——见 §2.6 的三档旋钮（默认 1 档"记账式保留"，它自己的事上用 2 档）；
+   跑一个月按 `DISAGREE` 数据再调，不靠现在猜。
 
 ## 7. 参考
 
