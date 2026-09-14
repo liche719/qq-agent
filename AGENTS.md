@@ -197,7 +197,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 55. **定时任务的执行结果不能整行 save（2026-09-13 修）**：`execute()` 原来是「执行前读整行 → 跑一分钟 Agent → `save()`」，而项目没有 `@DynamicUpdate`，save 是 **merge + 全列 UPDATE** → 执行期间用户在面板点「暂停」（写库 `enabled=false` 并删掉 Quartz job）会被执行前那份旧快照覆盖回 `enabled=true`：面板显示"已启用 + 有下次时间"，实际 job 已经删了、**任务从此永远不会再跑**（只有下次重启 resync 才自愈）；执行期间改标题/指令/cron 同理会被回滚。现在只写「执行拥有的那几列」（`ScheduledTaskRepository.updateRunResult`：status/lastRunAt/lastResult/lastError/runCount/nextRunAt/updatedAt），行被删时 UPDATE 影响 0 行，天然等价于原来"删了就别写回"的保护。**实测**：`runNow` → 3 秒后 toggle 成暂停 → 执行结束后库里仍 `enabled=0 status=SUCCESS run_count=1`（旧代码会变回 1）。`setEnabled` 还是整行 save（窗口只有毫秒级），暂未改。
 
-56. **GitHub Actions 自己抽风时：push 到了但不建流水线，`workflow_dispatch` 回 500/502**（2026-09-13 卡了我一轮）。表现：push 成功（`git ls-remote origin -h refs/heads/main` 是新 commit）、`gh api repos/{o}/{r}/events` 也收到了 PushEvent，但 `gh run list` **一条新运行都没有**（`gh api .../actions/runs?head_sha=<sha> --jq .total_count` = 0），`gh workflow run ...` 报 HTTP 500 / 裸 dispatch 回 `{"message":"Server Error"}`。**githubstatus.com 当时是 All Systems Operational**，别指望状态页。排查：① **先核对看的是不是自己那条运行**（`gh run list --commit <sha>`）——我第一眼盯上了上一个 commit 的运行，它同样是 success（同坑 32）；② events 里有 PushEvent = 不是 push 的问题；③ `gh workflow view deploy-remote.yml` 能列出来 = workflow 文件没坏。**恢复**：过几分钟重试 dispatch（约 10 分钟自愈）；空提交可能被 `paths-ignore` 跳过，优先等。**期间别改代码**：没有新运行 ≠ 部署失败，要核实就 `docker inspect wechat-agent-java -f '{{.Config.Image}}'` 看镜像 tag。
+56. **GitHub Actions 抽风：push 到了却不建流水线，`workflow_dispatch` 回 500/502**（2026-09-13，约 10 分钟自愈；状态页显示正常）。排查第一步是 `gh run list --commit <sha>` **核对看的是不是自己那条运行**（我第一次盯错了上一个 commit 的运行，同坑 32）；PushEvent 有 + `gh workflow view` 能列 = push 与 workflow 都没坏 → 等几分钟重试。**期间别改代码**，用 `docker inspect wechat-agent-java -f '{{.Config.Image}}'` 核实镜像 tag，而不是看有没有新运行。
 
 57. **面板"每次刷新一闪一闪"不是整页刷新，是描述式面板把区块状态清空了（2026-09-13 修，用户报的）**：`DescriptorPanel.load()` 原来每次都把每个区块重置成 `{loading:true, data:null}`，模板 `v-if="view.loading"` 就把表格/表单**整个拆掉换成「加载中…」再重建**，每 10 秒一次。**先判定再改**：真实 Chromium 里量 `performance.timeOrigin`＋ MutationObserver 数「加载中…」与表格/表单被移除的次数。修法：刷新时**沿用上一次的状态**（只有第一次显示加载态），失败时**保留旧数据** + 一行「这次刷新失败，显示的是上一次的数据」。**顺带修掉更烦的**：`formValues` 被反复回写，**用户正在编辑的表单每 10 秒被冲一次**→ 加 `formTouched`（`@input`/`@change` 置位、提交后清位），与 `MaimemoPanel` 一致。8 个手写页签本来就不闪——**新写 tick 面板照抄这条**。
 
@@ -205,10 +205,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 59. **媒体记忆三件套：一次任务最多读 10 个文件 + 让模型把"看到了什么"写回库（2026-09-13）**：① `readStoredMedia` 原来无上限（连读十几份就把上下文撑爆，图片最狠）→ 现在 `media.context.max-files-per-task`（默认 10，`reserveFileRead(mediaId)` **按 mediaId 去重**；**文本也算额度**——用户要求按"文件"而不是"图片"口径）超限**拒读**并让用户点名（日志 `本轮读取文件已达上限`，计数随"重新激活"延续、绕不开）；② 检索走 `searchableText()`（文件名+原名+summary+importanceReason+extractedText），所以新增 `noteStoredMediaContent(mediaId, hint)` 把内容写进 `extracted_text`（前缀 `【视觉识别】`、替换式、**不动 `updated_at`** 以免打乱排序）——**关键：视觉理解只在模型脑子里，工具拿不到，只能让模型自己记**；存图时还要求 `summary` 带关键词。**详见 `docs/media-memory.md`。**
 
-60. **LLM 调用档位（2026-09-13 做，2026-09-14 整块删掉）**：留档价值 = 两条实测：① `deepseek-v4-flash-vision-exp` **默认就在思考**（不带参数也返回 `reasoning_content`）；② **唯一有效的关闭方式是 `thinking:{"type":"disabled"}`**，`enable_thinking:false` 与 `chat_template_kwargs.thinking=false` 会被**静默忽略**。当时的实现（`LlmScenario` ThreadLocal 标场景 + `extraBody` 走配置 + 每场景 max_tokens + `thinkDeeper` 升档）在用户说"把这功能删了吧，默认思考就好"后删除：**现在全部场景都思考**，`LlmScenario` 只留温度（四个结构化场景 0.0）、每场景 max_tokens、指标分场景。**顺带修的老漏洞**：模型常"只给 repeatCron 不给 triggerAt"→ 程序由合法 cron 算首次触发时间。**流式响应其实自带 usage**（不用 `stream_options`）。实测数据与删除记录见 `docs/llm-call-modes.md`。
+60. **LLM 调用档位（2026-09-13 做，2026-09-14 整块删掉）**：留档价值 = 两条实测：① `deepseek-v4-flash-vision-exp` **默认就在思考**（不带参数也返回 `reasoning_content`）；② **唯一有效的关闭方式是 `thinking:{"type":"disabled"}`**，`enable_thinking:false` 与 `chat_template_kwargs.thinking=false` 会被**静默忽略**。当时的实现在用户说"把这功能删了吧，默认思考就好"后删除：**现在全部场景都思考**，`LlmScenario` 只留温度（四个结构化场景 0.0）、每场景 max_tokens、指标分场景。**顺带修的老漏洞**：模型常"只给 repeatCron 不给 triggerAt"→ 程序由合法 cron 算首次触发时间。**流式响应其实自带 usage**（不用 `stream_options`）。实测数据与删除记录见 `docs/llm-call-modes.md`。
 61. **工具集裁剪 + 三条 UX 结论**：① 没有备考计划、且消息与近 4 轮都不提考研时，不下发 18 个考试工具（保留 32 / 裁掉 18），**`saveExamPlan`/`viewExamPlan` 永远保留**；开关 `AGENT_TOOL_TRIM_ENABLED`。② **yml/compose 的非空默认值会整体覆盖代码默认集合**——加新场景必须两处一起改并**看日志核对**（当初省电档就这么静默失效的）。③ 回复里**不要出现 `⚠️ 工具调用未完成`**（`AGENT_TOOL_FAILURE_NOTICE_ENABLED`，默认 false，只打 WARN），而 `> _调用工具：…_` 的尾注是**用户要的观感，别删**；**回复默认要短**（提示词 23~25 条：300 字内、不把决定推回给用户、能自己查就别问、**不承诺做不到的事**）。
-62. **会变的信息不记进记忆（2026-09-14 用户定的）**：提示词加规则 12/13——**课表/教室/节次时间/临时日程/一次性数字一律不记**（要看就现场读他存的课表图），**只有用户说「记住」才记**，agent 自己从图片看出来的事实不入库。起因：库里躺着一批课表记忆（`晚上上课地点是8B304.305，必须记住` 等），而用户用截图纠正过的 7B-301 **当年没进库**（旧规则"只能依据 user 明确陈述"把图片核对结果也挡了）。**同一天试过"每天一次记忆归纳"并当天删除**：模型把两条原文用「；」拼起来当归纳、思考吃满 16384 额度、`replaces` 对不上原文就退化成重复新增——**完整版（含成本账：20 次调用 / 输出 18.9 万 token / 产出为零）见 `docs/memory-extraction.md`**。
+62. **会变的信息不记进记忆（2026-09-14 用户定的）**：提示词加规则 12/13——**课表/教室/节次时间/临时日程/一次性数字一律不记**（要看就现场读他存的课表图），**只有用户说「记住」才记**，agent 自己从图片看出来的事实不入库。起因：库里躺着一批课表记忆（`晚上上课地点是8B304.305，必须记住` 等），而用户用截图纠正过的 7B-301 **当年没进库**（旧规则"只能依据 user 明确陈述"把图片核对结果也挡了）。**同一天试过"每天一次记忆归纳"并当天删除**：模型把两条原文用「；」拼起来当归纳、思考吃满 16384 额度、`replaces` 对不上原文就退化成重复新增——**完整版（含成本账）见 `docs/memory-extraction.md`**。
 63. **记忆写入的两层冲突处理（已上线验证）**：字面相似度 ≥0.72（`MemoryTextSimilarity`）→ 直接 `replaceFromExtraction`（旧行 SUPERSEDED 不删 + 变更日志）；**字面不像但可能是"换了说法"**（实测「数学目标分是130」→「…目标分数为140分」只有 0.3）→ `reconcileCoreWithModel()` 的**第二次小调用**只问"是不是已有某条的新版本"。**教训**：别在真实数据上做实验、先算预算、**先定方案再写代码**。**另**：`listActive` 用 `isExplicit` 过滤 `source_type`（只认 null/USER_EXPLICIT/USER_DERIVED），写错这个字段记忆会"凭空消失"。
+
+64. **自主模块一期（2026-09-14 做完并本地端到端验证，在 `next` 未部署）**：`self/` 包 + `V5__create_agent_self_tables.sql`（4 表新增，回滚＝drop）+ 通用注入挂点 `agent/PromptSection{,Provider}`（`SelfLoader` order=-10）+ 面板页签「它自己」+ 10 个工具；生产要配 `MEMORY_SELF_OWNER_OPENID` 才生效。**两个坑**：① **证据死锁**——模型看不到 `conversation_memory.id`，于是「证据必须真实存在」这条校验让**第一次写入永远失败**；解法＝只读工具 `selfRecall` 递真实编号，**别删**；② `@ConditionalOnProperty(memory.self-enabled)` **`SelfLoader` 与 `AgentSelfTool` 两处都要**，只加一处关不干净（开 60 / 关 50 工具）。**验注入别 grep 日志**＝往块里塞一个只在库里的暗号、让模型禁用工具答出来。详见 `docs/self-layer-plan.md` §7.1。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -227,7 +229,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI**：push `main` 即构建+验签上传+部署+自检；供应链细节见坑 47/50。**09-13 GitHub 抽风过一轮（坑 56）。**
 - **仍未做**：⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。（③ 部署私钥降权、④ SearXNG 密钥出仓库已做）
-- 本地：Docker Desktop 未启动、本地 JAR 未运行（与远程**共用同一个 QQ AppID，不要同时启动**）。
+- 本地：JAR 未跑、mysql/redis 容器已停；本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引
 
@@ -235,10 +237,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 9. 历史会话
 
-Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格式，其他 harness 读不到），因此本文件是唯一可迁移的记忆载体；如需更多细节可回头检索这些 jsonl。
+Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不到），本文件是唯一可迁移的记忆载体。
 
 ## 10. 工作区结构（约 59MB）
 
-- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。2026-09-14 清过探针脚本/旧截图/明文口令目录。
-- 整理时删掉的都是可重建物（`target/`、本地 `logs/` 等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份。
+- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。
+- 删掉的都是可重建物（`target/`、本地 `logs/`）；`backup/`、`stored-media/`、`logs/`、`tmp/` 是本地跑 JAR 生成的，服务器各有独立一份。
 

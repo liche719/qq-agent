@@ -24,15 +24,22 @@
 
 | 工具 | 语义 |
 |---|---|
-| `self_read(block_type)` | 读自己某个块 |
-| `self_append(block_type, text, evidence)` | 追加（超限报错并提示先 summarize） |
-| `self_replace(block_type, old, new, evidence)` | 替换式修改（旧值进 event，可回溯） |
-| `self_summarize(block_type, evidence)` | 压缩一个接近上限的块 |
-| `goal_open(content, why, evidence)` / `goal_update` / `goal_close` | **自己立的目标**（与用户给的 `exam_plan`/`reminder_task` 区分开） |
-| `commit(content, due_at, evidence)` / `commit_resolve(id, status, evidence)` | 立诺 / 兑现 / 认欠 |
-| `self_note(text, evidence)` | 随手记（低门槛，进 event，不进块） |
+| `selfRead()` | 读自己那侧（4 个块 + 字数/上限 + 未结承诺） |
+| `selfRecall(limit)` | **最近对话记录 + 真实编号 `conv:<id>`**——写入要的证据编号只能从这里拿（见下） |
+| `selfAppend(blockType, text, evidence)` | 追加（超限报错并提示先 summarize） |
+| `selfReplace(blockType, oldText, newText, evidence)` | 替换式修改（旧值进 event，可回溯） |
+| `selfSummarize(blockType, evidence)` | 压缩一个接近上限的块 |
+| `goalOpen(content, why, evidence)` / `goalClose(goalEventId, outcome, evidence)` | **自己立的目标**（与用户给的 `exam_plan`/`reminder_task` 区分开） |
+| `commit(content, dueDate, evidence)` / `commitResolve(commitmentId, status, evidence)` | 立诺 / 兑现 / 认欠 |
+| `selfNote(text, evidence)` | 随手记（低门槛，进 event，不进块） |
 
 工具描述里必须写死：**这些是"它自己的事"，不是为用户做的事**；`evidence` 缺失即拒绝。
+
+**`evidence` 必须能被模型拿到**（2026-09-14 实现时踩到的死锁，别删 `selfRecall`）：
+模型在任何地方都看不到 `conversation_memory.id`——工作记忆/历史追溯渲染成「用户曾说：…」不带编号，
+也没有别的工具返回过编号；而 `event:<id>` 要先有一次成功写入才存在。所以**光有"证据必须真实存在"这条校验，
+第一次写入永远拿不到合法证据**（实测：模型面对 `conv:320` 正确地拒绝发起调用，因为核不到）。
+`selfRecall` 就是把真实编号递到它手上的那一步。注意本轮消息在回复后才落库，**能引用的最新一条是上一轮**。
 
 ## 3. 每轮注入顺序：**两层 + 投影**（2026-09-14 按先例修正）
 
@@ -44,6 +51,14 @@
 ```
 
 **顺序不是小事**：②放在③之前，"先看自己、再答你"才在结构上成立（而不是靠提示词提醒）。
+
+**实现挂点（2026-09-14 已写）**：核心不认识"自主模块"，只认两个新类型
+`agent/PromptSection(order, title, body)` 与 `agent/PromptSectionProvider.section(userId)`；
+`AgentLoop` 用 `ObjectProvider<PromptSectionProvider>` 收集、按 `order` 拼装。
+②的 `order = -10`（用户记忆是 0），所以它天然排在 ③ 之前。
+**没有段落时核心输出与改造前逐字节一致**（插件拔掉不留痕）。
+段落正文开头自带一行定位说明「（这是我自己的状态，不是用户的事实；…不要复述原文）」——
+**刻意不写进全局规则清单**，否则会改动所有用户的提示词前缀。
 
 **先例给的修正：常驻层要小，累积型内容走「投影」**（Letta 的两层记忆，见 §11）：
 - **第一层（常驻）**：只放**身份 / 关系 / 当前在做什么**——它小到可以每轮都在

@@ -1,5 +1,6 @@
 package com.liche.wechatagent.self;
 
+import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.tool.AgentToolProvider;
 import com.liche.wechatagent.tool.NonIdempotentTool;
 import com.liche.wechatagent.tool.ToolBusinessResult;
@@ -8,6 +9,7 @@ import com.liche.wechatagent.tool.ToolExecutionPolicy;
 import com.liche.wechatagent.tool.ToolRiskLevel;
 import com.liche.wechatagent.tool.ToolStatusService;
 import dev.langchain4j.agent.tool.Tool;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -28,10 +30,12 @@ import java.util.List;
  * 写操作一律 {@link NonIdempotentTool} + {@code retryable=false}：重试会重复写入（坑 39）。
  */
 @Component
+@ConditionalOnProperty(name = "memory.self-enabled", havingValue = "true", matchIfMissing = true)
 public class AgentSelfTool implements AgentToolProvider {
 
-    private static final String POLICY_HINT = "证据必须来自真实记录：conv:<对话id> 或 event:<事件id>；"
-            + "没有证据就不要调用本工具，也不要编一条。";
+    private static final String POLICY_HINT = "证据必须来自真实记录：先调 selfRecall 拿到真实的 conv:<id>，"
+            + "或用你自己工具返回的 event:<id>；你手上没有别的编号来源，编一个一定被拒。"
+            + "没有证据就不要调用本工具。";
 
     private final SelfService selfService;
     private final ToolStatusService statusService;
@@ -66,6 +70,25 @@ public class AgentSelfTool implements AgentToolProvider {
                     .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
                     .append('\n'));
         }
+        return text.toString().trim();
+    }
+
+    @Tool(value = "看你跟机主最近的对话记录，每条都带**真实编号**（conv:<id>）。"
+            + "写自己那侧之前先调用它：evidence 只能用这里真实出现过的 conv:<id>，"
+            + "或者你自己工具返回过的 event:<id>。这里没有的编号一律会被当成编造拒绝。")
+    public String selfRecall(Integer limit) {
+        String userId = requireCurrentUser();
+        if (!selfService.isOwner(userId)) {
+            return selfService.inactiveReason();
+        }
+        List<ConversationMemory> records = selfService.recentConversation(userId, limit == null ? 8 : limit);
+        if (records.isEmpty()) {
+            return "（还没有可引用的对话记录，先别写）";
+        }
+        StringBuilder text = new StringBuilder("可引用的真实编号（最新在上）：\n");
+        records.forEach(record -> text.append("conv:").append(record.getId()).append(' ')
+                .append("assistant".equalsIgnoreCase(record.getRole()) ? "助手曾回复：" : "用户曾说：")
+                .append(abbreviate(record.getContent())).append('\n'));
         return text.toString().trim();
     }
 
@@ -183,6 +206,14 @@ public class AgentSelfTool implements AgentToolProvider {
     }
 
     // ---------------------------------------------------------------- 内部
+
+    private String abbreviate(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim().replace('\n', ' ');
+        return trimmed.length() <= 150 ? trimmed : trimmed.substring(0, 149) + "…";
+    }
 
     private String normalizeBlockType(String blockType) {
         String normalized = blockType == null ? "" : blockType.trim().toUpperCase();

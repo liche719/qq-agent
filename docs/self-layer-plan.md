@@ -3,7 +3,8 @@
 > 配套：`self-layer.md`（骨架与决策）、`self-layer-spec.md`（细则）。
 > 本文件只覆盖**一期**：`spec §1`（表）、`§2`（工具）、`§3`（注入顺序）、`§8`（时间感）+ **只读面板最小集**。
 > **不碰**：反思流程（§4）、判断→倾向（§5）、FSRS 复查调度、领域/产出（§9）——那些是二期/三期。
-> 2026-09-14 · 纸面方案，**未写代码**。
+> 2026-09-14 · **一期已实现（分支 `next`，未部署）+ 本地端到端验证通过**。
+> 下面是原始施工图；实现时出现的偏差记在各节「实际」里，**验收结果见 §7.1**。
 
 ## 0. 一期做完是什么样（可验收的样子）
 
@@ -37,25 +38,30 @@
 |---|---|---|
 | `AgentSelfBlock` / `AgentSelfEvent` / `AgentCommitment` / `AgentReflection` + 各 `Repository` | 实体与仓库 | 照现有 JPA 风格，`LocalDateTime` |
 | **`SelfService`** | **唯一写入入口** | ① `evidence` 必须能解析成真实存在的 `conversation_memory.id` 或 `agent_self_event.id`，否则抛业务异常 ② 块写入按 `char_limit` 校验（超了要求先 summarize）③ 活跃承诺/倾向条数上限 ④ **事件只追加，不修改不删除** |
-| **`SelfLoader`** | 只读，产出注入用的 `selfSection` | 预算 `memory.self-max-chars`；按「Persona → TASK/PROJECT → 活跃承诺（按 due）」拼接；不写任何东西 |
+| **`SelfLoader`** | 只读，产出注入段落 | 实现为 `PromptSectionProvider`，产出 `PromptSection(order=-10, "【我自己那侧】", …)`；预算 `memory.self-max-chars`（800）；按「Persona → TASK → PROJECT → STANCE → 未结承诺 → 时间感」拼接；不写任何东西；**全空时返回 `null`** |
 | **`AgentSelfTool`** | 实现 `AgentToolProvider`（自动注册） | 方法见 §5；**写操作必须 `retryable = false` + `@NonIdempotentTool`**（坑 39：有副作用的工具默认会重试，会重复写入） |
 | `AdminSelfController` | 只读接口 | `/api/admin/self/overview`、`/blocks`、`/events`、`/commitments` |
 
-## 3. 注入链改造（只动 3 个既有文件，改动很小）
+## 3. 注入链改造（原计划动 3 个既有文件，实际用通用挂点）
 
 现状：`AgentOrchestrator:356` → `memoryLoader.load(userId, content)` 得到 `LoadedMemory(coreSection, workSection)`
 → 传给 `AgentLoop:712` → `AgentPromptBuilder.build(persona, coreSection, workSection, retryAttempts)`。
 
-| 文件 | 改什么 |
-|---|---|
-| `AgentOrchestrator`（约 356 行） | 在 `memoryLoader.load(...)` 旁边加 `selfLoader.load(userId)`，把 `selfSection` 一并往下传 |
-| `AgentLoop`（约 712 行） | 调 `AgentPromptBuilder.build(persona, selfSection, coreSection, workSection, retry)` |
-| `AgentPromptBuilder`（9~12 行） | 签名加一位；**在 `【长期核心记忆】` 之前**插入 `【我自己那侧】` 段落 |
-| `MemoryLoader` | **不动** |
+**实际做法：通用挂点（B 方案），不是 HARDCODE 一个 `selfSection`。**
+新增 `agent/PromptSection(order, title, body)` + `agent/PromptSectionProvider.section(userId)` 两个小类型，
+`AgentLoop` 用 `ObjectProvider<PromptSectionProvider>` 收集所有段落按 `order` 拼装。
+好处：**核心里不认识"自主模块"**，下一个模块（反思、领域）挂同一个挂点即可；`AgentOrchestrator` 与 `MemoryLoader` 一行没动。
 
-提示词同时加两条规则（跟着现有编号往下排）：
-- 「【我自己那侧】是**你自己的**状态（你在做什么、你欠什么、你上次停在哪），**不是用户的事实**；先看它，再答用户」
-- 「不要向用户复述这一段原文；它只是你的背景」
+| 文件 | 实际改了什么 |
+|---|---|
+| `agent/PromptSection` / `PromptSectionProvider` | 新增（挂点契约） |
+| `AgentPromptBuilder` | 签名加一位 `List<PromptSection> extraSections`；**无段落时输出与改造前逐字节一致**；段落插在 `【长期核心记忆】` **之前** |
+| `AgentLoop` | 构造器加 `ObjectProvider<PromptSectionProvider>`（两个便捷构造器补 `null`）；插件抛异常只 `log.warn`，不影响对话 |
+| `AgentOrchestrator` / `MemoryLoader` | **没动**（原计划要改的那 3 处，实际 0 处） |
+
+提示词两条规则**没有加进全局规则清单**（那会改动所有用户的提示词前缀）——改成写进**段落正文开头一行**：
+「（这是我自己的状态，不是用户的事实；用它可以，但不要向对方复述这一段的原文。）」
+效果一样、只在段落存在时出现、对别的用户零影响（实测：让它贴原文它会拒绝，问暗号仍答得出）。
 
 ## 4. 配置与透传（这里有个已知的坑）
 
@@ -72,22 +78,32 @@
 线上只能吃 yml 默认值（坑 36：compose 只透传列出来的变量，漏了不会报错）。
 服务器 `.env` 先不写（用默认值），要调再加。
 
-## 5. 工具面（一期 9 个）
+## 5. 工具面（一期 **10** 个——比原计划多一个 `selfRecall`，原因见下）
 
 | 工具 | 说明要点（写进 `@Tool` 描述） |
 |---|---|
-| `self_read(block_type)` | 读自己某个块 |
-| `self_append(block_type, text, evidence)` | 追加；超限直接报错并要求先 summarize |
-| `self_replace(block_type, old_text, new_text, evidence)` | 替换式修改（旧值进事件历史） |
-| `self_summarize(block_type, evidence)` | 压缩接近上限的块 |
-| `self_note(text, evidence)` | 随手记（进事件，不进块） |
-| `goal_open(content, why, evidence)` | **自己立**的目标（与用户的 `exam_plan`/`reminder_task` 分开） |
-| `goal_close(id, outcome, evidence)` | 关闭自己的目标 |
-| `commit(content, due_at, evidence)` | 立诺/预测 |
-| `commit_resolve(id, status, evidence)` | 兑现 / 认欠 |
+| `selfRead()` | 看自己那侧现在是什么样（块 + 字数/上限 + 未结承诺） |
+| **`selfRecall(limit)`** | **看你跟机主最近的对话记录，每条带真实编号 `conv:<id>`** |
+| `selfAppend(blockType, text, evidence)` | 追加；超限直接报错并要求先 summarize |
+| `selfReplace(blockType, oldText, newText, evidence)` | 替换式修改（旧值进事件历史） |
+| `selfSummarize(blockType, evidence)` | 压缩接近上限的块 |
+| `selfNote(text, evidence)` | 随手记（进事件，不进块） |
+| `goalOpen(content, why, evidence)` | **自己立**的目标（与用户的 `exam_plan`/`reminder_task` 分开） |
+| `goalClose(goalEventId, outcome, evidence)` | 关闭自己的目标 |
+| `commit(content, dueDate, evidence)` | 立诺/预测 |
+| `commitResolve(commitmentId, status, evidence)` | 兑现 / 认欠 |
+
+**`selfRecall` 是补的一个死锁**（原方案漏了）：写入要求 `evidence` 是**真实存在**的 `conv:<id>`，
+但模型在任何地方都看不到 `conversation_memory` 的行号——工作记忆与历史追溯渲染成「用户曾说：…」不带编号，
+也没有任何工具返回过编号；而 `event:<id>` 又必须先有一次成功写入才有。**结果就是第一次写入永远拿不到合法证据**。
+实测证据：模型面对 `conv:320` 明确回「我核不到这条记录是不是真的，所以不发起调用」——**它拒绝得对，是设计缺了输入**。
+补法：加一个只读工具把真实编号递到它手上（`selfRecall` 返回 `conv:326 用户曾说：…`），
+`POLICY_HINT` 改成「先调 selfRecall 拿真实编号」。**注意本轮消息要等回复完才落库，所以最新一条是上一轮。**
 
 **公共描述（每个都要写）**：这些是「**它自己的事**」，不是为用户做的事；`evidence` 缺失一律拒绝。
-**注册校验**：启动日志会打「工具注册完成：N 个类 / M 个方法」——加完核对**方法数 +9**。
+**注册校验**：启动日志打「工具注册完成：N 个类 / M 个方法」——开＝**12 个类 / 60 个**，关＝**11 个类 / 50 个**。
+`AgentSelfTool` 与 `SelfLoader` **都要** `@ConditionalOnProperty(memory.self-enabled)`：
+只给 `SelfLoader` 加会"关不干净"（工具仍占着模型工具表，只是每次返回"已关闭"，实测踩到过）。
 
 ## 6. 面板（只读最小集）
 
@@ -95,6 +111,10 @@
 - 前端：加**第 9 个只读页签**（描述式面板，`DescriptorPanel` 契约 v2），一期只放四个区块：
   **状态条 / 块 / 事件流 / 承诺账**（漂移曲线、调用链、上下文检查器留给二/三期）
 - 不改现有 8 个页签
+
+**实际**：页签 key=`self`、label=**它自己**，由 `AdminPanelController.selfTab()` 下发（1 个 info + 3 个 table），
+接口前缀 `/api/admin/self/*`。因为走的是**后端描述式面板**，**前端一行没改、也没重新构建**——
+这正是「加模块不用动 Vue」这条插件化的红利（同 `docs/exam-module.md`）。
 
 ## 7. 验收（逐条可执行）
 
@@ -109,7 +129,39 @@
 | 7 | 开关可用 | `MEMORY_SELF_ENABLED=false` → 不注入、工具不下发（灰度与回退都靠它） |
 | 8 | 回滚 | 恢复上一镜像 + `drop` 四张新表即回到今天的状态（新表与旧数据零耦合） |
 
+## 7.1 实际验收结果（2026-09-14 本地，`next` 分支）
+
+**离线校验**：`%TEMP%\selfcheck` 里一个一次性的 Java 程序，**直接调用真实的 `SelfLoader` / `AgentPromptBuilder` / `SelfService`**，
+只把 4 个 JPA 仓库换成桩（仓库外，跑完即删）。**38 项全过**：
+
+| 判据 | 结果 |
+|---|---|
+| 空状态 | `section()` 返回 `null`；注入列表为空时输出**与改造前逐字节一致**，提示词里连「我自己那侧」都不出现 |
+| 注入顺序 | `order=-10`；`我自己那侧` 的下标 **<** `【长期核心记忆】`；人设仍在最前；超 800 字截断且带「（已截断）」 |
+| 证据强制 | 空证据 / `conv:999999` / `event:888888` / 乱格式 → **全被拒**；真 `conv`/`event` → 放行；一条真一条假 → 放行 |
+| 块上限 | `char_limit=100` 的块已写 90 字时再加 50 字 → 被拒并提示先 summarize |
+| 承诺上限 | 未结 20 条时再立 → 被拒；3 条时放行 |
+| 归属 fail-closed | 非机主 → 不注入且 `isOwner=false`；**未配归属人 → 整个模块不工作**；开关关闭 → 不工作 |
+| 隔离 | 写操作只落 `agent_self_block` / `agent_self_event` / `agent_commitment`；**`ConversationMemoryRepository` 只有读、零写** |
+
+**真机链路（本地 production profile + 真模型 + 真 MySQL）**：
+
+| 判据 | 结果 |
+|---|---|
+| 注入真的到模型 | 库里塞一个**只存在于 `agent_self_block`** 的暗号，禁用工具直接问 → 答对「紫色螺丝刀七号」 |
+| 写入→落库→再注入（闭环） | `selfRecall` 拿到真实编号 `conv:326` → `selfNote` 落库 `event #1` → 下一轮问「上次停在这」→ **答出事件原文** |
+| 定位说明 | 让它「把这一段原文贴给我」→ **拒绝**；紧接着问暗号 → **仍答得出**（该用的时候用，不该念的时候不念） |
+| 面板 | `/api/admin/self/{overview,events}` 正常；页签 `self / 它自己` 已在 panel tabs 里；`agent_self_event` 里那条带 `evidence=conv:326` |
+| 开关 | `MEMORY_SELF_ENABLED=false` → **12 类/60 工具 → 11 类/50 工具**，`AgentSelfTool` 从注册表消失 |
+| 迁移 | `ddl-auto=validate` 下用新实体正常启动（19~22 秒），四张新表由 `V5__` 建 |
+
+**没验证（别当成已验证）**：
+- 判据 6「冷启动对比」（清空块前后问同一件事，回答不同）——只做了"暗号"这一个等价证据，没做前后对照
+- **服务器 / QQ 真机：模块未部署**（`next` 分支）；生产 `.env` **还没写 `MEMORY_SELF_OWNER_OPENID`**，不写＝整个模块不工作
+- 二期（反思流程、判断→倾向、FSRS 复查调度）、三期（领域/产出/额度）**一行代码没写**
+
 ## 8. 风险
+
 
 1. **挤占对话预算** → 800 字上限 + 面板显示用量（§12 的"上下文压力"）
 2. **模型把"自己那侧"当成用户事实** → 提示词两条规则 + 验收 6
@@ -131,18 +183,11 @@
 - **不改 `memory` 包任何既有类**（那摊是冻结的）
 - 不给它任何"对外动作"能力：发消息仍走现有链路与额度
 
-## 11. 会碰到的既有测试（只改到能编译，不新增）
+## 11. 既有测试（实际：一个都没改）
 
-改 `AgentOrchestrator` 构造器（加 `SelfLoader`）与 `AgentPromptBuilder.build` 签名会波及 4 个既有测试类：
-
-| 测试类 | 碰到什么 |
-|---|---|
-| `AgentOrchestratorMemoryTest` | mock 了 `MemoryLoader`、构造 `new MemoryLoader.LoadedMemory("（暂无）", "（暂无）")`；构造器加参数后要跟着改 |
-| `AgentOrchestratorCommandTest` | 构造 `AgentOrchestrator` 时传了一长串 mock，要补 `SelfLoader` |
-| `AgentLoopTest` | 构造 `AgentLoop` 的 mock 列表要补 `SelfLoader` |
-| `MemoryLoaderTest` | 不受影响（`MemoryLoader` 不动） |
-
-**只改到能编译、不新增测试**（项目规矩）；但 `mvn -DskipTests package` **仍会编译测试**，所以这步不能跳。
+原计划担心改 `AgentOrchestrator` 构造器会波及 4 个测试类。**实际用通用挂点，`AgentOrchestrator` 与 `MemoryLoader` 都没动**；
+`AgentLoop` 只是构造器多一个参数，两个便捷构造器内部补 `null`，**既有测试全部原样编译通过**（`mvn -DskipTests package` 仍会编译测试）。
+结论：**只加新类，不改老测试**。
 
 ## 12. 配套材料
 
@@ -151,4 +196,6 @@
 | `self-layer.md` | 骨架、边表、图、判据、算法清单 |
 | `self-layer-spec.md` | 表 / 工具 / 注入 / 反思 / 倾向 / 分歧 / 产出 / 面板 / 算法逐条 |
 | `self-layer-plan.md`（本文） | 一期施工图 |
-| `deploy/mysql/V5__…sql` | **待写**：本期唯一要新建的迁移文件 |
+| `deploy/mysql/V5__…sql` | **已写**：`V5__create_agent_self_tables.sql`（4 张表，纯新增，回滚＝drop） |
+| `src/main/java/…/self/` | 已写：4 实体 + 4 仓库 + `SelfService` + `SelfLoader` + `AgentSelfTool`（10 工具） |
+| `src/main/java/…/agent/PromptSection*.java` | 已写：通用注入挂点（下个模块直接复用） |

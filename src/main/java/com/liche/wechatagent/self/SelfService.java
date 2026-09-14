@@ -1,5 +1,6 @@
 package com.liche.wechatagent.self;
 
+import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -100,6 +101,20 @@ public class SelfService {
     @Transactional(readOnly = true)
     public Optional<AgentSelfEvent> latestEvent() {
         return eventRepository.findTop20ByOrderByIdDesc().stream().findFirst();
+    }
+
+    /**
+     * 最近的对话记录（带真实 id）——**模型唯一能拿到合法证据编号的来源**。
+     *
+     * <p>为什么要这个：模型在任何地方都看不到 {@code conversation_memory} 的行号，而写入要求
+     * {@code conv:<id>} 必须真实存在 → 没有这个读工具，第一次写入永远拿不到证据（死锁）。
+     * 本轮消息要等回复完才落库，所以这里最新的一条是**上一轮**。
+     */
+    @Transactional(readOnly = true)
+    public List<ConversationMemory> recentConversation(String userId, int limit) {
+        int size = Math.min(20, Math.max(1, limit));
+        return conversationMemoryRepository.findByUserIdAndRoleInOrderByCreatedAtDesc(
+                userId, List.of("user", "assistant"), org.springframework.data.domain.PageRequest.of(0, size));
     }
 
     // ---------------------------------------------------------------- 写
