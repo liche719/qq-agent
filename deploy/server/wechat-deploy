@@ -1,0 +1,180 @@
+#!/bin/bash
+# wechat-deploy —— CI 专用的部署入口（服务端唯一出口）
+#
+# 由 /root/.ssh/authorized_keys 里的 command="/usr/local/bin/wechat-deploy" 强制调用：
+# 客户端想跑什么都会变成 $SSH_ORIGINAL_COMMAND，这里只认下面几个子命令，别的全是用法提示。
+#
+# 为什么三个上传要 HMAC：
+#   restrict + command= 只保证"拿不到 shell"。光有部署私钥的人仍然可以传一个自己造的镜像包，
+#   再让 deploy 把它跑起来（host 网络 + root）= 等于拿到了 root。所以每次上传都要求
+#   HMAC-SHA256(文件 sha256)，密钥只在 GitHub Secrets 与 /etc/wechat-deploy.secret（600）。
+#   密钥不泄露，光有私钥就一个字都写不进来。
+#
+# 变更这个脚本 = 变更线上部署路径：改完先手动跑一遍 upload/deploy 再 push 触发 CI。
+set -euo pipefail
+umask 077
+
+SECRET_FILE=/etc/wechat-deploy.secret
+BASE=/var/lib/wechat-deploy
+INCOMING=$BASE/incoming
+COMPOSE_DIR=/opt/wechat-agent-infra
+COMPOSE_FILE=$COMPOSE_DIR/docker-compose.remote.yml
+SETTINGS_FILE=$COMPOSE_DIR/docker/searxng/settings.yml
+LOG=/var/log/wechat-deploy.log
+DOCKER=/usr/bin/docker
+OPENSSL=/usr/bin/openssl
+ADMIN_USER=${WECHAT_DEPLOY_ADMIN_USER:-rootlcw}
+
+log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOG" 2>/dev/null || true; }
+die() { log "REJECT: $* | orig=${SSH_ORIGINAL_COMMAND:-<none>}"; printf 'wechat-deploy: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'EOF'
+wechat-deploy: 只接受以下子命令（其它命令一律拒绝，不提供 shell）
+  wechat-deploy upload-image <git-sha> <sha256> <hmac>
+  wechat-deploy upload-compose <sha256> <hmac>
+  wechat-deploy upload-settings <sha256> <hmac>
+  wechat-deploy deploy <git-sha>
+  wechat-deploy smoke-admin      (stdin: KEY=... [USER=...])
+  wechat-deploy alert-notify     (stdin: KEY=... / MSG=...)
+EOF
+  exit 1
+}
+
+is_sha256() { [ "${#1}" = 64 ] && case "$1" in *[!0-9a-f]*) return 1;; *) return 0;; esac; }
+is_git_sha() { [ "${#1}" = 40 ] && case "$1" in *[!0-9a-f]*) return 1;; *) return 0;; esac; }
+
+# 密钥两端的换行差异（PowerShell 管道 / gh secret set 都可能带一个 \n）在这里统一吃掉，
+# 否则会出现"本地算得出、CI 算不出"的诡异不匹配。
+hmac_of() { printf '%s' "$1" | "$OPENSSL" dgst -sha256 -hmac "$(tr -d '\r\n' <"$SECRET_FILE")" | awk '{print $NF}'; }
+
+check_mac() { # $1=sha256 $2=hmac $3=用途
+  [ -r "$SECRET_FILE" ] || die "secret file $SECRET_FILE 不存在"
+  is_sha256 "$1" || die "sha256 格式不对（$3）"
+  [ "$(hmac_of "$1")" = "$2" ] || die "hmac 校验失败（$3）"
+}
+
+save_stdin() { # $1=目标路径 $2=期望 sha256
+  local tmp got
+  tmp=$(mktemp "$INCOMING/.upload.XXXXXX")
+  cat >"$tmp"
+  got=$(sha256sum "$tmp" | cut -d' ' -f1)
+  if [ "$got" != "$2" ]; then rm -f "$tmp"; die "内容 sha256 不符（期望 $2，实际 $got）"; fi
+  mv -f "$tmp" "$1"
+}
+
+cmd_upload_image() { # $1=git-sha $2=sha256 $3=hmac
+  is_git_sha "$1" || die "git sha 格式不对"
+  check_mac "$2" "$3" image
+  save_stdin "$INCOMING/wechat-agent-$1.tar.gz" "$2"
+  log "upload-image ok sha=$1 bytes=$(stat -c%s "$INCOMING/wechat-agent-$1.tar.gz")"
+}
+
+cmd_upload_compose() { # $1=sha256 $2=hmac
+  check_mac "$1" "$2" compose
+  local tmp=$COMPOSE_DIR/.wechat-deploy.compose.tmp
+  save_stdin "$tmp" "$1"
+  # 校验必须在目标目录里跑：compose 的挂载路径是相对文件所在目录解析的
+  if ! (cd "$COMPOSE_DIR" && "$DOCKER" compose -f "$tmp" config -q) 2>/tmp/wechat-deploy.err; then
+    rm -f "$tmp"
+    die "compose 校验不通过：$(head -c 300 /tmp/wechat-deploy.err)"
+  fi
+  rm -f /tmp/wechat-deploy.err
+  [ -f "$COMPOSE_FILE" ] && cp -f "$COMPOSE_FILE" "$COMPOSE_FILE.bak-wechat-deploy"
+  mv -f "$tmp" "$COMPOSE_FILE"
+  log "upload-compose ok sha256=$1"
+}
+
+cmd_upload_settings() { # $1=sha256 $2=hmac
+  check_mac "$1" "$2" settings
+  local tmp=$BASE/.settings.tmp
+  save_stdin "$tmp" "$1"
+  grep -q '^use_default_settings:' "$tmp" || { rm -f "$tmp"; die "settings.yml 缺少 use_default_settings"; }
+  # 「密钥不进仓库」这条约束由这里兜底：secret_key 不允许带值
+  if grep -Eq '^[[:space:]]*secret_key:[[:space:]]*[^[:space:]]' "$tmp"; then
+    rm -f "$tmp"; die "settings.yml 里不允许出现 secret_key 的值"
+  fi
+  mkdir -p "$(dirname "$SETTINGS_FILE")"
+  [ -f "$SETTINGS_FILE" ] && cp -f "$SETTINGS_FILE" "$SETTINGS_FILE.bak-wechat-deploy"
+  mv -f "$tmp" "$SETTINGS_FILE"
+  log "upload-settings ok sha256=$1"
+}
+
+cmd_deploy() { # $1=git-sha
+  is_git_sha "$1" || die "git sha 格式不对"
+  local tar=$INCOMING/wechat-agent-$1.tar.gz
+  [ -s "$tar" ] || die "镜像包还没上传：$tar"
+  "$DOCKER" load -i "$tar" >/dev/null
+  cd "$COMPOSE_DIR"
+  AGENT_IMAGE=wechat-agent:"$1" "$DOCKER" compose -f "$COMPOSE_FILE" up -d --no-build agent
+  # searxng 的 settings.yml 是挂载进去的，不热加载
+  "$DOCKER" restart wechat-agent-searxng >/dev/null
+  "$DOCKER" image prune -f >/dev/null
+  # 只保留「当前容器镜像 + 次新镜像」的全部 tag（按 image id 数，不能按 tag 行数——同内容重建会让新 tag 被误删）
+  local cur prev
+  cur=$("$DOCKER" inspect wechat-agent-java -f '{{.Image}}' 2>/dev/null || true)
+  prev=$("$DOCKER" images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter 'reference=wechat-agent:*' \
+    | awk -F'|' -v cur="$cur" '$1!=cur' | sort -r -t'|' -k2 | head -1 | cut -d'|' -f1 || true)
+  "$DOCKER" images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' \
+    | awk -F'|' -v cur="$cur" -v prev="$prev" '$1!=cur && $1!=prev {print $2}' \
+    | xargs -r "$DOCKER" rmi -f >/dev/null 2>&1 || true
+  rm -f "$tar"
+  # 顺手清掉上传目录里超过一天的残留（被取消的流水线会留下半截包）
+  find "$INCOMING" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null || true
+  "$DOCKER" compose -f "$COMPOSE_FILE" ps agent
+  "$DOCKER" images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'
+  log "deploy ok sha=$1"
+}
+
+read_stdin_vars() { # 从 stdin 读 KEY= / MSG= / USER= 这类行，不打印
+  while IFS= read -r line; do
+    case "$line" in
+      KEY=*) ADMIN_KEY=${line#KEY=} ;;
+      MSG=*) ALERT_MSG=${line#MSG=} ;;
+      USER=*) ADMIN_USER=${line#USER=} ;;
+    esac
+  done
+}
+
+cmd_smoke_admin() {
+  local ADMIN_KEY=""
+  read_stdin_vars
+  [ -n "$ADMIN_KEY" ] || die "没有从 stdin 读到 KEY="
+  local withkey login
+  withkey=$(curl -sk -o /dev/null -w '%{http_code}' -H "X-Agent-Admin-Key: $ADMIN_KEY" https://127.0.0.1/api/admin/overview)
+  login=$(curl -sk -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -H "X-Agent-Admin-Key: $ADMIN_KEY" -d "{\"username\":\"$ADMIN_USER\"}" https://127.0.0.1/api/admin/session)
+  printf 'withkey=%s login=%s\n' "$withkey" "$login"
+}
+
+cmd_alert_notify() {
+  local ADMIN_KEY="" ALERT_MSG=""
+  read_stdin_vars
+  [ -n "$ADMIN_KEY" ] || die "没有从 stdin 读到 KEY="
+  curl -sk -o /dev/null --max-time 20 -X POST -H "X-Agent-Admin-Key: $ADMIN_KEY" \
+    -H 'Content-Type: application/json' \
+    -d "$(printf '{"message":%s}' "$(printf '%s' "${ALERT_MSG:-部署后自检失败}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')")" \
+    https://127.0.0.1/api/admin/actions/alerts/notify || true
+  log "alert-notify sent"
+}
+
+mkdir -p "$INCOMING"
+chmod 700 "$BASE" "$INCOMING"
+
+set -f   # 原始命令里带 * 之类的字符时不做 glob 展开
+set -- ${SSH_ORIGINAL_COMMAND:-}
+[ "$#" -ge 1 ] || usage
+[ "$1" = "wechat-deploy" ] || die "只接受 wechat-deploy 开头的命令"
+shift
+[ "$#" -ge 1 ] || usage
+sub=$1; shift
+
+case "$sub" in
+  upload-image)    [ "$#" = 3 ] || usage; cmd_upload_image "$1" "$2" "$3" ;;
+  upload-compose)  [ "$#" = 2 ] || usage; cmd_upload_compose "$1" "$2" ;;
+  upload-settings) [ "$#" = 2 ] || usage; cmd_upload_settings "$1" "$2" ;;
+  deploy)          [ "$#" = 1 ] || usage; cmd_deploy "$1" ;;
+  smoke-admin)     [ "$#" = 0 ] || usage; cmd_smoke_admin ;;
+  alert-notify)    [ "$#" = 0 ] || usage; cmd_alert_notify ;;
+  *) usage ;;
+esac

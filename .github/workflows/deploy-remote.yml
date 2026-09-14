@@ -66,28 +66,41 @@ jobs:
           printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
+      # 服务器上那把部署私钥带 restrict + command="/usr/local/bin/wechat-deploy"：
+      # 它只能跑那个脚本、拿不到 shell，所以 scp 用不了 —— 三个文件改成「走 stdin 交给 wechat-deploy 的子命令」。
+      # 每次上传都要带 HMAC-SHA256（密钥是本仓库的 DEPLOY_TAR_SECRET，服务端在 /etc/wechat-deploy.secret），
+      # 服务端验签通过才落盘：**光拿到部署私钥推不进任何内容**。详见 `deploy/server/wechat-deploy` 顶部说明。
       - name: Upload image and deployment files
+        env:
+          DEPLOY_TAR_SECRET: ${{ secrets.DEPLOY_TAR_SECRET }}
         run: |
-          scp -i ~/.ssh/deploy_key wechat-agent-${GITHUB_SHA}.tar.gz \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/"
-          scp -i ~/.ssh/deploy_key docker-compose.remote.yml \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/wechat-agent-infra/docker-compose.remote.yml"
-          scp -i ~/.ssh/deploy_key docker/searxng/settings.yml \
-            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/wechat-agent-infra/docker/searxng/settings.yml"
+          set -eu
+          HOST="${{ secrets.DEPLOY_HOST }}"
+          DUSER="${{ secrets.DEPLOY_USER }}"
+          # 密钥两端都可能带一个尾部换行（gh secret set 的写入习惯），统一去掉再算，避免"本地算得出、CI 算不出"
+          SECRET=$(printf '%s' "$DEPLOY_TAR_SECRET" | tr -d '\r\n')
+          mac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
+
+          image_sha=$(sha256sum wechat-agent-${GITHUB_SHA}.tar.gz | cut -d' ' -f1)
+          ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+            "wechat-deploy upload-image ${GITHUB_SHA} ${image_sha} $(mac "$image_sha")" < wechat-agent-${GITHUB_SHA}.tar.gz
+
+          compose_sha=$(sha256sum docker-compose.remote.yml | cut -d' ' -f1)
+          ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+            "wechat-deploy upload-compose ${compose_sha} $(mac "$compose_sha")" < docker-compose.remote.yml
+
+          settings_sha=$(sha256sum docker/searxng/settings.yml | cut -d' ' -f1)
+          ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+            "wechat-deploy upload-settings ${settings_sha} $(mac "$settings_sha")" < docker/searxng/settings.yml
 
       - name: Load image and update only Java service
         run: |
-          # 顺带重启 SearXNG：它的配置是挂载进去的 settings.yml，容器不会热加载，
-          # 改了配置只有重启才生效（重启只影响几秒内的搜索请求）。
-          #
-          # 旧镜像清理按 **image id** 保留「当前容器镜像 + 次新镜像」的**全部 tag**。
-          # 原来按 tag 行数 `tail -n +3` 数：当新构建与上次镜像内容完全相同（例如只改了不在镜像里的
-          # compose / settings.yml）时，新旧 tag 落在同一个 image id 上、CreatedAt 也相同，排序会把
-          # **刚部署的那个 tag 自己**删掉（实测日志：`Untagged: wechat-agent:1e9bb01…`）——之后谁不带
-          # AGENT_IMAGE 手动 `docker compose up -d agent` 就会去拉不存在的 `wechat-agent:latest` 直接失败。
-          # 顺带清掉被取消的流水线留在 /tmp 的镜像包（只删 30 分钟以上的，避免碰并发运行的文件）。
+          # 远端动作全部收敛到服务器上的 /usr/local/bin/wechat-deploy：load 镜像、只重建 agent、
+          # 重启 searxng（settings.yml 是挂载进去的、不热加载）、按 image id 保留两代镜像 tag、删掉镜像包、
+          # 打印容器与镜像状态。**远端逻辑要改就改那个脚本**（仓库里留了一份 `deploy/server/wechat-deploy`），
+          # 不要再往 CI 里塞 shell —— 这里的私钥已经没有执行任意命令的权限了。
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "set -eu; mkdir -p /opt/wechat-agent-infra/docker/searxng; docker load < /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; cd /opt/wechat-agent-infra; AGENT_IMAGE=wechat-agent:${GITHUB_SHA} docker compose -f docker-compose.remote.yml up -d --no-build agent; docker restart wechat-agent-searxng; docker image prune -f; CUR=\$(docker inspect wechat-agent-java -f '{{.Image}}' 2>/dev/null || true); PREV=\$(docker images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter 'reference=wechat-agent:*' | awk -F'|' -v cur="\$CUR" '\$1!=cur' | sort -r -t'|' -k2 | head -1 | cut -d'|' -f1 || true); docker images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' | awk -F'|' -v cur="\$CUR" -v prev="\$PREV" '\$1!=cur && \$1!=prev {print \$2}' | xargs -r docker rmi -f 2>/dev/null || true; find /tmp -maxdepth 1 -name 'wechat-agent-*.tar.gz' -mmin +30 -delete 2>/dev/null || true; rm -f /tmp/wechat-agent-${GITHUB_SHA}.tar.gz; docker compose -f docker-compose.remote.yml ps agent; docker images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'"
+            "wechat-deploy deploy ${GITHUB_SHA}"
 
       # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
       - name: Smoke check deployed panel
@@ -123,12 +136,9 @@ jobs:
 
           # 带口令的检查放到**服务器本机**跑（127.0.0.1）：流量不出主机，
           # 所以既可以用 -k（IP 访问没有匹配证书），又不存在"明文口令经不校验证书的公网连接"的问题。
-          remote=$(ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" "KEY='$KEY' bash -s" <<'REMOTE'
-          curl -sk -o /dev/null -w 'withkey=%{http_code} ' -H "X-Agent-Admin-Key: $KEY" https://127.0.0.1/api/admin/overview
-          curl -sk -o /dev/null -w 'login=%{http_code}' -X POST -H 'Content-Type: application/json' \
-            -H "X-Agent-Admin-Key: $KEY" -d '{"username":"rootlcw"}' https://127.0.0.1/api/admin/session
-          REMOTE
-          )
+          # 这句同样走受限的 wechat-deploy（smoke-admin），口令从 **stdin** 进：不进命令行、不进日志。
+          remote=$(printf 'KEY=%s\n' "$KEY" | \
+            ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" "wechat-deploy smoke-admin")
           echo "服务端本机自检：$remote"
           check "带口令接口" 200 "$(echo "$remote" | sed -n 's/.*withkey=\([0-9]*\).*/\1/p')"
           check "账号密码登录" 200 "$(echo "$remote" | sed -n 's/.*login=\([0-9]*\).*/\1/p')"
@@ -146,13 +156,9 @@ jobs:
 
           if [ -n "$problems" ]; then
             echo "❌ 部署后自检失败:$problems"
-            # 告警也走服务器本机，避免把口令发到不校验证书的公网连接上
-            ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" \
-              "KEY='$KEY' MSG='部署后自检失败：$problems' bash -s" <<'REMOTE' || true
-          curl -sk -o /dev/null --max-time 20 -X POST -H "X-Agent-Admin-Key: $KEY" \
-            -H 'Content-Type: application/json' \
-            -d "{\"message\":\"$MSG\"}" https://127.0.0.1/api/admin/actions/alerts/notify
-          REMOTE
+            # 告警也走服务器本机（口令与文案都从 stdin 进，不进命令行、不进日志）
+            printf 'KEY=%s\nMSG=%s\n' "$KEY" "部署后自检失败：$problems" | \
+              ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@$HOST" "wechat-deploy alert-notify" || true
             exit 1
           fi
           echo "✅ 部署后自检通过：页面可访问、鉴权生效（含编码路径）、登录与面板接口正常$domain_note"
