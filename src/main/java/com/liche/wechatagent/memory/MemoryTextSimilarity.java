@@ -19,7 +19,7 @@ import java.util.Set;
  * 「用户在考研中设定的数学目标分数为140分」这种**换了说法**的情况，相似度只有 0.3 左右 → 抓不到，
  * 那种情况由 {@code MemoryExtractor.reconcileCoreWithModel()} 的第二次小调用兜住。
  */
-final class MemoryTextSimilarity {
+public final class MemoryTextSimilarity {
 
     private MemoryTextSimilarity() {
     }
@@ -59,7 +59,7 @@ final class MemoryTextSimilarity {
      * 相似度 0~1：二元组 Jaccard。互相包含（一方是另一方的子串）时直接给 {@code 0.95}——
      * 「考研数学目标分是130」/「考研数学目标分是130分」这种就属于这类。
      */
-    static double similarity(String left, String right) {
+    public static double similarity(String left, String right) {
         String a = normalize(left);
         String b = normalize(right);
         if (a.isEmpty() || b.isEmpty()) {

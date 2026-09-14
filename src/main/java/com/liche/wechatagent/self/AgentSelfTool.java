@@ -70,6 +70,15 @@ public class AgentSelfTool implements AgentToolProvider {
                     .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
                     .append('\n'));
         }
+        java.util.List<AgentLesson> lessons = selfService.activeLessons();
+        text.append("【我的教训清单】\n");
+        if (lessons.isEmpty()) {
+            text.append("（还没有）\n");
+        } else {
+            lessons.stream().limit(5).forEach(lesson -> text.append("· #").append(lesson.getId())
+                    .append(' ').append(lesson.getCategory()).append("（复现 ").append(lesson.getRecurrenceCount())
+                    .append(" 次）：").append(lesson.getCorrection()).append('\n'));
+        }
         return text.toString().trim();
     }
 
@@ -89,6 +98,15 @@ public class AgentSelfTool implements AgentToolProvider {
         records.forEach(record -> text.append("conv:").append(record.getId()).append(' ')
                 .append("assistant".equalsIgnoreCase(record.getRole()) ? "助手曾回复：" : "用户曾说：")
                 .append(abbreviate(record.getContent())).append('\n'));
+        java.util.List<AgentLesson> lessons = selfService.activeLessons();
+        text.append("【我的教训清单】\n");
+        if (lessons.isEmpty()) {
+            text.append("（还没有）\n");
+        } else {
+            lessons.stream().limit(5).forEach(lesson -> text.append("· #").append(lesson.getId())
+                    .append(' ').append(lesson.getCategory()).append("（复现 ").append(lesson.getRecurrenceCount())
+                    .append(" 次）：").append(lesson.getCorrection()).append('\n'));
+        }
         return text.toString().trim();
     }
 
@@ -184,6 +202,46 @@ public class AgentSelfTool implements AgentToolProvider {
         }
     }
 
+    // ---------------------------------------------------------------- 教训清单（三期领域①）
+
+    @Tool(value = "给自己记一条教训：你反复在哪栽，就记哪。"
+            + "**三段必须齐**：whatIDid（我做了什么）、expected（我当时预期）、whatHappened（实际发生了什么），"
+            + "外加 correction（**以后怎么做**的可执行短句——不是感悟，「以后要更细心」这种没用）。"
+            + "category 取 TIME（时间/日程算错）/ COMMITMENT（答应了没做）/ GUESS（没核就答）/ FORMAT（格式返工）/ TOOL（工具用错）；"
+            + "trigger 取 SURPRISE / USER_POINTED / PROMISE_BROKEN / SELF_CHECK。"
+            + "同类教训程序会自动并进已有那条（复现次数 +1、难度上升），不用你重复记。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfLesson(String category, String trigger, String whatIDid, String expected,
+                                         String whatHappened, String correction, String evidence) {
+        try {
+            SelfService.LessonOutcome outcome = selfService.addLesson(category, trigger, whatIDid, expected,
+                    whatHappened, correction, evidence);
+            if (outcome.recurred()) {
+                return ToolBusinessResult.success("这条跟已有教训是同一类，已经并进去了（复现第 "
+                        + outcome.lesson().getRecurrenceCount() + " 次，难度升到 "
+                        + Math.round(outcome.lesson().getDifficulty()) + "）");
+            }
+            return ToolBusinessResult.success("记下了（lesson #" + outcome.lesson().getId() + "，类别 "
+                    + outcome.lesson().getCategory() + "）。这类事下次我会先按 correction 做。");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
+
+    @Tool(value = "把一条已有教训的 correction 改得更可执行（id 用 selfRead 里看到的 lesson 编号）。"
+            + "**只改做法，不写感悟**；改完这条教训的复查周期会重算。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfLessonEdit(Long lessonId, String correction, String evidence) {
+        try {
+            AgentLesson saved = selfService.editLessonCorrection(lessonId, correction, evidence);
+            return ToolBusinessResult.success("改好了（lesson #" + saved.getId() + "）：以后按「"
+                    + saved.getCorrection() + "」做");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
     // ---------------------------------------------------------------- 自己的目标与账
 
     @Tool(value = "给你自己立一个目标（写进「我现在在做」，并记一条带证据的事件）。"

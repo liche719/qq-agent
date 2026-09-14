@@ -319,6 +319,11 @@ memory:
   # 复查时机：FSRS v6 的幂律遗忘曲线（decay 默认 -0.1542），由 R(t,S) 掉到目标保留率反推
   self-fsrs-decay: ${MEMORY_SELF_FSRS_DECAY:-0.1542}
   self-review-target: ${MEMORY_SELF_REVIEW_TARGET:0.8}
+  # 三期领域①：教训清单（它自己的可靠性）——复现率是标尺，所以上限与合并阈值都很关键
+  self-max-lessons: ${MEMORY_SELF_MAX_LESSONS:30}
+  self-lesson-merge-similarity: ${MEMORY_SELF_LESSON_MERGE_SIMILARITY:0.72}
+  self-lesson-clean-reviews-to-close: ${MEMORY_SELF_LESSON_CLEAN_REVIEWS_TO_CLOSE:3}
+  self-max-lessons-in-prompt: ${MEMORY_SELF_MAX_LESSONS_IN_PROMPT:3}
   # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
   history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
   conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}

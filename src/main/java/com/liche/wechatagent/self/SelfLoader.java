@@ -41,26 +41,40 @@ public class SelfLoader implements PromptSectionProvider {
     private final int maxChars;
     private final int maxCommitmentsInPrompt;
     private final int maxStancesInPrompt;
+    private final int maxLessonsInPrompt;
 
     public SelfLoader(SelfService selfService,
                       @Value("${memory.self-max-chars:800}") int maxChars,
                       @Value("${memory.self-max-commitments-in-prompt:5}") int maxCommitmentsInPrompt,
-                      @Value("${memory.self-max-stances-in-prompt:5}") int maxStancesInPrompt) {
+                      @Value("${memory.self-max-stances-in-prompt:5}") int maxStancesInPrompt,
+                      @Value("${memory.self-max-lessons-in-prompt:3}") int maxLessonsInPrompt) {
         this.selfService = selfService;
         this.maxChars = Math.max(120, maxChars);
         this.maxCommitmentsInPrompt = Math.max(1, maxCommitmentsInPrompt);
         this.maxStancesInPrompt = Math.max(1, maxStancesInPrompt);
+        this.maxLessonsInPrompt = Math.max(1, maxLessonsInPrompt);
     }
 
     @Override
     public PromptSection section(String userId) {
+        return build(userId, null);
+    }
+
+    @Override
+    public PromptSection section(String userId, String userMessage) {
+        return build(userId, userMessage);
+    }
+
+    private PromptSection build(String userId, String userMessage) {
         if (!selfService.isOwner(userId)) {
             return null;
         }
         List<AgentSelfBlock> blocks = selfService.blocks();
         List<AgentCommitment> open = selfService.openCommitments();
         List<AgentStance> stances = selfService.activeStances();
-        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty()) {
+        List<AgentLesson> lessons = userMessage == null || userMessage.isBlank()
+                ? java.util.List.of() : selfService.lessonsInPlay(userMessage, maxLessonsInPrompt);
+        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty()) {
             return null;
         }
         Map<String, AgentSelfBlock> byType = blocks.stream()
@@ -71,6 +85,7 @@ public class SelfLoader implements PromptSectionProvider {
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_TASK), "我现在在做");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PROJECT), "我长期在做");
         appendStances(body, stances);
+        appendLessons(body, lessons);
         appendCommitments(body, open);
         appendTimeSense(body);
 
@@ -96,6 +111,15 @@ public class SelfLoader implements PromptSectionProvider {
      * 倾向从 {@code agent_stance} 渲染（那张表才是事实源，块只是投影）。
      * 到点该复查的标一句——复查时机是 FSRS 由 {@code R(t,S)} 反推出来的，不是拍脑袋定的天数。
      */
+    /** 只在**同类场景**提示它自己踩过的坑（§9.1 硬规则 3：不做全局唠叨）；只给做法，不给整段教训。 */
+    private void appendLessons(StringBuilder body, List<AgentLesson> lessons) {
+        if (lessons.isEmpty()) {
+            return;
+        }
+        body.append("我这方面踩过的坑：\n");
+        lessons.forEach(lesson -> body.append("· ").append(lesson.getCorrection()).append('\n'));
+    }
+
     private void appendStances(StringBuilder body, List<AgentStance> stances) {
         if (stances.isEmpty()) {
             return;

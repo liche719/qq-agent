@@ -1,6 +1,7 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.self.AgentCommitment;
+import com.liche.wechatagent.self.AgentLesson;
 import com.liche.wechatagent.self.AgentReflection;
 import com.liche.wechatagent.self.AgentSelfBlock;
 import com.liche.wechatagent.self.AgentSelfEvent;
@@ -87,6 +88,10 @@ public class AdminSelfController {
         rows.add(row("今天反思", today.isEmpty() ? "还没跑" : today.size() + " 次 / "
                 + today.stream().mapToInt(this::tokensOf).sum() + " tokens"));
         rows.add(row("分歧（近 7 天）", disagreements(now).size() + " 次"));
+        List<AgentLesson> activeLessons = selfService.activeLessons();
+        long dueLessons = activeLessons.stream().filter(lesson -> lesson.isDue(now)).count();
+        rows.add(row("教训清单", activeLessons.isEmpty() ? "（空）" : activeLessons.size() + " 条"
+                + (dueLessons == 0 ? "" : "（" + dueLessons + " 条该复查了）")));
         selfService.lastReflection().ifPresent(reflection ->
                 rows.add(row("上次反思", (reflection.getCreatedAt() == null ? "—"
                         : humanize(Duration.between(reflection.getCreatedAt(), now)) + "：")
@@ -186,6 +191,58 @@ public class AdminSelfController {
             rows.add(row);
         }
         return Map.of("rows", rows);
+    }
+
+    /**
+     * 教训清单（三期领域①）：**复现次数就是标尺**——清单越来越长、复现率却没变化，
+     * 说明它在写作文而不是在学（§9.2 的反装判据），所以这块必须把次数摆在最显眼处。
+     */
+    @GetMapping("/lessons")
+    public Map<String, Object> lessons() {
+        LocalDateTime now = LocalDateTime.now();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentLesson lesson : selfService.activeLessons()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + lesson.getId());
+            row.put("category", lesson.getCategory() + "｜" + lesson.getTriggerType());
+            row.put("what", "我做了：" + clip(lesson.getWhatIDid(), 60) + "；预期：" + clip(lesson.getExpectedResult(), 40)
+                    + "；实际：" + clip(lesson.getWhatHappened(), 60));
+            row.put("correction", lesson.getCorrection());
+            row.put("recurrence", "复现 " + lesson.getRecurrenceCount() + " 次｜干净复查 "
+                    + lesson.getCleanReviews() + " 次");
+            row.put("review", (lesson.isDue(now) ? "「该复查了」｜" : "") + "S=" + round(lesson.getStability())
+                    + " D=" + round(lesson.getDifficulty()) + "｜下次 " + stamp(lesson.getNextReviewAt()));
+            row.put("status", AgentLesson.STATUS_CLOSED.equals(lesson.getStatus()) ? "已关闭"
+                    : (AgentLesson.STATUS_IMPROVING.equals(lesson.getStatus()) ? "在好转" : "未解决"));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 每周教训事件数（§9.2：看**趋势线**，不看绝对值；明细分散在各条教训里） */
+    @GetMapping("/lesson-bars")
+    public Map<String, Object> lessonBars(@RequestParam(defaultValue = "8") int weeks) {
+        int window = Math.min(26, Math.max(1, weeks));
+        LocalDate thisWeek = LocalDate.now().minusDays(LocalDate.now().getDayOfWeek().getValue() - 1L);
+        Map<LocalDate, Integer> perWeek = new TreeMap<>();
+        for (int index = window - 1; index >= 0; index--) {
+            perWeek.put(thisWeek.minusWeeks(index), 0);
+        }
+        LocalDateTime since = thisWeek.minusWeeks(window - 1L).atStartOfDay();
+        for (AgentSelfEvent event : selfService.eventsSince(since)) {
+            if (!AgentSelfEvent.KIND_LESSON.equals(event.getKind()) || event.getCreatedAt() == null) {
+                continue;
+            }
+            LocalDate eventWeek = event.getCreatedAt().toLocalDate();
+            eventWeek = eventWeek.minusDays(eventWeek.getDayOfWeek().getValue() - 1L);
+            if (perWeek.containsKey(eventWeek)) {
+                perWeek.merge(eventWeek, 1, Integer::sum);
+            }
+        }
+        List<Map<String, Object>> items = perWeek.entrySet().stream()
+                .map(entry -> item(entry.getKey().format(DAY).substring(5), entry.getValue()))
+                .toList();
+        return Map.of("items", items);
     }
 
     /** 分歧：它跟你意见不同的记录（§6 观察指标的**唯一来源**）。 */

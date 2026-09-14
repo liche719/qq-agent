@@ -45,6 +45,8 @@ public class AgentSelfEvent {
     public static final String KIND_STANCE_FORMED = "STANCE_FORMED";
     public static final String KIND_STANCE_REVISED = "STANCE_REVISED";
     public static final String KIND_STANCE_RETIRED = "STANCE_RETIRED";
+    /** 记了一条教训 / 又犯了一次话（三期领域①；投票由程序判定，模型不能自己点赞） */
+    public static final String KIND_LESSON = "LESSON";
     public static final String KIND_NOTE = "NOTE";
 
     @Id

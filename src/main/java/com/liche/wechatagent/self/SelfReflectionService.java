@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -43,10 +44,11 @@ public class SelfReflectionService {
 
     /** 一次反思的结果（面板与日志用） */
     public record Outcome(boolean ran, String reason, Long reflectionId, String conclusion,
-                          StanceOutcome stances, int commitmentsBroken, int promptTokens, int completionTokens) {
+                          StanceOutcome stances, int commitmentsBroken, int lessonsAdded, int lessonsRecurred,
+                          int lessonsReviewed, int promptTokens, int completionTokens) {
 
         static Outcome skipped(String reason, StanceOutcome stances) {
-            return new Outcome(false, reason, null, null, stances, 0, 0, 0);
+            return new Outcome(false, reason, null, null, stances, 0, 0, 0, 0, 0, 0);
         }
     }
 
@@ -124,6 +126,9 @@ public class SelfReflectionService {
         // ② 到期未兑现 → BROKEN（"得失"的落点）：也不需要模型
         int broken = settleOverdueCommitments(now);
 
+        // 教训复查同样是**程序驱动**：模型不能给自己点赞（spec §9.1 硬规则 4）
+        int lessonsReviewed = selfService.reviewLessons(now);
+
         // ③ 合成反思要花钱：先过预算、防抖与重要度三道闸
         if (selfService.reflectionsToday() >= dailyCallLimit) {
             return Outcome.skipped("今天的反思预算用完了（" + dailyCallLimit + " 次）", stances);
@@ -139,7 +144,11 @@ public class SelfReflectionService {
         }
         LocalDateTime since = last.map(AgentReflection::getCreatedAt).orElse(now.minusDays(2));
         List<AgentSelfEvent> events = selfService.eventsSince(since).stream()
-                .filter(event -> !AgentSelfEvent.KIND_REFLECT.equals(event.getKind()))
+                // 不看**自己的结论**（REFLECT）和**自己写下的教训**（LESSON）：
+                // 否则会从自己的记录里再推导一条同类教训 —— 那就是流水账/回音室（spec §9.1 硬规则 1）。
+                // 教训应该从**行为痕迹**（判断/承诺/目标/随手记）里发现，而不是从教训里再长出教训。
+                .filter(event -> !AgentSelfEvent.KIND_REFLECT.equals(event.getKind())
+                        && !AgentSelfEvent.KIND_LESSON.equals(event.getKind()))
                 .sorted(Comparator.comparingInt((AgentSelfEvent event) ->
                                 event.getImportance() == null ? 0 : event.getImportance()).reversed()
                         .thenComparing(AgentSelfEvent::getId))
@@ -197,10 +206,12 @@ public class SelfReflectionService {
         AgentReflection reflection = selfService.recordReflection(1, trigger, inputIds, synthesis.conclusion(),
                 synthesis.importance(), writtenBack, 1, prompt.length(),
                 response == null ? 0 : response.length(), promptTokens, completionTokens, durationMs);
-        log.info("自主模块反思完成 id={} trigger={} 事件 {} 条 倾向[{}] 承诺判欠 {} 条 tokens={}/{}",
-                reflection.getId(), trigger, inputIds.size(), stances, broken, promptTokens, completionTokens);
+        LessonTally tally = applyLessons(synthesis, inputIds);
+        log.info("自主模块反思完成 id={} trigger={} 事件 {} 条 倾向[{}] 承诺判欠 {} 条 教训(新{} 又犯{} 复查{}) tokens={}/{}",
+                reflection.getId(), trigger, inputIds.size(), stances, broken, tally.added(), tally.recurred(),
+                lessonsReviewed, promptTokens, completionTokens);
         return new Outcome(true, null, reflection.getId(), synthesis.conclusion(), stances, broken,
-                promptTokens, completionTokens);
+                tally.added(), tally.recurred(), lessonsReviewed, promptTokens, completionTokens);
     }
 
     /** 只跑倾向维护（不花模型调用）——"该提没提 / 不该提却提了"就用它单独验证。 */
@@ -279,6 +290,31 @@ public class SelfReflectionService {
         return new StanceOutcome(promoted, revised, supported, contradicted, demoted);
     }
 
+    /** 把这次反思发现的教训落库（三段齐 + 证据真实，SelfService 会再校验一次） */
+    private LessonTally applyLessons(Synthesis synthesis, List<Long> inputIds) {
+        if (synthesis.lessons() == null || synthesis.lessons().isEmpty()) {
+            return new LessonTally(0, 0);
+        }
+        String evidence = "event:" + inputIds.get(inputIds.size() - 1);
+        int added = 0;
+        int recurred = 0;
+        for (LessonCandidate candidate : synthesis.lessons()) {
+            try {
+                SelfService.LessonOutcome outcome = selfService.addLesson(candidate.category(), candidate.trigger(),
+                        candidate.whatIDid(), candidate.expected(), candidate.whatHappened(),
+                        candidate.correction(), evidence);
+                if (outcome.recurred()) {
+                    recurred++;
+                } else {
+                    added++;
+                }
+            } catch (RuntimeException exception) {
+                // 清单到上限 / 三段不齐 / 证据对不上：跳过这一条，不能让整次反思失败
+                log.warn("教训没记进去（{}）：{}", candidate.category(), exception.getMessage());
+            }
+        }
+        return new LessonTally(added, recurred);
+    }
     // ---------------------------------------------------------------- 内部
 
     private int settleOverdueCommitments(LocalDateTime now) {
@@ -361,7 +397,15 @@ public class SelfReflectionService {
         return Math.round(value * 100) / 100.0;
     }
 
-    private record Synthesis(String conclusion, int importance, String taskBlock) {
+    private record Synthesis(String conclusion, int importance, String taskBlock, List<LessonCandidate> lessons) {
+    }
+
+    /** 反思顺带发现的教训（三段齐才落库；投票不在这里，由程序按后续真实事件判定） */
+    private record LessonCandidate(String category, String trigger, String whatIDid, String expected,
+                                  String whatHappened, String correction) {
+    }
+
+    private record LessonTally(int added, int recurred) {
     }
 
     /** 解析模型输出：只认 JSON；带代码块围栏也容忍；解析不出来返回 null（调用方丢弃整条） */
@@ -393,7 +437,24 @@ public class SelfReflectionService {
             }
             int importance = Math.min(5, Math.max(1, root.path("importance").asInt(1)));
             String taskBlock = root.path("task_block").asText("").trim();
-            return new Synthesis(conclusion, importance, taskBlock);
+            List<LessonCandidate> lessons = new ArrayList<>();
+            JsonNode lessonsNode = root.path("lessons");
+            if (lessonsNode.isArray()) {
+                for (JsonNode node : lessonsNode) {
+                    if (lessons.size() >= 2) {
+                        break;
+                    }
+                    String lessonCategory = node.path("category").asText("").trim().toUpperCase(Locale.ROOT);
+                    String lessonCorrection = node.path("correction").asText("").trim();
+                    if (lessonCategory.isEmpty() || lessonCorrection.isEmpty()) {
+                        continue;
+                    }
+                    lessons.add(new LessonCandidate(lessonCategory, node.path("trigger").asText("").trim(),
+                            node.path("what_i_did").asText("").trim(), node.path("expected").asText("").trim(),
+                            node.path("what_happened").asText("").trim(), lessonCorrection));
+                }
+            }
+            return new Synthesis(conclusion, importance, taskBlock, lessons);
         } catch (Exception exception) {
             log.debug("反思输出解析失败：{}", exception.getMessage());
             return null;
@@ -458,7 +519,11 @@ public class SelfReflectionService {
         prompt.append("请只做一件事：用**不超过 120 字**写清「这段时间我这边发生了什么、我现在在做的事要不要改」。\n");
         prompt.append("不要写感悟、不要总结机主、不要立新承诺、不要复述上面的原文。\n");
         prompt.append("只输出 JSON（不要代码块、不要解释）：\n");
-        prompt.append("{\"conclusion\":\"…\",\"importance\":1,\"task_block\":\"\"}\n");
+        prompt.append("{\"conclusion\":\"…\",\"importance\":1,\"task_block\":\"\",\"lessons\":[]}\n");
+        prompt.append("lessons：这段时间若有**你预期落空**的事（时间算错/答应了没做/没核就答/格式返工/工具用错），");
+        prompt.append("每条写全——category（TIME/COMMITMENT/GUESS/FORMAT/TOOL）、trigger（SURPRISE/USER_POINTED/PROMISE_BROKEN/SELF_CHECK）、");
+        prompt.append("what_i_did（我做了什么）、expected（我当时预期）、what_happened（实际发生）、correction（以后怎么做的**可执行短句**）。");
+        prompt.append("**不要写感悟**（\"以后要更细心\"这种没用），最多 2 条；没有就给空数组。\n");
         prompt.append("task_block：认为「我现在在做」该改写时给出改写后的**完整全文**（≤300 字）；不需要改就留空字符串。\n");
         return prompt.toString();
     }

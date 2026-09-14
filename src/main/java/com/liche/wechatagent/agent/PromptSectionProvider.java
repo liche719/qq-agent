@@ -18,4 +18,13 @@ public interface PromptSectionProvider {
 
     /** 当前用户这一轮的动态段落；没有内容就返回 null。 */
     PromptSection section(String userId);
+
+    /**
+     * 带上**这一轮用户消息**的版本：只有"得看当前场景才决定要不要注入"的模块才需要它
+     * （例如教训清单只在同类场景提示，不做全局唠叨）。
+     * 默认忽略消息、退回到 {@link #section(String)}，所以既有实现一行都不用改。
+     */
+    default PromptSection section(String userId, String userMessage) {
+        return section(userId);
+    }
 }

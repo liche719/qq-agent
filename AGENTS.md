@@ -200,7 +200,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 57. **面板"每次刷新一闪一闪"不是整页刷新，是描述式面板把区块状态清空了（2026-09-13 修，用户报的）**：`DescriptorPanel.load()` 原来每次都把每个区块重置成 `{loading:true, data:null}`，模板 `v-if="view.loading"` 就把表格/表单**整个拆掉换成「加载中…」再重建**，每 10 秒一次。**先判定再改**：真实 Chromium 里量 `performance.timeOrigin`＋ MutationObserver 数「加载中…」与表格/表单被移除的次数。修法：刷新时**沿用上一次的状态**（只有第一次显示加载态），失败时**保留旧数据** + 一行「这次刷新失败，显示的是上一次的数据」。**顺带修掉更烦的**：`formValues` 被反复回写，**用户正在编辑的表单每 10 秒被冲一次**→ 加 `formTouched`（`@input`/`@change` 置位、提交后清位），与 `MaimemoPanel` 一致。8 个手写页签本来就不闪——**新写 tick 面板照抄这条**。
 
-58. **备份改版：每天一个 zip + 媒体只存一份（2026-09-13，用户嫌占空间）**：原来 `backup/<yyyyMMdd>/user-<hash>/{state.json, media/*.bin}`——**媒体本体每天复制一份、保留 30 天**（存过 100MB 图就是 3GB，压缩也救不了，JPEG/PDF 本来就压过了）。现在媒体按 sha256 存**共享**的 `backup/media/<sha256>.bin`（内容一样就复用、artifact 标 `reused`），当天目录打完 `backup/<yyyyMMdd>.zip` 再删；遗忘清理改成"包里取 `state.json` → 改 → 重写整个包"；GC 只在真有备份过期时清掉没人引用的 blob。**实测 568K → 152K**；用 zip 不用 tar.gz 是因为 Java 标准库没有 tar。**完整设计、恢复步骤见 `docs/backup.md`（含"库里 22 条媒体记录、磁盘 0 文件"那件事）。**
+58. **备份改版：每天一个 zip + 媒体只存一份（2026-09-13，用户嫌占空间）**：媒体按 sha256 共享存、当天目录打完 zip 再删（实测 568K → 152K）；遗忘清理走「包里取 state.json → 改 → 重写包」。**完整设计与恢复步骤见 `docs/backup.md`**。
 
 59. **媒体记忆三件套：一次任务最多读 10 个文件 + 让模型把"看到了什么"写回库（2026-09-13）**：① `readStoredMedia` 原来无上限（连读十几份就把上下文撑爆，图片最狠）→ 现在 `media.context.max-files-per-task`（默认 10，`reserveFileRead(mediaId)` **按 mediaId 去重**；**文本也算额度**——用户要求按"文件"而不是"图片"口径）超限**拒读**并让用户点名（日志 `本轮读取文件已达上限`，计数随"重新激活"延续、绕不开）；② 检索走 `searchableText()`（文件名+原名+summary+importanceReason+extractedText），所以新增 `noteStoredMediaContent(mediaId, hint)` 把内容写进 `extracted_text`（前缀 `【视觉识别】`、替换式、**不动 `updated_at`** 以免打乱排序）——**关键：视觉理解只在模型脑子里，工具拿不到，只能让模型自己记**；存图时还要求 `summary` 带关键词。**详见 `docs/media-memory.md`。**
 
@@ -211,7 +211,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 64. **自主模块一期（2026-09-14 做完并本地端到端验证，在 `next` 未部署）**：`self/` 包 + `V5__create_agent_self_tables.sql`（4 表新增，回滚＝drop）+ 通用注入挂点 `agent/PromptSection{,Provider}`（`SelfLoader` order=-10）+ 面板页签「它自己」+ 10 个工具；生产要配 `MEMORY_SELF_OWNER_OPENID` 才生效。**两个坑**：① **证据死锁**——模型看不到 `conversation_memory.id`，于是「证据必须真实存在」这条校验让**第一次写入永远失败**；解法＝只读工具 `selfRecall` 递真实编号，**别删**；② `@ConditionalOnProperty(memory.self-enabled)` **`SelfLoader` 与 `AgentSelfTool` 两处都要**，只加一处关不干净（开 60 / 关 50 工具）。**验注入别 grep 日志**＝往块里塞一个只在库里的暗号、让模型禁用工具答出来。详见 `docs/self-layer-plan.md` §7.1。
 
-65. **自主模块二期（2026-09-14/15 做完并本地验证，同一个 `next`）**：反思流程（step-count 触发/成本入账/防抖）+ 判断→倾向（`StancePromoter` 纯函数 + `agent_stance` 表；**倾向只由程序提升**，模型只能记判断）+ FSRS 复查 + `selfJudge`/`selfDisagree` + 面板。**两个坑**：① 反例优先＝反例侧**独立达同一门槛**即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；② 定时与手动会前后脚重复反思 → 必须防抖。详见 `docs/self-layer-plan.md` §7.2。
+65. **自主模块二期（2026-09-14/15）**：反思流程（step-count 触发/成本入账/防抖）+ 判断→倾向（`StancePromoter` 纯函数 + `agent_stance` 表；**倾向只由程序提升**，模型只能记判断）+ FSRS 复查 + `selfJudge`/`selfDisagree` + 面板。**两个坑**：① 反例优先＝反例侧**独立达同一门槛**即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；② 定时与手动会前后脚重复反思 → 必须防抖。详见 `docs/self-layer-plan.md` §7.2。
+
+66. **自主模块三期①教训清单（v1.2.0）**：`agent_lesson`（V6）+ `selfLesson`/`selfLessonEdit`（14 个 self 工具）+ 面板清单与每周趋势；上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**两个坑**：① 反思会从**它自己刚写的教训**里再推一条同类（清单膨胀）→ 反思输入排除 REFLECT/LESSON；② 模型会**拒绝伪造教训**（让它记一件它没干过的事，它回「往我账上记没发生的错，我不干」）——这是设计要的。详见 `docs/self-layer-plan.md` §7.3。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -230,7 +232,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI**：push `main` 即构建+验签上传+部署+自检；供应链细节见坑 47/50。**09-13 GitHub 抽风过一轮（坑 56）。**
 - **仍未做**：⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。（③ 部署私钥降权、④ SearXNG 密钥出仓库已做）
-- **自主模块（一期+二期）09-15 上线，tag `v1.1.0`**：面板页签「它自己」、12 个 self 工具（启动日志 `12 个类 / 62 个工具`）、5 张新表；反思＝攒够 12 轮触发（防抖 30 分钟、每天最多 4 次）；生产 `.env` 已配 `MEMORY_SELF_OWNER_OPENID`。空表时提示词逐字节不变——**它先写东西才有存在感**。
+- **自主模块（一期+二期）09-15 上线，tag `v1.1.0`**：面板页签「它自己」、12 个 self 工具（62 工具）、5 张新表；反思＝攒够 12 轮触发（防抖 30 分钟、每天最多 4 次）；生产 `.env` 已配 `MEMORY_SELF_OWNER_OPENID`。空表时提示词逐字节不变——**它先写东西才有存在感**。
 - 本地：JAR 未跑、mysql/redis 容器已停；本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引

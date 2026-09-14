@@ -90,6 +90,15 @@ public class AdminPanelController {
                         column("content", "内容", true),
                         column("due", "截止", false),
                         column("status", "状态", false)), List.of()),
+                table("我的教训清单（它自己的可靠性）", "/api/admin/self/lessons", List.of(
+                        column("id", "#", false),
+                        column("category", "类别", false),
+                        column("what", "三段（做了什么/预期/实际）", true),
+                        column("correction", "以后怎么做", true),
+                        column("recurrence", "复现/干净复查", false),
+                        column("review", "复查（FSRS）", true),
+                        column("status", "状态", false)), List.of()),
+                bars("每周教训事件数（看趋势，不看绝对值）", "/api/admin/self/lesson-bars?weeks=8", "次"),
                 table("分歧（它跟你意见不同的记录）", "/api/admin/self/disagreements", List.of(
                         column("id", "#", false),
                         column("topic", "类别", false),

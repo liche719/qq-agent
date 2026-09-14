@@ -220,58 +220,7 @@ public final class StancePromoter {
     }
 
     // ------------------------------------------------------------ FSRS：复查时机与强度
-
-    /** 遗忘曲线 R(t,S)：t 天没碰、强度 S → 还能记住的概率 */
-    public static double retrievability(double days, double stability, double decay) {
-        if (stability <= 0) {
-            return 0;
-        }
-        double factor = factor(decay);
-        return Math.pow(1 + factor * Math.max(0, days) / stability, decay);
-    }
-
-    /** 由目标保留率反推间隔天数 I(r,S) */
-    public static double intervalDays(double targetRetention, double stability, double decay) {
-        double factor = factor(decay);
-        double interval = (Math.pow(targetRetention, 1 / decay) - 1) / factor * stability;
-        return Math.max(1, interval);
-    }
-
-    /** 复习成功：S 变长（越容易记得住、D 越小，长得越快）；D 微降 */
-    public static double stabilityOnSuccess(double stability, double difficulty) {
-        double base = Math.max(0.5, stability);
-        double grow = 1 + (11 - clampDifficulty(difficulty)) / 20.0;
-        return Math.min(3650, base * grow);
-    }
-
-    /** 又犯了同类错 / 被反例推翻：S 收缩、D 上升 */
-    public static double stabilityOnFailure(double stability) {
-        return Math.max(0.5, stability * 0.5);
-    }
-
-    public static double difficultyOnFailure(double difficulty) {
-        return Math.min(10, clampDifficulty(difficulty) + 1);
-    }
-
-    public static LocalDateTime nextReviewAt(LocalDateTime lastReview, double stability, double decay,
-                                             double targetRetention) {
-        LocalDateTime base = lastReview == null ? LocalDateTime.now() : lastReview;
-        long minutes = Math.round(intervalDays(targetRetention, stability, decay) * 1440);
-        return base.plusMinutes(Math.max(60, minutes));
-    }
-
-    private static double clampDifficulty(double difficulty) {
-        return Math.min(10, Math.max(1, difficulty));
-    }
-
-    private static double factor(double decay) {
-        // 文档里的 decay 是负数（FSRS6 默认 -0.1542）；传正数也认，0 当默认值
-        double safe = decay > 0 ? -decay : decay;
-        if (safe == 0) {
-            safe = -0.1542;
-        }
-        return Math.exp(Math.log(0.9) / safe) - 1;
-    }
+    // 公式已抽到 Fsrs（倾向与教训共用同一套数学），这里只留提升/修订规则。
 
     private static String normalize(String text) {
         return text == null ? "" : text.trim().toUpperCase(Locale.ROOT);

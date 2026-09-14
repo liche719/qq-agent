@@ -214,7 +214,7 @@ public class AgentLoop {
                                                         List<ContextTurn> history, String userText,
                                                         List<String> images, List<ExtractedDocument> documents) {
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(buildSystemPrompt(persona, coreSection, workSection, userId)));
+        messages.add(SystemMessage.from(buildSystemPrompt(persona, coreSection, workSection, userId, userText)));
         if (history != null) {
             for (ContextTurn turn : history) {
                 messages.add("assistant".equals(turn.role())
@@ -714,8 +714,9 @@ public class AgentLoop {
         return prompt.toString();
     }
 
-    private String buildSystemPrompt(String persona, String coreSection, String workSection, String userId) {
-        return AgentPromptBuilder.build(persona, promptSections(userId), coreSection, workSection,
+    private String buildSystemPrompt(String persona, String coreSection, String workSection, String userId,
+                                      String userText) {
+        return AgentPromptBuilder.build(persona, promptSections(userId, userText), coreSection, workSection,
                 toolRegistry.retryAttempts());
     }
 
@@ -725,13 +726,13 @@ public class AgentLoop {
      * <p>没有任何实现、或实现返回 null／空 → 返回空列表，**提示词与"没有插件"时逐字节一致**；
      * 插件抛异常也只记日志、不影响本轮对话（拔掉一个模块不该让机器人不能说话）。
      */
-    private List<PromptSection> promptSections(String userId) {
+    private List<PromptSection> promptSections(String userId, String userText) {
         if (promptSectionProviders == null) {
             return List.of();
         }
         try {
             return promptSectionProviders.orderedStream()
-                    .map(provider -> provider.section(userId))
+                    .map(provider -> provider.section(userId, userText))
                     .filter(section -> section != null && !section.isBlank())
                     .toList();
         } catch (RuntimeException exception) {
