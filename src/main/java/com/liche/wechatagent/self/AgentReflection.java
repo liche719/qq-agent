@@ -36,6 +36,10 @@ public class AgentReflection {
     @Column(nullable = false)
     private Integer level = 1;
 
+    /** 触发来源：step-count（攒够轮数）/ manual（手动或排障）/ compaction-event（本项目暂不支持） */
+    @Column(name = "trigger_type", length = 16)
+    private String triggerType;
+
     /** 证据链：这次反思读了哪几条 agent_self_event.id */
     @Column(name = "input_event_ids", length = 500)
     private String inputEventIds;
@@ -49,6 +53,25 @@ public class AgentReflection {
     /** 结论写回了哪个块（agent_self_block.id） */
     @Column(name = "written_back")
     private Long writtenBack;
+
+    /** 成本账（spec §4 的硬顶）：上次「归纳」翻车就是 20 次调用 / 18.9 万输出 token / 产出为零 */
+    @Column(nullable = false)
+    private Integer calls = 1;
+
+    @Column(name = "prompt_chars", nullable = false)
+    private Integer promptChars = 0;
+
+    @Column(name = "response_chars", nullable = false)
+    private Integer responseChars = 0;
+
+    @Column(name = "prompt_tokens", nullable = false)
+    private Integer promptTokens = 0;
+
+    @Column(name = "completion_tokens", nullable = false)
+    private Integer completionTokens = 0;
+
+    @Column(name = "duration_ms", nullable = false)
+    private Integer durationMs = 0;
 
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

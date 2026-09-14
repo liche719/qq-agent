@@ -1,25 +1,36 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.self.AgentCommitment;
+import com.liche.wechatagent.self.AgentReflection;
 import com.liche.wechatagent.self.AgentSelfBlock;
 import com.liche.wechatagent.self.AgentSelfEvent;
+import com.liche.wechatagent.self.AgentStance;
+import com.liche.wechatagent.self.SelfReflectionService;
 import com.liche.wechatagent.self.SelfService;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * 自主模块的**只读**面板接口（编辑一律走对话，见 docs/self-layer-spec.md §10）。
  *
- * <p>用途：让"它自己那一侧"可见。一期只给四块：状态条 / 块 / 事件流 / 承诺账。
+ * <p>用途：让"它自己那一侧"可见——块 / 时间线 / 承诺账 / **倾向（带证据区间）** /
+ * **反思与成本** / **分歧** / **每日变更量**。核心目的不是"看它的性格"，
+ * 而是让**它这轮看到了什么、花了多少、依据哪几条**都能点开查（spec §12）。
  */
 @RestController
 @RequestMapping("/api/admin/self")
@@ -29,20 +40,57 @@ public class AdminSelfController {
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     private final SelfService selfService;
+    private final SelfReflectionService reflectionService;
 
-    public AdminSelfController(SelfService selfService) {
+    public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService) {
         this.selfService = selfService;
+        this.reflectionService = reflectionService;
     }
 
-    /** 状态条：模块开没开、归属人配没配、有多少东西。 */
+    /**
+     * 排障入口：手动跑一次反思（spec §4 的「手动」档）。预算与重要度两道闸照常生效——
+     * 这个按钮是给"它到底会不会整合"用的，不是绕过规则的旁路。
+     */
+    @PostMapping("/reflect")
+    public Map<String, Object> reflectNow() {
+        String owner = selfService.owner();
+        if (owner == null) {
+            return Map.of("message", "自主模块未工作（" + selfService.inactiveReason() + "）");
+        }
+        SelfReflectionService.Outcome outcome = reflectionService.reflect(owner, "manual");
+        if (outcome.ran()) {
+            return Map.of("message", "反思完成 #" + outcome.reflectionId() + "：" + outcome.conclusion()
+                    + "｜倾向[" + outcome.stances() + "]｜承诺判欠 " + outcome.commitmentsBroken()
+                    + " 条｜tokens " + outcome.promptTokens() + "/" + outcome.completionTokens());
+        }
+        String extra = outcome.stances().touched() ? "；倾向维护跑了[" + outcome.stances() + "]" : "";
+        return Map.of("message", "这次没反思：" + outcome.reason() + extra);
+    }
+
+    /** 状态条：模块开没开、有多少东西、今天花了多少、有没有该复查的倾向。 */
     @GetMapping("/overview")
     public Map<String, Object> overview() {
+        LocalDateTime now = LocalDateTime.now();
         List<Map<String, Object>> rows = new ArrayList<>();
         rows.add(row("模块状态", selfService.isActive() ? "工作中" : "未工作（" + selfService.inactiveReason() + "）"));
         List<AgentSelfBlock> blocks = selfService.blocks();
-        List<AgentCommitment> open = selfService.openCommitments();
         rows.add(row("自己的块", blocks.isEmpty() ? "（空）" : blocks.size() + " 个"));
-        rows.add(row("未结承诺", String.valueOf(open.size())));
+        long activeStances = selfService.countActiveStances();
+        int dueStances = selfService.dueStances(now).size();
+        rows.add(row("活跃倾向", activeStances + " 条"
+                + (dueStances == 0 ? "" : "（" + dueStances + " 条该复查了）")));
+        rows.add(row("未结承诺", String.valueOf(selfService.openCommitments().size())));
+        List<AgentReflection> today = selfService.recentReflections(50).stream()
+                .filter(reflection -> reflection.getCreatedAt() != null
+                        && !reflection.getCreatedAt().isBefore(LocalDate.now().atStartOfDay()))
+                .toList();
+        rows.add(row("今天反思", today.isEmpty() ? "还没跑" : today.size() + " 次 / "
+                + today.stream().mapToInt(this::tokensOf).sum() + " tokens"));
+        rows.add(row("分歧（近 7 天）", disagreements(now).size() + " 次"));
+        selfService.lastReflection().ifPresent(reflection ->
+                rows.add(row("上次反思", (reflection.getCreatedAt() == null ? "—"
+                        : humanize(Duration.between(reflection.getCreatedAt(), now)) + "：")
+                        + clip(reflection.getConclusion(), 80))));
         rows.add(row("最近事件", selfService.recentEvents(20).size() + " 条（面板最多显示 200）"));
         Duration since = selfService.sinceLastEvent();
         rows.add(row("距上次动自己这边", since == null ? "还没有记录" : humanize(since)));
@@ -95,6 +143,184 @@ public class AdminSelfController {
             rows.add(row);
         }
         return Map.of("rows", rows);
+    }
+
+    /** 倾向（S）：**每条都能点开看证据区间**——这是"它凭什么这么说"的入口。 */
+    @GetMapping("/stances")
+    public Map<String, Object> stances() {
+        LocalDateTime now = LocalDateTime.now();
+        Set<Long> due = selfService.dueStances(now).stream().map(AgentStance::getId).collect(Collectors.toSet());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentStance stance : selfService.activeStances()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("content", stance.getContent());
+            row.put("topic", stance.getTopic() + " / " + stance.getDirection());
+            row.put("evidence", "支撑 " + stance.getSupportCount() + "（event "
+                    + dash(stance.getEvidenceIds()) + "）｜反例 " + stance.getCounterCount()
+                    + (stance.getCounterCount() != null && stance.getCounterCount() > 0
+                    ? "（event " + dash(stance.getCounterIds()) + "）" : ""));
+            row.put("revised", "改过 " + stance.getReviseCount() + " 次");
+            row.put("review", (due.contains(stance.getId()) ? "「该复查了」｜" : "")
+                    + "S=" + round(stance.getStability()) + " D=" + round(stance.getDifficulty())
+                    + "｜上次 " + stamp(stance.getLastReviewAt()) + "｜下次 " + stamp(stance.getNextReviewAt()));
+            row.put("formedAt", stamp(stance.getFormedAt()));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 反思与成本：每次读了哪几条事件、得出什么结论、花了多少（防止"20 次调用、产出为零"重演）。 */
+    @GetMapping("/reflections")
+    public Map<String, Object> reflections(@RequestParam(defaultValue = "20") int limit) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentReflection reflection : selfService.recentReflections(limit)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + reflection.getId());
+            row.put("trigger", reflection.getTriggerType() == null ? "—" : reflection.getTriggerType());
+            row.put("conclusion", reflection.getConclusion());
+            row.put("evidence", "读了 " + countIds(reflection.getInputEventIds()) + " 条（"
+                    + dash(reflection.getInputEventIds()) + "）");
+            row.put("cost", reflection.getCalls() + " 次调用｜" + tokensOf(reflection) + " tokens｜"
+                    + reflection.getDurationMs() + " ms");
+            row.put("createdAt", reflection.getCreatedAt() == null ? "—" : reflection.getCreatedAt().format(STAMP));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 分歧：它跟你意见不同的记录（§6 观察指标的**唯一来源**）。 */
+    @GetMapping("/disagreements")
+    public Map<String, Object> disagreements() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<AgentSelfEvent> recent = selfService.recentEvents(200).stream()
+                .filter(event -> AgentSelfEvent.KIND_DISAGREE.equals(event.getKind()))
+                .limit(20)
+                .toList();
+        for (AgentSelfEvent event : recent) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + event.getId());
+            row.put("topic", (event.getTopic() == null ? "—" : event.getTopic())
+                    + (event.getStance() == null ? "" : " / " + event.getStance()));
+            row.put("content", event.getContent());
+            row.put("outcome", persuaded(event) ? "后来改口了（近似）" : "还这么看");
+            row.put("createdAt", event.getCreatedAt() == null ? "—" : event.getCreatedAt().format(STAMP));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 每日变更量（近 N 天）：它自己那侧每天被改了多少处——"看出它在长"的粗曲线。 */
+    @GetMapping("/changelog-bars")
+    public Map<String, Object> changelogBars(@RequestParam(defaultValue = "14") int days) {
+        int window = Math.min(60, Math.max(1, days));
+        LocalDateTime since = LocalDate.now().minusDays(window - 1L).atStartOfDay();
+        Map<LocalDate, Integer> perDay = new TreeMap<>();
+        for (int index = 0; index < window; index++) {
+            perDay.put(LocalDate.now().minusDays(index), 0);
+        }
+        for (AgentSelfEvent event : selfService.eventsSince(since)) {
+            if (event.getCreatedAt() == null || AgentSelfEvent.KIND_REFLECT.equals(event.getKind())) {
+                continue;
+            }
+            perDay.merge(event.getCreatedAt().toLocalDate(), 1, Integer::sum);
+        }
+        List<Map<String, Object>> items = perDay.entrySet().stream()
+                .map(entry -> item(entry.getKey().format(DAY).substring(5), entry.getValue()))
+                .toList();
+        return Map.of("items", items);
+    }
+
+    /** 每天在"自己的事"上花的 token（近 N 天）。 */
+    @GetMapping("/cost-bars")
+    public Map<String, Object> costBars(@RequestParam(defaultValue = "14") int days) {
+        int window = Math.min(60, Math.max(1, days));
+        LocalDate from = LocalDate.now().minusDays(window - 1L);
+        Map<LocalDate, Integer> perDay = new TreeMap<>();
+        for (int index = 0; index < window; index++) {
+            perDay.put(LocalDate.now().minusDays(index), 0);
+        }
+        for (AgentReflection reflection : selfService.recentReflections(50)) {
+            if (reflection.getCreatedAt() == null) {
+                continue;
+            }
+            LocalDate day = reflection.getCreatedAt().toLocalDate();
+            if (day.isBefore(from)) {
+                continue;
+            }
+            perDay.merge(day, tokensOf(reflection), Integer::sum);
+        }
+        List<Map<String, Object>> items = perDay.entrySet().stream()
+                .map(entry -> item(entry.getKey().format(DAY).substring(5), entry.getValue()))
+                .toList();
+        return Map.of("items", items);
+    }
+
+    // ---------------------------------------------------------------- 内部
+
+    /** 近 7 天的分歧（overview 用它报次数） */
+    private List<AgentSelfEvent> disagreements(LocalDateTime now) {
+        LocalDateTime weekAgo = now.minusDays(7);
+        return selfService.recentEvents(200).stream()
+                .filter(event -> AgentSelfEvent.KIND_DISAGREE.equals(event.getKind()))
+                .filter(event -> event.getCreatedAt() != null && event.getCreatedAt().isAfter(weekAgo))
+                .toList();
+    }
+
+    /**
+     * 有没有"改口"（**近似**）：分歧之后，同一类别出现了**方向不同**的判断。
+     * 这只是旁证——真正推翻倾向要走证据（spec §5/§10），面板如实标"近似"。
+     */
+    private boolean persuaded(AgentSelfEvent disagree) {
+        if (disagree.getTopic() == null || disagree.getCreatedAt() == null) {
+            return false;
+        }
+        return selfService.judgesFor(disagree.getTopic()).stream()
+                .filter(judge -> judge.getCreatedAt() != null && judge.getCreatedAt().isAfter(disagree.getCreatedAt()))
+                .anyMatch(judge -> judge.getStance() != null && disagree.getStance() != null
+                        && !judge.getStance().equalsIgnoreCase(disagree.getStance()));
+    }
+
+    private int tokensOf(AgentReflection reflection) {
+        int prompt = reflection.getPromptTokens() == null ? 0 : reflection.getPromptTokens();
+        int completion = reflection.getCompletionTokens() == null ? 0 : reflection.getCompletionTokens();
+        return prompt + completion;
+    }
+
+    private int countIds(String ids) {
+        if (ids == null || ids.isBlank()) {
+            return 0;
+        }
+        return ids.split(",").length;
+    }
+
+    private String dash(String text) {
+        return text == null || text.isBlank() ? "—" : text;
+    }
+
+    private String stamp(LocalDateTime time) {
+        return time == null ? "—" : time.format(STAMP);
+    }
+
+    private double round(Double value) {
+        if (value == null) {
+            return 0;
+        }
+        return Math.round(value * 10) / 10.0;
+    }
+
+    private String clip(String text, int max) {
+        if (text == null) {
+            return "—";
+        }
+        String trimmed = text.trim().replace('\n', ' ');
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
+    }
+
+    private Map<String, Object> item(String label, int value) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("label", label);
+        item.put("value", value);
+        return item;
     }
 
     private Map<String, Object> row(String label, String value) {

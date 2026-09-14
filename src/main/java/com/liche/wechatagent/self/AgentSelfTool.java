@@ -150,6 +150,40 @@ public class AgentSelfTool implements AgentToolProvider {
         }
     }
 
+    // ---------------------------------------------------------------- 判断与分歧（二期）
+
+    @Tool(value = "记一条你自己的判断——这是「我一贯怎么看」的原料。"
+            + "同一类事要用**同一个 topic 词**（例如「学习安排」「该不该答应」），同一个主张要用**同一个 direction 词**"
+            + "（例如「要有记录」「先做再说」）。程序会在同类同方向攒够 ≥3 次、跨 ≥2 天、跨 ≥2 个情境之后，"
+            + "自动把它提升成倾向——**你自己不能直接写倾向**，也不能自己宣布「我一贯如此」。"
+            + "content 写清这次的判断本身。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfJudge(String topic, String direction, String content, String evidence) {
+        try {
+            AgentSelfEvent event = selfService.recordJudge(topic, direction, content, evidence);
+            return ToolBusinessResult.success("记下了（event #" + event.getId() + "，类别「" + event.getTopic()
+                    + "」方向「" + event.getStance() + "」）。同类同方向攒够证据才会变成倾向。");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
+
+    @Tool(value = "记一次**分歧**：你的主张和机主的不一样（默认只讲一次，不反复唠叨）。"
+            + "content 要写清「我主张什么、他主张什么、为什么」。这不是拒绝执行——他的指令照做，"
+            + "它只是把这次不同意见记在账上；他明确说「就这样办」就是终局。"
+            + "涉及**他自己**的事（他的安排、他的偏好）只记不说重话；只有你自己的事才允许坚持。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfDisagree(String topic, String direction, String content, String evidence) {
+        try {
+            AgentSelfEvent event = selfService.recordDisagree(topic, direction, content, evidence);
+            return ToolBusinessResult.success("记下了（event #" + event.getId() + "）。同类事再说一次时可以提一句「我上次也反对过」。");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
+
     // ---------------------------------------------------------------- 自己的目标与账
 
     @Tool(value = "给你自己立一个目标（写进「我现在在做」，并记一条带证据的事件）。"

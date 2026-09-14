@@ -72,24 +72,60 @@ public class AdminPanelController {
         tab.put("kind", "descriptor");
         tab.put("sections", List.of(
                 section("info", "状态", "/api/admin/self/overview", null),
+                table("倾向（它一贯的样子）", "/api/admin/self/stances", List.of(
+                        column("content", "倾向", true),
+                        column("topic", "类别 / 方向", false),
+                        column("evidence", "证据区间", true),
+                        column("revised", "修订", false),
+                        column("review", "复查（FSRS）", true),
+                        column("formedAt", "形成于", false)), List.of()),
                 table("它自己的块", "/api/admin/self/blocks", List.of(
                         column("type", "类型", false),
                         column("usage", "用量", false),
                         column("version", "版本", false),
                         column("updatedAt", "最后修改", false),
                         column("value", "内容", true)), List.of()),
+                table("我欠着", "/api/admin/self/commitments", List.of(
+                        column("id", "#", false),
+                        column("content", "内容", true),
+                        column("due", "截止", false),
+                        column("status", "状态", false)), List.of()),
+                table("分歧（它跟你意见不同的记录）", "/api/admin/self/disagreements", List.of(
+                        column("id", "#", false),
+                        column("topic", "类别", false),
+                        column("content", "它主张什么", true),
+                        column("outcome", "后来", false),
+                        column("createdAt", "时间", false)), List.of()),
+                table("反思与成本", "/api/admin/self/reflections?limit=20", List.of(
+                        column("id", "#", false),
+                        column("trigger", "触发", false),
+                        column("conclusion", "它整合出的结论", true),
+                        column("evidence", "读了哪几条", true),
+                        column("cost", "成本", false),
+                        column("createdAt", "时间", false)), List.of()),
+                bars("每日变更量（近 14 天）", "/api/admin/self/changelog-bars?days=14", "处"),
+                bars("反思花掉的 tokens（近 14 天）", "/api/admin/self/cost-bars?days=14", "tokens"),
                 table("时间线", "/api/admin/self/events?limit=50", List.of(
                         column("id", "#", false),
                         column("kind", "类型", false),
                         column("content", "内容", true),
                         column("evidence", "证据", false),
                         column("createdAt", "时间", false)), List.of()),
-                table("我欠着", "/api/admin/self/commitments", List.of(
-                        column("id", "#", false),
-                        column("content", "内容", true),
-                        column("due", "截止", false),
-                        column("status", "状态", false)), List.of())));
+                selfActions()));
         return tab;
+    }
+
+    /**
+     * 「它自己」页签的操作：**只有排障用的手动触发**。
+     * 编辑它的状态一律走对话（spec §10：单一通道，避免"面板改了它不知道"的两套真相）。
+     */
+    private Map<String, Object> selfActions() {
+        Map<String, Object> section = new LinkedHashMap<>();
+        section.put("kind", "actions");
+        section.put("title", "排障");
+        section.put("actions", List.of(
+                action("立即反思一次", "/api/admin/self/reflect", "现在跑一次反思？会花一次模型调用（预算照常生效）。", null)));
+        return section;
     }
 
     /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */

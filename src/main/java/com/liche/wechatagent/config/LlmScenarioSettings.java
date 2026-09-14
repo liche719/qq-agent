@@ -18,16 +18,25 @@ public class LlmScenarioSettings {
 
     /** 默认温度 0 的场景：只要结构化输出正确，不需要发散 */
     private static final Set<LlmScenario> DEFAULT_ZERO_TEMPERATURE = EnumSet.of(
-            LlmScenario.EXTRACT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE, LlmScenario.ARCHIVE);
+            LlmScenario.EXTRACT, LlmScenario.REFLECT, LlmScenario.REMINDER_PARSE, LlmScenario.SCHEDULE_PARSE,
+            LlmScenario.ARCHIVE);
 
     private final Set<LlmScenario> zeroTemperature;
     private final int structuredMaxTokens;
+    private final int reflectMaxTokens;
     private final int dialogMaxTokens;
     private final int dialogDeepMaxTokens;
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
                                int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens) {
+        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, 16384);
+    }
+
+    public LlmScenarioSettings(String zeroTemperatureScenarios,
+                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
+                               int reflectMaxTokens) {
         this.structuredMaxTokens = Math.max(0, structuredMaxTokens);
+        this.reflectMaxTokens = Math.max(0, reflectMaxTokens);
         this.dialogMaxTokens = Math.max(0, dialogMaxTokens);
         this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
         this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_ZERO_TEMPERATURE);
@@ -48,6 +57,10 @@ public class LlmScenarioSettings {
         if (scenario == LlmScenario.DIALOG) {
             // 对话档默认不设上限：思考 token 也算进 max_tokens，加了会截断正常长回复
             return dialogMaxTokens;
+        }
+        if (scenario == LlmScenario.REFLECT) {
+            // 反思：输出很短但**思考很重**，所以给比结构化档宽松得多的上限（实测 4096 会被思考吃满）
+            return reflectMaxTokens;
         }
         return structuredMaxTokens;
     }

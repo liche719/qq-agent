@@ -24,6 +24,15 @@ public enum LlmScenario {
     DIALOG_DEEP,
     /** 记忆提取 */
     EXTRACT,
+    /**
+     * 自主模块的反思（后台整合）。
+     *
+     * <p>**为什么要单独一档**：实测把它挂在 {@code EXTRACT} 上会整条失败——
+     * 这个模型默认深度思考，而思考 token 也算进 max_tokens，
+     * 结构化档默认 4096 会被思考**吃满**（日志 {@code promptTokens=420 completionTokens=4096 reasoningTokens=4096}），
+     * 正文为空 → 反思什么都写不出来。所以反思单独给更宽松的上限。
+     */
+    REFLECT,
     /** 提醒解析 */
     REMINDER_PARSE,
     /** 定时任务解析（自然语言 → cron） */

@@ -41,6 +41,10 @@ public class AgentSelfEvent {
     /** 与用户意见相左（默认只讲一次，记一笔） */
     public static final String KIND_DISAGREE = "DISAGREE";
     public static final String KIND_REFLECT = "REFLECT";
+    /** 倾向形成 / 修订 / 退役：**由程序按规则写**（spec §5），模型没有直接写倾向的工具 */
+    public static final String KIND_STANCE_FORMED = "STANCE_FORMED";
+    public static final String KIND_STANCE_REVISED = "STANCE_REVISED";
+    public static final String KIND_STANCE_RETIRED = "STANCE_RETIRED";
     public static final String KIND_NOTE = "NOTE";
 
     @Id

@@ -7,9 +7,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -38,13 +40,16 @@ public class SelfLoader implements PromptSectionProvider {
     private final SelfService selfService;
     private final int maxChars;
     private final int maxCommitmentsInPrompt;
+    private final int maxStancesInPrompt;
 
     public SelfLoader(SelfService selfService,
                       @Value("${memory.self-max-chars:800}") int maxChars,
-                      @Value("${memory.self-max-commitments-in-prompt:5}") int maxCommitmentsInPrompt) {
+                      @Value("${memory.self-max-commitments-in-prompt:5}") int maxCommitmentsInPrompt,
+                      @Value("${memory.self-max-stances-in-prompt:5}") int maxStancesInPrompt) {
         this.selfService = selfService;
         this.maxChars = Math.max(120, maxChars);
         this.maxCommitmentsInPrompt = Math.max(1, maxCommitmentsInPrompt);
+        this.maxStancesInPrompt = Math.max(1, maxStancesInPrompt);
     }
 
     @Override
@@ -54,7 +59,8 @@ public class SelfLoader implements PromptSectionProvider {
         }
         List<AgentSelfBlock> blocks = selfService.blocks();
         List<AgentCommitment> open = selfService.openCommitments();
-        if (blocks.isEmpty() && open.isEmpty()) {
+        List<AgentStance> stances = selfService.activeStances();
+        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty()) {
             return null;
         }
         Map<String, AgentSelfBlock> byType = blocks.stream()
@@ -64,7 +70,7 @@ public class SelfLoader implements PromptSectionProvider {
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PERSONA), "我是谁");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_TASK), "我现在在做");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PROJECT), "我长期在做");
-        appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_STANCE), "我一贯的样子");
+        appendStances(body, stances);
         appendCommitments(body, open);
         appendTimeSense(body);
 
@@ -84,6 +90,30 @@ public class SelfLoader implements PromptSectionProvider {
             return;
         }
         body.append(label).append('：').append(block.getValue().trim()).append('\n');
+    }
+
+    /**
+     * 倾向从 {@code agent_stance} 渲染（那张表才是事实源，块只是投影）。
+     * 到点该复查的标一句——复查时机是 FSRS 由 {@code R(t,S)} 反推出来的，不是拍脑袋定的天数。
+     */
+    private void appendStances(StringBuilder body, List<AgentStance> stances) {
+        if (stances.isEmpty()) {
+            return;
+        }
+        Set<Long> due = selfService.dueStances(LocalDateTime.now()).stream()
+                .map(AgentStance::getId)
+                .collect(Collectors.toSet());
+        body.append("我一贯的样子：\n");
+        stances.stream().limit(maxStancesInPrompt).forEach(stance -> {
+            if (stance.getContent() == null || stance.getContent().isBlank()) {
+                return;
+            }
+            body.append("· ").append(stance.getContent().trim());
+            if (due.contains(stance.getId())) {
+                body.append("（这条该复查了：回头看看还成不成立）");
+            }
+            body.append('\n');
+        });
     }
 
     private void appendCommitments(StringBuilder body, List<AgentCommitment> open) {

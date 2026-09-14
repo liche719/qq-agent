@@ -61,9 +61,12 @@ services:
       LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-5}
       # 深度思考不再按场景开关（2026-09-14 整块删除，全部场景都用模型默认思考），所以没有 LLM_THINKING_* 了
       # 注意：这里是**非空默认值**，它会整体覆盖代码里的默认集合——加新场景必须两处一起改
-      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reminder_parse,schedule_parse,archive}
+      # ⚠️ 这个非空默认值会**整体覆盖**代码里的默认集合（坑 61）：加了新场景必须同时改这里
+      LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reflect,reminder_parse,schedule_parse,archive}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-4096}
+      # 反思单独一档：输出只有一句话、思考很重（4096 会被思考吃满 → 整条反思作废）
+      LLM_MAX_TOKENS_REFLECT: ${LLM_MAX_TOKENS_REFLECT:-16384}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
       LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
       # thinkDeeper（模型自己申请升档）的预算与额度
@@ -97,6 +100,13 @@ services:
       MEMORY_SELF_BLOCK_CHAR_LIMIT: ${MEMORY_SELF_BLOCK_CHAR_LIMIT:-1200}
       MEMORY_SELF_MAX_COMMITMENTS: ${MEMORY_SELF_MAX_COMMITMENTS:-20}
       MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT: ${MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT:-5}
+      # 二期（反思与倾向）：只透传运维真要调的；其余键只吃 application.yml 的默认值
+      MEMORY_SELF_REFLECT_MODE: ${MEMORY_SELF_REFLECT_MODE:-step-count}
+      MEMORY_SELF_REFLECT_TURNS: ${MEMORY_SELF_REFLECT_TURNS:-12}
+      MEMORY_SELF_REFLECT_DAILY_CALL_LIMIT: ${MEMORY_SELF_REFLECT_DAILY_CALL_LIMIT:-4}
+      MEMORY_SELF_REFLECT_MIN_INTERVAL_MINUTES: ${MEMORY_SELF_REFLECT_MIN_INTERVAL_MINUTES:-30}
+      MEMORY_SELF_STANCE_MAX_ACTIVE: ${MEMORY_SELF_STANCE_MAX_ACTIVE:-5}
+      MEMORY_SELF_STANCE_THRESHOLD: ${MEMORY_SELF_STANCE_THRESHOLD:-1.2}
       # QQ REST 超时：平时不用改，但**验证"超时不再重复发消息"必须能改**（同坑 36/46：
       # 不透传就没法在不改代码、不重新构建的前提下造出"结果未知"的发送失败）
       QQ_API_CONNECT_TIMEOUT_SECONDS: ${QQ_API_CONNECT_TIMEOUT_SECONDS:-5}

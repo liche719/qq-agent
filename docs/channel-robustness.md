@@ -73,3 +73,19 @@ Redis 异常不影响发消息（只记一条 WARN，面板显示"不可用"）�
 （`ss -tnp` 里就见过 `14.29.51.120`），于是"掐了网却照样发得出去"，白做一轮测试。要造断网就
 **掐全部出站 443**（`iptables -I OUTPUT -p tcp --dport 443 -j DROP`，SSH 与面板入站不受影响），
 照旧先安排兜底删除、事后查 `iptables -S OUTPUT | grep DROP`（三次测试都清干净了）。
+
+### 造"半开连接"的正确姿势（从 AGENTS.md 坑 51 搬来，2026-09-15）
+
+半开连接时 OkHttp 的 `onFailure`/`onClosed` **都不会回调**，所以只有自愈能救；但"有没有触发自愈"必须实测。
+造法：**只掐那条长连接的入站**（动了 TCP 才会走 `onFailure`）：
+
+1. `ss -tnp state established | grep -i java | grep ':443'` 取本地端口。
+   **必须 `grep -vE '^443$'` 排掉 443**——那是面板的入站端口。我漏了这一步，
+   一条 `DROP` 把**面板从外部整个封了**（出事后第一件事是 `iptables -S INPUT | grep DROP` 看残留，不是先看日志）。
+2. `iptables -I INPUT -p tcp --dport <端口> -j DROP`。
+3. 判据：`lastGatewayEventAt` 连续 45 秒不推进才算造成功（网关是多 IP CDN，单个 IP 不算数）。
+4. `ss` 里的 `[::ffff:1.2.3.4]` 不能直接喂 iptables，先剥出四段点分。
+
+**纪律**：这类测试用 `setsid nohup` 跑后台（`ssh "bash -s"` 的 stdin 脚本一旦 SSH 断开就可能被带走，
+`trap` 清理不保证执行），并**先写好独立的延时兜底清理**。
+**状态**：误判已排除（30+ 分钟无 `半开连接` 日志）；**"触发"那一步仍未实测到**（两次都没稳定造出静默条件）。

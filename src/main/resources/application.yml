@@ -72,14 +72,16 @@ llm:
   # 深度思考**不再按场景开关**（2026-09-14 按用户要求整块删除：全部场景都用模型默认的思考）。
   # 原实现与实测数据保留在 docs/llm-call-modes.md（结论：这个模型默认就在思考，唯一有效的关闭方式是
   # thinking:{"type":"disabled"}；只有对话省电档能省到用户的等待时间，其余场景省的只是后台 token）。
-  # 场景见 LlmScenario：dialog / dialog_deep / extract / reminder_parse / schedule_parse / archive
+  # 场景见 LlmScenario：dialog / dialog_deep / extract / reflect / reminder_parse / schedule_parse / archive
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
-  # （extract,reminder_parse,schedule_parse,archive）
-  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reminder_parse,schedule_parse,archive}
+  # （extract,reflect,reminder_parse,schedule_parse,archive）
+  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse,archive}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
+  # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。
   max-tokens:
     structured: ${LLM_MAX_TOKENS_STRUCTURED:4096}
+    reflect: ${LLM_MAX_TOKENS_REFLECT:16384}
     dialog: ${LLM_MAX_TOKENS_DIALOG:0}
     dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
 
@@ -295,6 +297,28 @@ memory:
   self-block-char-limit: ${MEMORY_SELF_BLOCK_CHAR_LIMIT:1200}
   self-max-commitments: ${MEMORY_SELF_MAX_COMMITMENTS:20}
   self-max-commitments-in-prompt: ${MEMORY_SELF_MAX_COMMITMENTS_IN_PROMPT:5}
+  # 二期：反思（触发不是"每晚一次"；step-count = 攒够多少轮机主消息才跑一次）
+  self-reflect-mode: ${MEMORY_SELF_REFLECT_MODE:step-count}
+  self-reflect-turns: ${MEMORY_SELF_REFLECT_TURNS:12}
+  self-reflect-check-cron: ${MEMORY_SELF_REFLECT_CHECK_CRON:0 */10 * * * *}
+  self-reflect-daily-call-limit: ${MEMORY_SELF_REFLECT_DAILY_CALL_LIMIT:4}
+  self-reflect-min-importance: ${MEMORY_SELF_REFLECT_MIN_IMPORTANCE:2}
+  self-reflect-max-input-events: ${MEMORY_SELF_REFLECT_MAX_INPUT_EVENTS:40}
+  self-reflect-max-prompt-chars: ${MEMORY_SELF_REFLECT_MAX_PROMPT_CHARS:6000}
+  # 防抖：定时任务与手动触发可能前后脚到，别对同一批内容重复花调用（spec §13.2 要求的"最小反思间隔"）
+  self-reflect-min-interval-minutes: ${MEMORY_SELF_REFLECT_MIN_INTERVAL_MINUTES:30}
+  # 二期：判断→倾向（全部是规则；这些是"留空参数"，数据够了再调）
+  self-stance-min-evidence: ${MEMORY_SELF_STANCE_MIN_EVIDENCE:3}
+  self-stance-min-days: ${MEMORY_SELF_STANCE_MIN_DAYS:2}
+  self-stance-min-contexts: ${MEMORY_SELF_STANCE_MIN_CONTEXTS:2}
+  self-stance-threshold: ${MEMORY_SELF_STANCE_THRESHOLD:1.2}
+  self-stance-max-active: ${MEMORY_SELF_STANCE_MAX_ACTIVE:5}
+  self-stance-half-life-days: ${MEMORY_SELF_STANCE_HALF_LIFE_DAYS:30}
+  self-stance-stale-days: ${MEMORY_SELF_STANCE_STALE_DAYS:60}
+  self-max-stances-in-prompt: ${MEMORY_SELF_MAX_STANCES_IN_PROMPT:5}
+  # 复查时机：FSRS v6 的幂律遗忘曲线（decay 默认 -0.1542），由 R(t,S) 掉到目标保留率反推
+  self-fsrs-decay: ${MEMORY_SELF_FSRS_DECAY:-0.1542}
+  self-review-target: ${MEMORY_SELF_REVIEW_TARGET:0.8}
   # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
   history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
   conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}

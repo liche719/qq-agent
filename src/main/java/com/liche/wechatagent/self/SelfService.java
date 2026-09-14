@@ -2,14 +2,21 @@ package com.liche.wechatagent.self;
 
 import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 自主模块的**唯一写入入口**。
@@ -26,6 +33,8 @@ import java.util.Optional;
 @Service
 public class SelfService {
 
+    private static final Logger log = LoggerFactory.getLogger(SelfService.class);
+
     /** 证据前缀：对话记录 */
     public static final String EVIDENCE_CONVERSATION = "conv:";
     /** 证据前缀：自主模块自己的事件 */
@@ -34,28 +43,48 @@ public class SelfService {
     private final AgentSelfBlockRepository blockRepository;
     private final AgentSelfEventRepository eventRepository;
     private final AgentCommitmentRepository commitmentRepository;
+    private final AgentStanceRepository stanceRepository;
+    private final AgentReflectionRepository reflectionRepository;
     private final ConversationMemoryRepository conversationMemoryRepository;
     private final boolean enabled;
     private final String ownerOpenId;
     private final int defaultBlockCharLimit;
     private final int maxOpenCommitments;
+    private final int maxActiveStances;
+    private final double decay;
+    private final double reviewTarget;
 
     public SelfService(AgentSelfBlockRepository blockRepository,
                        AgentSelfEventRepository eventRepository,
                        AgentCommitmentRepository commitmentRepository,
+                       AgentStanceRepository stanceRepository,
+                       AgentReflectionRepository reflectionRepository,
                        ConversationMemoryRepository conversationMemoryRepository,
                        @Value("${memory.self-enabled:true}") boolean enabled,
                        @Value("${memory.self-owner-openid:}") String ownerOpenId,
                        @Value("${memory.self-block-char-limit:1200}") int defaultBlockCharLimit,
-                       @Value("${memory.self-max-commitments:20}") int maxOpenCommitments) {
+                       @Value("${memory.self-max-commitments:20}") int maxOpenCommitments,
+                       @Value("${memory.self-stance-max-active:5}") int maxActiveStances,
+                       @Value("${memory.self-fsrs-decay:-0.1542}") double decay,
+                       @Value("${memory.self-review-target:0.8}") double reviewTarget) {
         this.blockRepository = blockRepository;
         this.eventRepository = eventRepository;
         this.commitmentRepository = commitmentRepository;
+        this.stanceRepository = stanceRepository;
+        this.reflectionRepository = reflectionRepository;
         this.conversationMemoryRepository = conversationMemoryRepository;
         this.enabled = enabled;
         this.ownerOpenId = ownerOpenId == null ? "" : ownerOpenId.trim();
         this.defaultBlockCharLimit = Math.max(100, defaultBlockCharLimit);
         this.maxOpenCommitments = Math.max(1, maxOpenCommitments);
+        this.maxActiveStances = Math.max(1, maxActiveStances);
+        this.decay = decay > 0 ? -decay : (decay == 0 ? -0.1542 : decay);
+        this.reviewTarget = Math.min(0.98, Math.max(0.5, reviewTarget));
+    }
+
+    /** 归属人（模块没配归属人时返回 null）——反思定时任务要用它 */
+    public String owner() {
+        return ownerOpenId.isBlank() ? null : ownerOpenId;
     }
 
     /** 模块是否处于工作状态：开关打开 **且** 配了归属人。 */
@@ -247,7 +276,7 @@ public class SelfService {
         }
         LocalDateTime now = LocalDateTime.now();
         AgentCommitment commitment = new AgentCommitment();
-        commitment.setContent(content.trim());
+        commitment.setContent(clip(content, 500));
         commitment.setDueAt(dueAt);
         commitment.setStatus(AgentCommitment.STATUS_OPEN);
         commitment.setEvidence(evidence.trim());
@@ -277,6 +306,383 @@ public class SelfService {
         appendEvent(AgentSelfEvent.KIND_COMMIT_RESOLVED, "「" + abbreviate(commitment.getContent()) + "」→ " + normalized,
                 evidence, null, null, normalized.equals(AgentCommitment.STATUS_KEPT) ? 2 : 5);
         return saved;
+    }
+
+    // ---------------------------------------------------------------- 二期：判断 → 倾向
+
+    /** 记一条判断——倾向的原料。topic 是类别（归不了类就不算），direction 是方向。 */
+    @Transactional
+    public AgentSelfEvent recordJudge(String topic, String direction, String content, String evidence) {
+        requireEvidence(evidence);
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("判断内容不能为空");
+        }
+        String normalizedTopic = clip(topic, 60);
+        if (normalizedTopic.isEmpty()) {
+            throw new IllegalArgumentException("判断必须带类别 topic（例如「学习安排」「该不该答应」），否则归不了类");
+        }
+        String normalizedDirection = clip(direction, 16);
+        return appendEvent(AgentSelfEvent.KIND_JUDGE, content, evidence, normalizedTopic,
+                normalizedDirection.isEmpty() ? "NEUTRAL" : normalizedDirection, 2);
+    }
+
+    /** 记一次分歧：它的意见和用户的不一样（默认只讲一次，记一笔；spec §6 档 1）。 */
+    @Transactional
+    public AgentSelfEvent recordDisagree(String topic, String direction, String content, String evidence) {
+        requireEvidence(evidence);
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("分歧要写清「我主张什么、他主张什么」");
+        }
+        String normalizedTopic = clip(topic, 60);
+        if (normalizedTopic.isEmpty()) {
+            throw new IllegalArgumentException("分歧必须带类别 topic");
+        }
+        return appendEvent(AgentSelfEvent.KIND_DISAGREE, content, evidence, normalizedTopic,
+                clip(direction, 16), 3);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentSelfEvent> judgesFor(String topic) {
+        if (topic == null || topic.isBlank()) {
+            return List.of();
+        }
+        return eventRepository.findByKindAndTopicIgnoreCaseOrderByIdAsc(AgentSelfEvent.KIND_JUDGE, topic.trim());
+    }
+
+    /** 有判断记录过的类别（最近 scan 条里出现的） */
+    @Transactional(readOnly = true)
+    public List<String> judgeTopics(int scan) {
+        List<AgentSelfEvent> recent = eventRepository.findByKindOrderByIdDesc(AgentSelfEvent.KIND_JUDGE,
+                PageRequest.of(0, Math.max(1, scan)));
+        LinkedHashSet<String> topics = new LinkedHashSet<>();
+        for (AgentSelfEvent event : recent) {
+            if (event.getTopic() != null && !event.getTopic().isBlank()) {
+                topics.add(event.getTopic().trim());
+            }
+        }
+        return new ArrayList<>(topics);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentStance> activeStances() {
+        return stanceRepository.findByStatusOrderByUpdatedAtDesc(AgentStance.STATUS_ACTIVE);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AgentStance> stanceFor(String topic) {
+        if (topic == null || topic.isBlank()) {
+            return Optional.empty();
+        }
+        return stanceRepository.findByTopicAndStatusOrderByIdDesc(topic.trim(), AgentStance.STATUS_ACTIVE)
+                .stream().findFirst();
+    }
+
+    /** 到点该复查的倾向（由 R(t,S) 掉到目标保留率反推出来的，不是拍脑袋的天数） */
+    @Transactional(readOnly = true)
+    public List<AgentStance> dueStances(LocalDateTime now) {
+        return stanceRepository.findByStatusAndNextReviewAtBeforeOrderByNextReviewAtAsc(AgentStance.STATUS_ACTIVE, now);
+    }
+
+    @Transactional(readOnly = true)
+    public long countActiveStances() {
+        return stanceRepository.countByStatus(AgentStance.STATUS_ACTIVE);
+    }
+
+    /** 立一条倾向——**只由程序按规则调用**（达到证据门槛时），模型没有这个工具。 */
+    @Transactional
+    public AgentStance promoteStance(String topic, String direction, String content, List<Long> evidenceIds,
+                                     List<Long> counterIds, String evidence) {
+        requireEvidence(evidence);
+        long active = countActiveStances();
+        if (active >= maxActiveStances) {
+            throw new IllegalArgumentException("活跃倾向已经有 " + active + " 条（上限 " + maxActiveStances
+                    + "）：先退役或合并一条再加");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        AgentStance stance = newStance(topic, direction, content, evidenceIds, counterIds, now);
+        AgentStance saved = stanceRepository.save(stance);
+        appendEvent(AgentSelfEvent.KIND_STANCE_FORMED,
+                "形成倾向（" + saved.getTopic() + "）：" + saved.getContent(), evidence,
+                saved.getTopic(), saved.getDirection(), 4);
+        return saved;
+    }
+
+    /** 修订：旧倾向留档（REVISED 不删），新倾向接替，修订次数 +1。 */
+    @Transactional
+    public AgentStance reviseStance(Long stanceId, String direction, String content, List<Long> evidenceIds,
+                                    List<Long> counterIds, String evidence) {
+        requireEvidence(evidence);
+        AgentStance old = stanceRepository.findById(stanceId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那条倾向：" + stanceId));
+        LocalDateTime now = LocalDateTime.now();
+        old.setStatus(AgentStance.STATUS_REVISED);
+        old.setUpdatedAt(now);
+        stanceRepository.save(old);
+
+        AgentStance next = newStance(old.getTopic(), direction, content, evidenceIds, counterIds, now);
+        // 修订本身是一次"学到了"：强度按复习成功增长，难度不变
+        next.setStability(StancePromoter.stabilityOnSuccess(old.getStability(), old.getDifficulty()));
+        next.setDifficulty(old.getDifficulty());
+        next.setReviseCount((old.getReviseCount() == null ? 0 : old.getReviseCount()) + 1);
+        AgentStance saved = stanceRepository.save(next);
+        appendEvent(AgentSelfEvent.KIND_STANCE_REVISED,
+                "修订倾向（" + old.getTopic() + "）：旧「" + abbreviate(old.getContent()) + "」→ 新「"
+                        + abbreviate(saved.getContent()) + "」", evidence, saved.getTopic(), saved.getDirection(), 4);
+        return saved;
+    }
+
+    /** 复习成功：按这条倾向做事、结果被证实 → S 变长、复查推后。 */
+    @Transactional
+    public AgentStance supportStance(Long stanceId, List<Long> newEvidenceIds, String evidence) {
+        requireEvidence(evidence);
+        AgentStance stance = stanceRepository.findById(stanceId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那条倾向：" + stanceId));
+        LocalDateTime now = LocalDateTime.now();
+        stance.setEvidenceIds(mergeIds(stance.getEvidenceIds(), newEvidenceIds));
+        stance.setSupportCount((stance.getSupportCount() == null ? 0 : stance.getSupportCount())
+                + size(newEvidenceIds));
+        stance.setStability(StancePromoter.stabilityOnSuccess(stance.getStability(), stance.getDifficulty()));
+        stance.setLastReviewAt(now);
+        stance.setUpdatedAt(now);
+        stance.setNextReviewAt(StancePromoter.nextReviewAt(now, stance.getStability(), decay, reviewTarget));
+        return stanceRepository.save(stance);
+    }
+
+    /** 复习失败：又犯了同类错 / 被反例推翻 → S 收缩、D 上升、复查提前（反例必须落在账上）。 */
+    @Transactional
+    public AgentStance contradictStance(Long stanceId, List<Long> newCounterIds, String evidence) {
+        requireEvidence(evidence);
+        AgentStance stance = stanceRepository.findById(stanceId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那条倾向：" + stanceId));
+        LocalDateTime now = LocalDateTime.now();
+        stance.setCounterIds(mergeIds(stance.getCounterIds(), newCounterIds));
+        stance.setCounterCount((stance.getCounterCount() == null ? 0 : stance.getCounterCount())
+                + size(newCounterIds));
+        stance.setStability(StancePromoter.stabilityOnFailure(stance.getStability()));
+        stance.setDifficulty(StancePromoter.difficultyOnFailure(stance.getDifficulty()));
+        stance.setLastReviewAt(now);
+        stance.setUpdatedAt(now);
+        stance.setNextReviewAt(StancePromoter.nextReviewAt(now, stance.getStability(), decay, reviewTarget));
+        return stanceRepository.save(stance);
+    }
+
+    /** 退役（逃生门/降级都用它）：不删除，留档可回溯。 */
+    @Transactional
+    public AgentStance retireStance(Long stanceId, String reason, String evidence) {
+        requireEvidence(evidence);
+        AgentStance stance = stanceRepository.findById(stanceId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那条倾向：" + stanceId));
+        LocalDateTime now = LocalDateTime.now();
+        stance.setStatus(AgentStance.STATUS_RETIRED);
+        stance.setUpdatedAt(now);
+        AgentStance saved = stanceRepository.save(stance);
+        appendEvent(AgentSelfEvent.KIND_STANCE_RETIRED,
+                "退役倾向（" + saved.getTopic() + "）：" + abbreviate(saved.getContent())
+                        + (reason == null || reason.isBlank() ? "" : "（原因：" + abbreviate(reason) + "）"),
+                evidence, saved.getTopic(), saved.getDirection(), 3);
+        return saved;
+    }
+
+    /** 60 天没有新证据支撑 → 降级为普通 note（**不删除**，spec §5 的衰减硬规则）。 */
+    @Transactional
+    public int demoteStaleStances(int idleDays, LocalDateTime now) {
+        int affected = 0;
+        for (AgentStance stance : activeStances()) {
+            LocalDateTime last = stance.getLastReviewAt() == null ? stance.getFormedAt() : stance.getLastReviewAt();
+            if (last == null || Duration.between(last, now).toDays() < Math.max(1, idleDays)) {
+                continue;
+            }
+            stance.setStatus(AgentStance.STATUS_DEMOTED);
+            stance.setUpdatedAt(now);
+            stanceRepository.save(stance);
+            // 审计事件：证据取它自己的证据区间；**写不进去也不能让整轮扫描挂掉**（一条脏数据不该拖垮反思）
+            String evidence = stance.getEvidenceIds() == null || stance.getEvidenceIds().isBlank()
+                    ? null : "event:" + firstId(stance.getEvidenceIds());
+            if (evidence != null) {
+                try {
+                    appendEvent(AgentSelfEvent.KIND_STANCE_RETIRED,
+                            "降级倾向（" + stance.getTopic() + "）：" + Math.max(1, idleDays) + " 天没有新证据支撑："
+                                    + abbreviate(stance.getContent()),
+                            evidence, stance.getTopic(), stance.getDirection(), 2);
+                } catch (RuntimeException exception) {
+                    log.warn("降级倾向 #{} 的审计事件没写进去：{}", stance.getId(), exception.getMessage());
+                }
+            }
+            affected++;
+        }
+        return affected;
+    }
+
+    // ---------------------------------------------------------------- 二期：反思
+
+    @Transactional(readOnly = true)
+    public List<AgentSelfEvent> eventsSince(LocalDateTime since) {
+        return since == null ? eventRepository.findTop200ByOrderByIdDesc()
+                : eventRepository.findByCreatedAtAfterOrderByIdAsc(since);
+    }
+
+    /** 到期还没兑现的承诺（反思流程把它们判成 BROKEN——"得失"的落点）。 */
+    @Transactional(readOnly = true)
+    public List<AgentCommitment> dueOpenCommitments(LocalDateTime now) {
+        return commitmentRepository.findByStatusOrderByDueAtAsc(AgentCommitment.STATUS_OPEN).stream()
+                .filter(commitment -> commitment.getDueAt() != null && !commitment.getDueAt().isAfter(now))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AgentReflection> lastReflection() {
+        return reflectionRepository.findTop1ByOrderByIdDesc();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentReflection> recentReflections(int limit) {
+        return reflectionRepository.findTop50ByOrderByIdDesc().stream().limit(Math.max(1, limit)).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public long reflectionsToday() {
+        return reflectionRepository.countByCreatedAtAfter(LocalDate.now().atStartOfDay());
+    }
+
+    /** 距上次反思以来机主说了多少轮（"攒够 N 轮"的判据）。 */
+    @Transactional(readOnly = true)
+    public long turnsSinceLastReflection() {
+        if (!isActive()) {
+            return 0;
+        }
+        LocalDateTime since = lastReflection().map(AgentReflection::getCreatedAt).orElse(null);
+        return conversationMemoryRepository
+                .findByUserIdAndRoleInOrderByCreatedAtDesc(ownerOpenId, List.of("user"), PageRequest.of(0, 200))
+                .stream()
+                .filter(row -> since == null || (row.getCreatedAt() != null && row.getCreatedAt().isAfter(since)))
+                .count();
+    }
+
+    /**
+     * 反思落库。**必须带证据链**（读了哪几条事件），否则整条拒绝——
+     * 对应 spec §4 的"合成失败就丢弃，不写半成品"。
+     */
+    @Transactional
+    public AgentReflection recordReflection(int level, String trigger, List<Long> inputEventIds, String conclusion,
+                                            int importance, Long writtenBack, int calls, int promptChars,
+                                            int responseChars, int promptTokens, int completionTokens,
+                                            int durationMs) {
+        if (inputEventIds == null || inputEventIds.isEmpty()) {
+            throw new IllegalArgumentException("反思必须带证据链（inputEventIds 不能为空）");
+        }
+        String evidence = inputEventIds.stream().map(id -> "event:" + id).collect(Collectors.joining(","));
+        requireEvidence(evidence);
+        AgentReflection reflection = new AgentReflection();
+        reflection.setLevel(Math.max(1, level));
+        reflection.setTriggerType(clip(trigger, 16));
+        reflection.setInputEventIds(clip(evidence, 500));
+        reflection.setConclusion(clip(conclusion, 1000));
+        reflection.setImportance(importance);
+        reflection.setWrittenBack(writtenBack);
+        reflection.setCalls(Math.max(1, calls));
+        reflection.setPromptChars(Math.max(0, promptChars));
+        reflection.setResponseChars(Math.max(0, responseChars));
+        reflection.setPromptTokens(Math.max(0, promptTokens));
+        reflection.setCompletionTokens(Math.max(0, completionTokens));
+        reflection.setDurationMs(Math.max(0, durationMs));
+        reflection.setCreatedAt(LocalDateTime.now());
+        AgentReflection saved = reflectionRepository.save(reflection);
+        appendEvent(AgentSelfEvent.KIND_REFLECT, saved.getConclusion(), "event:" + inputEventIds.get(0),
+                null, null, importance);
+        return saved;
+    }
+
+    /** 整块改写（反思流程用；模型侧走 selfAppend/selfReplace）。 */
+    @Transactional
+    public AgentSelfBlock setBlockValue(String blockType, String value, String evidence) {
+        requireEvidence(evidence);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("内容不能为空");
+        }
+        AgentSelfBlock block = block(blockType).orElseGet(() -> newBlock(blockType));
+        String clipped = value.trim();
+        if (clipped.length() > block.getCharLimit()) {
+            throw new IllegalArgumentException("块 " + blockType + " 超上限（" + block.getCharLimit() + " 字）");
+        }
+        String current = block.getValue() == null ? "" : block.getValue();
+        block.setValue(clipped);
+        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
+        block.setUpdatedAt(LocalDateTime.now());
+        if (block.getCreatedAt() == null) {
+            block.setCreatedAt(LocalDateTime.now());
+        }
+        AgentSelfBlock saved = blockRepository.save(block);
+        appendEvent(AgentSelfEvent.KIND_NOTE,
+                "改写了「" + blockType + "」：" + abbreviate(current) + " → " + abbreviate(clipped),
+                evidence, null, null, 0);
+        return saved;
+    }
+
+    private AgentStance newStance(String topic, String direction, String content, List<Long> evidenceIds,
+                                  List<Long> counterIds, LocalDateTime now) {
+        String clippedTopic = clip(topic, 60);
+        if (clippedTopic.isEmpty()) {
+            throw new IllegalArgumentException("倾向必须带类别 topic");
+        }
+        AgentStance stance = new AgentStance();
+        stance.setTopic(clippedTopic);
+        stance.setDirection(clip(direction, 16).isEmpty() ? "NEUTRAL" : clip(direction, 16));
+        stance.setContent(clip(content, 600));
+        stance.setEvidenceIds(clip(joinIds(evidenceIds), 300));
+        stance.setCounterIds(clip(joinIds(counterIds), 300));
+        stance.setSupportCount(size(evidenceIds));
+        stance.setCounterCount(size(counterIds));
+        stance.setReviseCount(0);
+        stance.setStability(1.0);
+        stance.setDifficulty(5.0);
+        stance.setLastReviewAt(now);
+        stance.setNextReviewAt(StancePromoter.nextReviewAt(now, 1.0, decay, reviewTarget));
+        stance.setStatus(AgentStance.STATUS_ACTIVE);
+        stance.setFormedAt(now);
+        stance.setUpdatedAt(now);
+        return stance;
+    }
+
+    private String joinIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return "";
+        }
+        return ids.stream().distinct().map(String::valueOf).collect(Collectors.joining(","));
+    }
+
+    private String mergeIds(String existing, List<Long> added) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (existing != null && !existing.isBlank()) {
+            merged.addAll(List.of(existing.split(",")));
+        }
+        if (added != null) {
+            added.forEach(id -> merged.add(String.valueOf(id)));
+        }
+        while (merged.size() > 60) {
+            merged.remove(merged.iterator().next());
+        }
+        return String.join(",", merged);
+    }
+
+    private int size(List<Long> ids) {
+        return ids == null ? 0 : (int) ids.stream().distinct().count();
+    }
+
+    private String firstId(String ids) {
+        int comma = ids.indexOf(',');
+        return comma < 0 ? ids.trim() : ids.substring(0, comma).trim();
+    }
+
+    /** 按列宽截断，**为省略号留一位**（坑 40：多一个字符就是 Data too long，整条写入失败）。 */
+    private String clip(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        if (max <= 0) {
+            return "";
+        }
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     // ---------------------------------------------------------------- 面板
