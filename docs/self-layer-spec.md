@@ -46,7 +46,7 @@
 **顺序不是小事**：②放在③之前，"先看自己、再答你"才在结构上成立（而不是靠提示词提醒）。
 预算：②整体限字数（例如 ≤800 字），超了在夜间流程里压。
 
-## 4. 夜间流程（sleep-time，Quartz）
+## 4. 反思流程（sleep-time / dreaming）——触发不是「每晚一次」
 
 参照 [Letta 的 sleep-time compute](https://cdn.jsdelivr.net/gh/rohitg00/ai-engineering-from-scratch@be7e637b7ce54c47ea080cc163c28ac2614fd457/phases/14-agent-engineering/08-memory-blocks-sleep-time-compute/docs/en.md) 与它在生产里的形态 **dreaming**（§11 有对照）：
 主 agent 不在关键路径上时，由**另一个（更便宜的）调用**整合状态。
