@@ -154,7 +154,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='<AccessKeyId>'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删、其实是解析问题。acme.sh 自己 `source` 读无影响，Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名实名前会被注册局 `client hold`**：期间公网 DNS 是 NXDOMAIN、acme.sh **一直「Not valid yet」空转**（实测 10 分钟不停）→ 签发脚本用 `timeout 900` 包住；解除后还有约 5 分钟负缓存。
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」，**与服务器无关**。判定：`tools/ui-verify/check_security.py`（真实 Chromium 直连）；处理：关旧标签页/换无痕窗口，并**清掉 IP 那个书签**（IP 访问永远提示证书不匹配）。另：本机 Steam++（Watt Toolkit）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络先退它。
-24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 连库口令是随机的（坑 53），`-uroot -proot` **已失效**——口令在服务器 `/opt/wechat-agent-infra/.env` 的 `MYSQL_ROOT_PASSWORD`。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`；远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 要跑一次「消息→LLM→工具→回复」的端到端：把 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 重建容器（QQ 通道由 `QQ_ENABLED` 独立控制，不会被顶掉），`POST /api/sim/send {"userId":"sim-xxx","content":"…"}` 同步返回回复；测完改回 `disabled` 并**删掉测试用户的行**。`WECHAT_CHANNEL_MODE` 是后补的 passthrough（坑 36），之前改了不生效（表现为 `/api/sim/*` 一直 404）。
+24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 连库口令是随机的（坑 53），`-uroot -proot` **已失效**——口令在服务器 `/opt/wechat-agent-infra/.env` 的 `MYSQL_ROOT_PASSWORD`。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`；远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 要跑一次「消息→LLM→工具→回复」的端到端：把 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 重建容器（QQ 通道由 `QQ_ENABLED` 独立控制，不会被顶掉），`POST /api/sim/send {"userId":"sim-xxx","content":"…"}` 同步返回回复；测完改回 `disabled` 并**删掉测试用户的行**。
 25. **中文文本指令是"整串别名"匹配**：`CommandRegistry` 原来只认完全相等的串（如「结束陪练」），写成「陪练 英语」这种"指令+参数"会**静默落到大模型**（看起来像功能生效了，其实只是模型自己在临场演，`user_profile.coach_mode` 一行都没写）。2026-09-12 已改成：整串不是别名时**退回按首词识别、余下作为参数**；`HelpHandler` 的指令清单是**写死的**（避免与 Registry 循环依赖），加新指令必须同时改它，否则 `/help` 里看不到。
 26. **墨墨开放 API 的三个特点**（2026-09-12 接入时实测）：① 个人 access token 在**墨墨 App** 里生成、**有效期只有一天左右**，过期返回 401——所以别把它当成长期密钥写死，本项目把 Token 存进 `maimemo_setting` 表并**优先于环境变量**，用户在面板「背单词」页粘贴即可；② 官方**限流**（10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次），面板自动刷新很快，必须带缓存（本项目 30 秒）；③ 接口只给"今日完成/总数"，**新学与复习要自己按今日单词列表拆**，列表没取全就不能拿条数当复习数。另外 `Spring Data Redis` 会对 id 为 String 的 JPA 仓库报 "Could not safely identify store assignment"（已 `spring.data.redis.repositories.enabled: false` 关掉）。
 27. **模型"每轮都要调工具"不牢靠**：面试陪练第一版实测模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）。凡是"每轮都必须记账"的场景，**要在提示词里把动作顺序写死并前置**（"先调工具、再说话，顺序不能反"），并在工具描述里再强调一次；只写"每轮都要调用"不够。
@@ -223,13 +223,14 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 7. 当前状态（2026-09-14 · 记忆链路收口之后）
 
-- **4 个容器全部 running**，应用跑 **`production` profile**（`ddl-auto=validate`，冷启动约 35 秒，零 ERROR），无告警。
+- **4 个容器 running**，应用 `production` profile（`validate`，冷启动 ~40 秒，零 ERROR）。
 - **面板入口 `https://120.25.170.92/`**（备案期间用 IP；用域名会证书不匹配、带 `liche.cloud` SNI 会被阿里云掐断，见坑 47）。
 - **用户的考研数据（真实数据，别乱动）**：`exam_plan` 1 行（南京理工大学 · 计算机专硕 22408，阶段 BASIC，每天 300 分钟，四科 数学 130/英语 70/408 120/政治 70，**考试日期 2027-12-25**）；`exam_task` 今天 3 条；进度/错题/里程碑/打卡都是 0。**他自己用聊天让 agent 改过一次计划**（09-13 18:03），所以"只改某一项"这条路是通的。
 - 其余数据（09-14 复查）：`user_profile` 3、`conversation_memory` 662、`user_core_memory` 25、`user_work_memory` 60、`reminder_task` 18、`scheduled_task` 2、`stored_media` 6、`memory_archive` 3。**用户自建任务 #5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）都是他的数据，不要删。** 墨墨 token 在**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（**有效期约一天，随时可能过期**）。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI**：push `main` 即构建+验签上传+部署+自检；供应链细节见坑 47/50。**09-13 GitHub 抽风过一轮（坑 56）。**
 - **仍未做**：⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。（③ 部署私钥降权、④ SearXNG 密钥出仓库已做）
+- **自主模块（一期+二期）09-15 上线，tag `v1.1.0`**：面板页签「它自己」、12 个 self 工具（启动日志 `12 个类 / 62 个工具`）、5 张新表；反思＝攒够 12 轮触发（防抖 30 分钟、每天最多 4 次）；生产 `.env` 已配 `MEMORY_SELF_OWNER_OPENID`。空表时提示词逐字节不变——**它先写东西才有存在感**。
 - 本地：JAR 未跑、mysql/redis 容器已停；本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引
@@ -243,5 +244,4 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 ## 10. 工作区结构（约 59MB）
 
 - `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。
-- 删掉的都是可重建物（`target/`、本地 `logs/`）；`backup/`、`stored-media/`、`logs/`、`tmp/` 是本地跑 JAR 生成的，服务器各有独立一份。
 
