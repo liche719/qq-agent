@@ -9,6 +9,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import okhttp3.MediaType;
@@ -181,7 +182,10 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                 AiMessage aiMessage = toolRequests.isEmpty()
                         ? AiMessage.from(fullText)
                         : (fullText.isEmpty() ? AiMessage.from(toolRequests) : AiMessage.from(fullText, toolRequests));
-                handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage).build());
+                // usage 已经解析出来了（见上面的实测说明），顺手塞进 ChatResponse：
+                // 否则只有 metrics 拿得到 token，调用链/诊断视图只能显示 0（2026-09-15）
+                handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage)
+                        .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
                         tokens);
             }

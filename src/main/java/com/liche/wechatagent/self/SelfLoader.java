@@ -97,7 +97,7 @@ public class SelfLoader implements PromptSectionProvider {
         if (text.length() > maxChars) {
             text = text.substring(0, Math.max(0, maxChars - 12)) + "\n…（已截断）";
         }
-        return new PromptSection(ORDER, "【我自己那侧】", text);
+        return new PromptSection(ORDER, "【我自己那侧】", text, maxChars);
     }
 
     private void appendBlockLine(StringBuilder body, AgentSelfBlock block, String label) {

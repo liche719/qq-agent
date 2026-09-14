@@ -1,5 +1,6 @@
 package com.liche.wechatagent.controller;
 
+import com.liche.wechatagent.agent.TurnTraceStore;
 import com.liche.wechatagent.self.AgentCommitment;
 import com.liche.wechatagent.self.AgentLesson;
 import com.liche.wechatagent.self.AgentReflection;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
@@ -42,10 +44,66 @@ public class AdminSelfController {
 
     private final SelfService selfService;
     private final SelfReflectionService reflectionService;
+    private final TurnTraceStore turnTraceStore;
 
-    public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService) {
+    public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService,
+                               TurnTraceStore turnTraceStore) {
         this.selfService = selfService;
         this.reflectionService = reflectionService;
+        this.turnTraceStore = turnTraceStore;
+    }
+
+    /**
+     * 「这一轮它看到了什么」（上下文检查器）：本轮实际注入的上下文按段拆开，每段字数 / 上限 / 占比 + 原文预览。
+     * 这是"它这轮为什么这么说"的第一现场——答案永远在"它这轮看到了什么"里（spec §12）。
+     */
+    @GetMapping("/turn")
+    public Map<String, Object> turn() {
+        Optional<TurnTraceStore.Turn> found = traceTurn();
+        if (found.isEmpty()) {
+            return Map.of("rows", List.of());
+        }
+        TurnTraceStore.Turn turn = found.get();
+        int total = Math.max(1, turn.promptChars());
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (TurnTraceStore.Section section : turn.sections()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("section", section.label());
+            row.put("usage", section.chars() + (section.limit() > 0 ? "/" + section.limit() : "（没设上限）"));
+            row.put("ratio", Math.round(section.chars() * 1000.0 / total) / 10.0 + "%");
+            row.put("preview", section.preview());
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 「这一轮的调用链」：LLM 与工具调用的逐步列表——失败常藏在中间步骤（spec §12） */
+    @GetMapping("/trace")
+    public Map<String, Object> trace() {
+        Optional<TurnTraceStore.Turn> found = traceTurn();
+        if (found.isEmpty()) {
+            return Map.of("rows", List.of());
+        }
+        TurnTraceStore.Turn turn = found.get();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int index = 1;
+        for (TurnTraceStore.Step step : turn.steps()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("step", String.valueOf(index++));
+            row.put("kind", step.kind());
+            row.put("name", step.name());
+            row.put("result", (step.ok() ? "成功" : "失败") + "｜" + step.durationMs() + " ms");
+            row.put("detail", step.detail() == null ? "—" : step.detail());
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 机主只有一个：优先用配了归属人的那个用户查；没有再退回最近一轮 */
+    private Optional<TurnTraceStore.Turn> traceTurn() {
+        String owner = selfService.owner();
+        Optional<TurnTraceStore.Turn> byOwner = turnTraceStore.lastTurn(owner);
+        return byOwner.isPresent() ? byOwner : turnTraceStore.latest();
     }
 
     /**

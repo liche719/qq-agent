@@ -213,7 +213,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 65. **自主模块二期（2026-09-14/15）**：反思流程（step-count 触发/成本入账/防抖）+ 判断→倾向（`StancePromoter` 纯函数 + `agent_stance` 表；**倾向只由程序提升**，模型只能记判断）+ FSRS 复查 + `selfJudge`/`selfDisagree` + 面板。**两个坑**：① 反例优先＝反例侧**独立达同一门槛**即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；② 定时与手动会前后脚重复反思 → 必须防抖。详见 `docs/self-layer-plan.md` §7.2。
 
-66. **自主模块三期①教训清单（v1.2.0）**：`agent_lesson`（V6）+ `selfLesson`/`selfLessonEdit`（14 个 self 工具）+ 面板清单与每周趋势；上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**两个坑**：① 反思会从**它自己刚写的教训**里再推一条同类（清单膨胀）→ 反思输入排除 REFLECT/LESSON；② 模型会**拒绝伪造教训**（让它记一件它没干过的事，它回「往我账上记没发生的错，我不干」）——这是设计要的。详见 `docs/self-layer-plan.md` §7.3。
+66. **自主模块三期①教训清单（v1.2.0）**：`agent_lesson`（V6）+ `selfLesson`/`selfLessonEdit`（14 个 self 工具）+ 面板清单与每周趋势；上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**两个坑**：① 反思会从**它自己刚写的教训**里再推一条同类（清单膨胀）→ 反思输入排除 REFLECT/LESSON；② 模型会**拒绝伪造教训**（让它记一件它没干过的事，它回「往我账上记没发生的错，我不干」）——这是设计要的；③ 面板「上下文检查器+调用链」已做（`/self/turn`、`/self/trace`，**只留最近一轮、重启清零**）。详见 `docs/self-layer-plan.md` §7.3。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。

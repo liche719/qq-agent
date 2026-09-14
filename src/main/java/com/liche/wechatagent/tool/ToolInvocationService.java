@@ -19,6 +19,14 @@ public class ToolInvocationService {
     private static final Logger log = LoggerFactory.getLogger(ToolInvocationService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final int retryAttempts;
+
+    /** 诊断用：把工具调用记进「这一轮的调用链」（可缺省；setter 注入以免动构造器，坑 45） */
+    private com.liche.wechatagent.agent.TurnTraceStore turnTraceStore;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTurnTraceStore(com.liche.wechatagent.agent.TurnTraceStore turnTraceStore) {
+        this.turnTraceStore = turnTraceStore;
+    }
     private final int maxResultChars;
     private final long retryDelayMillis;
 
@@ -113,6 +121,11 @@ public class ToolInvocationService {
                 }
             }
         }
+        if (turnTraceStore != null) {
+            turnTraceStore.addToolStep(String.valueOf(memoryId), name,
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), false,
+                    safeMessage(lastFailure));
+        }
         return ToolExecutionOutcome.failure(safeMessage(lastFailure), totalAttempts);
     }
 
@@ -130,8 +143,13 @@ public class ToolInvocationService {
 
     private ToolExecutionOutcome success(String name, Object memoryId, String content, int attempts, long startedAt) {
         String text = clip(content);
+        long durationMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         log.info("工具完成 name={} user={} success=true attempts={} resultChars={} durationMs={}", name, memoryId,
-                attempts, text.length(), TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+                attempts, text.length(), durationMillis);
+        if (turnTraceStore != null) {
+            turnTraceStore.addToolStep(String.valueOf(memoryId), name, durationMillis, true,
+                    "结果 " + text.length() + " 字（第 " + attempts + " 次尝试）");
+        }
         return ToolExecutionOutcome.success(text, attempts);
     }
 

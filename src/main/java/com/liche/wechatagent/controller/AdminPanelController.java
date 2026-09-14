@@ -72,6 +72,17 @@ public class AdminPanelController {
         tab.put("kind", "descriptor");
         tab.put("sections", List.of(
                 section("info", "状态", "/api/admin/self/overview", null),
+                table("这一轮它看到了什么（上下文检查器）", "/api/admin/self/turn", List.of(
+                        column("section", "上下文段落", false),
+                        column("usage", "字数/上限", false),
+                        column("ratio", "占系统提示词", false),
+                        column("preview", "原文预览", true)), List.of()),
+                table("这一轮的调用链（失败常藏在中间步骤）", "/api/admin/self/trace", List.of(
+                        column("step", "#", false),
+                        column("kind", "类型", false),
+                        column("name", "名称", false),
+                        column("result", "结果/耗时", false),
+                        column("detail", "细节", true)), List.of()),
                 table("倾向（它一贯的样子）", "/api/admin/self/stances", List.of(
                         column("content", "倾向", true),
                         column("topic", "类别 / 方向", false),

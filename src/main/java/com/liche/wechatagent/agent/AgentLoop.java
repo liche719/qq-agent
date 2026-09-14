@@ -66,6 +66,17 @@ public class AgentLoop {
             "^(?:>\\s*)?(?:#{1,6}\\s*)?(?:[_*`]{1,3}\\s*)?(?:【\\s*)?(?:工具调用(?:说明|详情|情况)?|调用工具)(?:\\s*】)?(?:[_*`]{1,3})?(?:\\s*[:：].*)?\\s*$",
             Pattern.CASE_INSENSITIVE);
     private final StreamingChatModel streamingChatModel;
+
+    /**
+     * 诊断用的「上一轮记录」（spec §12 的上下文检查器）。**用 setter 注入**：
+     * 不动既有的长构造器（坑 45：动构造器/Bean 装配必须看部署后的日志），单测里为 null 时全部空转。
+     */
+    private TurnTraceStore turnTraceStore;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTurnTraceStore(TurnTraceStore turnTraceStore) {
+        this.turnTraceStore = turnTraceStore;
+    }
     private final ToolRegistry toolRegistry;
     private final ToolStatusService toolStatusService;
     private final MediaToolContextService mediaToolContextService;
@@ -214,7 +225,16 @@ public class AgentLoop {
                                                         List<ContextTurn> history, String userText,
                                                         List<String> images, List<ExtractedDocument> documents) {
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(buildSystemPrompt(persona, coreSection, workSection, userId, userText)));
+        String systemPrompt = buildSystemPrompt(persona, coreSection, workSection, userId, userText);
+        messages.add(SystemMessage.from(systemPrompt));
+        if (turnTraceStore != null) {
+            int recorded = (persona == null ? 0 : persona.length())
+                    + (coreSection == null ? 0 : coreSection.length())
+                    + (workSection == null ? 0 : workSection.length());
+            turnTraceStore.addSection(userId, "最近对话与本轮输入（不在系统提示词里）", userText, 0);
+            turnTraceStore.addSectionChars(userId, "固定规则与边界（提示词里人设之后那一大段）",
+                    systemPrompt.length() - recorded - (userText == null ? 0 : userText.length()), 0);
+        }
         if (history != null) {
             for (ContextTurn turn : history) {
                 messages.add("assistant".equals(turn.role())
@@ -301,6 +321,13 @@ public class AgentLoop {
         replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
         String reply = appendToolFooter(replyText, successfulTools, toolDisplayNames);
         reply = appendSearchSources(reply, toolResults);
+        if (turnTraceStore != null) {
+            // 这一轮到这里才算结束（调用链中途的 LLM/工具步骤都记完了）；当前用户从工具上下文取
+            String traceUser = toolStatusService.currentUserId();
+            if (traceUser != null && !traceUser.isBlank()) {
+                turnTraceStore.finishTurn(traceUser, 0);
+            }
+        }
         if (sink != null) {
             pushStreaming(sink, reply);
         }
@@ -336,6 +363,7 @@ public class AgentLoop {
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicReference<Boolean> hasTools = new AtomicReference<>(false);
 
+        final long traceStartedNanos = System.nanoTime();
         streamingChatModel.chat(ChatRequest.builder().messages(messages).toolSpecifications(specs).build(),
                 new StreamingChatResponseHandler() {
                     @Override
@@ -345,6 +373,14 @@ public class AgentLoop {
 
                     @Override
                     public void onCompleteResponse(ChatResponse response) {
+                        if (turnTraceStore != null) {
+                            long traceMillis = Math.max(0, (System.nanoTime() - traceStartedNanos) / 1_000_000L);
+                            var usage = response.tokenUsage();
+                            turnTraceStore.addLlmStep(userId, LlmScenario.current().label(), traceMillis,
+                                    usage == null || usage.inputTokenCount() == null ? 0 : usage.inputTokenCount(),
+                                    usage == null || usage.outputTokenCount() == null ? 0 : usage.outputTokenCount(),
+                                    0);
+                        }
                         AiMessage ai = response.aiMessage();
                         messages.add(ai);
                         if (ai.hasToolExecutionRequests()) {
@@ -716,7 +752,16 @@ public class AgentLoop {
 
     private String buildSystemPrompt(String persona, String coreSection, String workSection, String userId,
                                       String userText) {
-        return AgentPromptBuilder.build(persona, promptSections(userId, userText), coreSection, workSection,
+        java.util.List<PromptSection> sections = promptSections(userId, userText);
+        if (turnTraceStore != null) {
+            turnTraceStore.startTurn(userId);
+            turnTraceStore.addSection(userId, "人设", persona, 0);
+            sections.forEach(section -> turnTraceStore.addSection(userId, section.title(), section.body(),
+                    section.charLimit()));
+            turnTraceStore.addSection(userId, "【长期核心记忆】", coreSection, 0);
+            turnTraceStore.addSection(userId, "【与当前问题相关的工作记忆】", workSection, 0);
+        }
+        return AgentPromptBuilder.build(persona, sections, coreSection, workSection,
                 toolRegistry.retryAttempts());
     }
 
