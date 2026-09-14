@@ -72,9 +72,10 @@ public class SelfLoader implements PromptSectionProvider {
         List<AgentSelfBlock> blocks = selfService.blocks();
         List<AgentCommitment> open = selfService.openCommitments();
         List<AgentStance> stances = selfService.activeStances();
+        Optional<AgentQuest> quest = selfService.activeQuest();
         List<AgentLesson> lessons = userMessage == null || userMessage.isBlank()
                 ? java.util.List.of() : selfService.lessonsInPlay(userMessage, maxLessonsInPrompt);
-        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty()) {
+        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()) {
             return null;
         }
         Map<String, AgentSelfBlock> byType = blocks.stream()
@@ -84,6 +85,7 @@ public class SelfLoader implements PromptSectionProvider {
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PERSONA), "我是谁");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_TASK), "我现在在做");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PROJECT), "我长期在做");
+        appendQuest(body, quest.orElse(null));
         appendStances(body, stances);
         appendLessons(body, lessons);
         appendCommitments(body, open);
@@ -98,6 +100,28 @@ public class SelfLoader implements PromptSectionProvider {
             text = text.substring(0, Math.max(0, maxChars - 12)) + "\n…（已截断）";
         }
         return new PromptSection(ORDER, "【我自己那侧】", text, maxChars);
+    }
+
+    /**
+     * 它在做的**自己的方向**（三期领域②）——一行，从 {@code memory.self-max-chars} 的预算里出。
+     *
+     * <p>为什么只给一行：它是"我有自己的事"最直接的体现，也是它接得上自己的钩子；
+     * 但它是**它自己的事**，不该在给机主的回复里长篇展开（§9.3 的笔记走面板看，不进对话预算）。
+     */
+    private void appendQuest(StringBuilder body, AgentQuest quest) {
+        if (quest == null || quest.getTitle() == null || quest.getTitle().isBlank()) {
+            return;
+        }
+        body.append("我自己的方向：").append(clip(quest.getTitle(), 60));
+        if (quest.getNextStep() != null && !quest.getNextStep().isBlank()) {
+            body.append("（下一步：").append(clip(quest.getNextStep(), 80)).append('）');
+        }
+        body.append('\n');
+    }
+
+    private String clip(String text, int max) {
+        String trimmed = text == null ? "" : text.trim().replace('\n', ' ');
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     private void appendBlockLine(StringBuilder body, AgentSelfBlock block, String label) {

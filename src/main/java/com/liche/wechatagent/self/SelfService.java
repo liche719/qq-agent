@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,6 +44,24 @@ public class SelfService {
     public static final String EVIDENCE_CONVERSATION = "conv:";
     /** 证据前缀：自主模块自己的事件 */
     public static final String EVIDENCE_EVENT = "event:";
+    /** 证据前缀：它自己的方向（三期领域②） */
+    public static final String EVIDENCE_QUEST = "quest:";
+    /** 证据前缀：它自己写的笔记 */
+    public static final String EVIDENCE_NOTE = "note:";
+    /** 证据前缀：一次"自己的时间"的作业记录 */
+    public static final String EVIDENCE_RUN = "run:";
+
+    /**
+     * "它自己的时间"里的**身份**（三期领域②）。
+     *
+     * <p>为什么必须有这个：领域作业跑在它自己的会话里，**不能借机主的 userId**——
+     * 那条路会 `userService.getOrCreate` + 写 `conversation_memory` + 调度记忆提取，
+     * 等于把它自己在夜里想的事灌进机主的用户档案与长期记忆（第一优先级是"用户长期记忆不丢失"，
+     * 污染它就是损坏它）。所以作业带一个独立作用域，工具、记忆、工具事件全部落在这一侧。
+     *
+     * <p>它必须被 {@link #isOwner} 认成"自己"，否则它自己的工具在自己的时间里全被拒绝。
+     */
+    public static final String SELF_SCOPE = "__self__";
 
     private final AgentSelfBlockRepository blockRepository;
     private final AgentSelfEventRepository eventRepository;
@@ -50,6 +69,9 @@ public class SelfService {
     private final AgentStanceRepository stanceRepository;
     private final AgentReflectionRepository reflectionRepository;
     private final AgentLessonRepository lessonRepository;
+    private final AgentQuestRepository questRepository;
+    private final AgentQuestNoteRepository questNoteRepository;
+    private final AgentQuestRunRepository questRunRepository;
     private final ConversationMemoryRepository conversationMemoryRepository;
     private final boolean enabled;
     private final String ownerOpenId;
@@ -68,6 +90,9 @@ public class SelfService {
                        AgentStanceRepository stanceRepository,
                        AgentReflectionRepository reflectionRepository,
                        AgentLessonRepository lessonRepository,
+                       AgentQuestRepository questRepository,
+                       AgentQuestNoteRepository questNoteRepository,
+                       AgentQuestRunRepository questRunRepository,
                        ConversationMemoryRepository conversationMemoryRepository,
                        @Value("${memory.self-enabled:true}") boolean enabled,
                        @Value("${memory.self-owner-openid:}") String ownerOpenId,
@@ -85,6 +110,9 @@ public class SelfService {
         this.stanceRepository = stanceRepository;
         this.lessonRepository = lessonRepository;
         this.reflectionRepository = reflectionRepository;
+        this.questRepository = questRepository;
+        this.questNoteRepository = questNoteRepository;
+        this.questRunRepository = questRunRepository;
         this.conversationMemoryRepository = conversationMemoryRepository;
         this.enabled = enabled;
         this.ownerOpenId = ownerOpenId == null ? "" : ownerOpenId.trim();
@@ -110,7 +138,12 @@ public class SelfService {
 
     /** 归属人判定——fail-closed：没配归属人时谁都别想读写。 */
     public boolean isOwner(String userId) {
-        return isActive() && ownerOpenId.equals(userId);
+        if (!isActive() || userId == null) {
+            return false;
+        }
+        // "它自己的时间"里带的是独立作用域（见 SELF_SCOPE），它也是"自己"——
+        // 否则它自己的工具在自己的时间里会全被拒绝（换了身份就不认自己，那是 bug 不是安全）。
+        return ownerOpenId.equals(userId) || SELF_SCOPE.equals(userId.trim());
     }
 
     /** 给模型看的拒绝理由（工具会把它回给模型）。 */
@@ -887,6 +920,276 @@ public class SelfService {
         return null;
     }
 
+    // ---------------------------------------------------------------- 三期：领域②（它自己的想法）
+
+    /**
+     * 它现在在做的方向（同时最多一个 {@code ACTIVE}）。
+     *
+     * <p>为什么只能有一个：稀缺才有取舍（spec §9，和"倾向 ≤5"同理）。想开新的，旧的自动关掉。
+     */
+    @Transactional(readOnly = true)
+    public Optional<AgentQuest> activeQuest() {
+        return questRepository.findFirstByStatusOrderByUpdatedAtDesc(AgentQuest.STATUS_ACTIVE);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AgentQuest> quest(Long questId) {
+        return questId == null ? Optional.empty() : questRepository.findById(questId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentQuest> quests() {
+        return questRepository.findAllByOrderByUpdatedAtDesc();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentQuestNote> questNotes(Long questId, int limit) {
+        return questNoteRepository.findByQuestIdOrderByCreatedAtDesc(questId).stream()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    /** 标尺用的全量笔记（跨方向，按时间倒序） */
+    @Transactional(readOnly = true)
+    public List<AgentQuestNote> recentQuestNotes(LocalDateTime since) {
+        return questNoteRepository.findByCreatedAtAfterOrderByCreatedAtDesc(since);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentQuestRun> recentQuestRuns(int limit) {        return questRunRepository.findAll(PageRequest.of(0, Math.max(1, limit),
+                Sort.by(Sort.Direction.DESC, "id"))).getContent();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AgentQuestRun> lastQuestRun() {
+        return Optional.ofNullable(questRunRepository.findFirstByOrderByCreatedAtDesc());
+    }
+
+    /** 今天的作业预算账：**跑了就算**（跳过/失败也占额度，否则失败重试能把预算吃穿）。 */
+    @Transactional(readOnly = true)
+    public long questRunsToday() {
+        return questRunRepository.countByCreatedAtAfter(LocalDate.now().atStartOfDay());
+    }
+
+    /** 标尺之一（§9.3）：这段时间写了多少条笔记 */
+    @Transactional(readOnly = true)
+    public long countQuestNotesSince(LocalDateTime since) {
+        return questNoteRepository.countByCreatedAtAfter(since);
+    }
+
+    /** 标尺之二（§9.3）：**被它自己撤回**的条数——撤回说明它在核对，而不是在堆料 */
+    @Transactional(readOnly = true)
+    public long countQuestRetractsSince(LocalDateTime since) {
+        return questNoteRepository.findByCreatedAtAfterOrderByCreatedAtDesc(since).stream()
+                .filter(AgentQuestNote::isRetracted)
+                .count();
+    }
+
+    /**
+     * 开一个属于它自己的方向。
+     *
+     * <p>已经有一个 {@code ACTIVE} 时**自动关掉它**并留痕：换方向是它的自由，
+     * 但"同时只有一个"这件事由程序保证，不靠它自觉。{@code why} 必填——
+     * 偏好是**稀缺下的选择模式被记录下来**（§7），不写理由的选题就没有观察价值。
+     */
+    @Transactional
+    public AgentQuest openQuest(String title, String why, String nextStep, String evidence) {
+        requireEvidence(evidence);
+        if (isBlank(title) || isBlank(why)) {
+            throw new IllegalArgumentException("题目和「为什么选这个」都必须写：不写理由的选题看不出偏好");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        activeQuest().ifPresent(existing -> {
+            existing.setStatus(AgentQuest.STATUS_CLOSED);
+            existing.setClosedAt(now);
+            existing.setUpdatedAt(now);
+            existing.setEvidence(evidence.trim());
+            questRepository.save(existing);
+            log.info("领域 #{}「{}」被新方向顶掉，自动关闭", existing.getId(), existing.getTitle());
+        });
+        AgentQuest quest = new AgentQuest();
+        quest.setTitle(clip(title, 200));
+        quest.setWhy(clip(why, 600));
+        quest.setNextStep(isBlank(nextStep) ? null : clip(nextStep, 600));
+        quest.setStatus(AgentQuest.STATUS_ACTIVE);
+        quest.setCreatedAt(now);
+        quest.setUpdatedAt(now);
+        quest.setEvidence(evidence.trim());
+        AgentQuest saved = questRepository.save(quest);
+        appendEvent(AgentSelfEvent.KIND_QUEST_OPENED,
+                "开了个自己的方向：「" + saved.getTitle() + "」——" + abbreviate(saved.getWhy()),
+                evidence, saved.getTitle(), null, 3);
+        return saved;
+    }
+
+    /** 记下它自己写的"下一步"（会注入到它自己的上下文，所以短） */
+    @Transactional
+    public AgentQuest updateQuestStep(Long questId, String nextStep, String evidence) {
+        requireEvidence(evidence);
+        AgentQuest quest = requireQuest(questId);
+        LocalDateTime now = LocalDateTime.now();
+        quest.setNextStep(isBlank(nextStep) ? null : clip(nextStep, 600));
+        quest.setStepCount((quest.getStepCount() == null ? 0 : quest.getStepCount()) + 1);
+        quest.setUpdatedAt(now);
+        quest.setEvidence(evidence.trim());
+        AgentQuest saved = questRepository.save(quest);
+        appendEvent(AgentSelfEvent.KIND_QUEST_STEP,
+                "下一步：" + (saved.getNextStep() == null ? "（还没想好）" : saved.getNextStep()),
+                evidence, saved.getTitle(), null, 2);
+        return saved;
+    }
+
+    /** 收掉一个方向：不是失败，是"不做了"（允许失败、允许放弃，都要留痕——§9 第 5 条）。 */
+    @Transactional
+    public AgentQuest closeQuest(Long questId, String reason, String evidence) {
+        requireEvidence(evidence);
+        AgentQuest quest = requireQuest(questId);
+        LocalDateTime now = LocalDateTime.now();
+        quest.setStatus(AgentQuest.STATUS_CLOSED);
+        quest.setClosedAt(now);
+        quest.setUpdatedAt(now);
+        quest.setEvidence(evidence.trim());
+        if (!isBlank(reason)) {
+            quest.setNextStep(clip("已收掉：" + reason, 600));
+        }
+        AgentQuest saved = questRepository.save(quest);
+        appendEvent(AgentSelfEvent.KIND_QUEST_CLOSED,
+                "收了自己的方向「" + saved.getTitle() + "」：" + (isBlank(reason) ? "不做了" : reason),
+                evidence, saved.getTitle(), null, 2);
+        return saved;
+    }
+
+    /**
+     * 写一条笔记（§9.3 的标尺就在这张表上）。
+     *
+     * <p>{@code sourceUrl} 允许为空，但面板按"有没有来源"分开计数——因为领域最容易退化成
+     * **资料搬运**，而带来源是它跟搬运之间唯一可检验的分界。
+     */
+    @Transactional
+    public AgentQuestNote addQuestNote(Long questId, String content, String sourceUrl, String sourceTitle,
+                                       String evidence) {
+        requireEvidence(evidence);
+        if (isBlank(content)) {
+            throw new IllegalArgumentException("笔记内容不能为空");
+        }
+        AgentQuest quest = requireQuest(questId);
+        LocalDateTime now = LocalDateTime.now();
+        AgentQuestNote note = new AgentQuestNote();
+        note.setQuestId(quest.getId());
+        note.setContent(clip(content, 2000));
+        note.setSourceUrl(isBlank(sourceUrl) ? null : clip(sourceUrl, 1000));
+        note.setSourceTitle(isBlank(sourceTitle) ? null : clip(sourceTitle, 300));
+        note.setEvidence(evidence.trim());
+        note.setCreatedAt(now);
+        AgentQuestNote saved = questNoteRepository.save(note);
+        quest.setNoteCount((quest.getNoteCount() == null ? 0 : quest.getNoteCount()) + 1);
+        quest.setUpdatedAt(now);
+        questRepository.save(quest);
+        appendEvent(AgentSelfEvent.KIND_QUEST_NOTE, "「" + quest.getTitle() + "」记了一条："
+                + abbreviate(saved.getContent()), evidence, quest.getTitle(), null, 2);
+        return saved;
+    }
+
+    /**
+     * 撤回自己写过的结论（过时了）。
+     *
+     * <p>**保留原文**：撤回不是删除，撤回比例本身就是"它在核对"的证据（§9.3）。
+     */
+    @Transactional
+    public AgentQuestNote retractQuestNote(Long noteId, String reason, String evidence) {
+        requireEvidence(evidence);
+        AgentQuestNote note = requireQuestNote(noteId);
+        if (note.isRetracted()) {
+            throw new IllegalArgumentException("那条笔记已经撤回过了：" + noteId);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        note.setRetractedAt(now);
+        note.setRetractReason(isBlank(reason) ? "过时了" : clip(reason, 300));
+        questNoteRepository.save(note);
+        questRepository.findById(note.getQuestId()).ifPresent(quest -> {
+            quest.setRetractCount((quest.getRetractCount() == null ? 0 : quest.getRetractCount()) + 1);
+            quest.setUpdatedAt(now);
+            questRepository.save(quest);
+            appendEvent(AgentSelfEvent.KIND_QUEST_RETRACT, "「" + quest.getTitle() + "」撤回了一条旧结论："
+                    + note.getRetractReason(), evidence, quest.getTitle(), null, 2);
+        });
+        return note;
+    }
+
+    /**
+     * 开一次"自己的时间"的作业（**程序写**，不是模型写），并返回它的 id。
+     *
+     * <p>为什么先建行：作业里所有写入都要带证据，而它自己的会话里没有对话行可引用——
+     * 这条记录的 id（{@code run:<id>}）就是**本次作业的锚点证据**，
+     * 否则"第一次开方向"永远没有合法证据可用（坑 64 的死锁原样重演）。
+     */
+    @Transactional
+    public AgentQuestRun startQuestRun(Long questId) {
+        AgentQuestRun run = new AgentQuestRun();
+        run.setQuestId(questId);
+        run.setStatus(AgentQuestRun.STATUS_RUNNING);
+        run.setCreatedAt(LocalDateTime.now());
+        // 第一次跑的时候还没有方向，questId 是 null —— findById(null) 会直接抛，不能靠 ifPresent 兜
+        if (questId != null) {
+            questRepository.findById(questId).ifPresent(quest -> {
+                run.setStepCount(quest.getStepCount() == null ? 0 : quest.getStepCount());
+                run.setNoteCount(quest.getNoteCount() == null ? 0 : quest.getNoteCount());
+                run.setRetractCount(quest.getRetractCount() == null ? 0 : quest.getRetractCount());
+            });
+        }
+        return questRunRepository.save(run);
+    }
+
+    /**
+     * 结算这次作业：状态、它自己写下的东西、以及成本（坑 60：思考 token 也算，别只记正文）。
+     */
+    @Transactional
+    public AgentQuestRun finishQuestRun(AgentQuestRun run, String status, String reason, String summary,
+                                        int promptTokens, int completionTokens, int durationMs) {
+        if (run == null) {
+            return null;
+        }
+        run.setStatus(status);
+        run.setReason(isBlank(reason) ? null : clip(reason, 500));
+        run.setSummary(isBlank(summary) ? null : clip(summary, 2000));
+        run.setPromptTokens(Math.max(0, promptTokens));
+        run.setCompletionTokens(Math.max(0, completionTokens));
+        run.setDurationMs(Math.max(0, durationMs));
+        // 计数在**结算时**重新取：作业开始时那份是"开工前"的，面板上会变成
+        // "这一轮写了 0 条笔记"而它其实写了一条（实测踩到）。
+        if (run.getQuestId() != null) {
+            questRepository.findById(run.getQuestId()).ifPresent(quest -> {
+                run.setStepCount(quest.getStepCount() == null ? 0 : quest.getStepCount());
+                run.setNoteCount(quest.getNoteCount() == null ? 0 : quest.getNoteCount());
+                run.setRetractCount(quest.getRetractCount() == null ? 0 : quest.getRetractCount());
+            });
+        }
+        return questRunRepository.save(run);
+    }
+
+    /**
+     * 取方向 / 笔记：id 为空或查不到都当"找不到"。
+     *
+     * <p>为什么不直接 {@code findById}：模型（或第一次跑的作业）可能给 null，
+     * 而 {@code findById(null)} 抛的是 {@code InvalidDataAccessApiUsageException}，
+     * 会一路冒到面板变成一个没有信息量的"出错了"。
+     */
+    private AgentQuest requireQuest(Long questId) {
+        if (questId == null) {
+            throw new IllegalArgumentException("没给方向 id");
+        }
+        return questRepository.findById(questId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那个方向：" + questId));
+    }
+
+    private AgentQuestNote requireQuestNote(Long noteId) {
+        if (noteId == null) {
+            throw new IllegalArgumentException("没给笔记 id");
+        }
+        return questNoteRepository.findById(noteId).orElseThrow(
+                () -> new IllegalArgumentException("找不到那条笔记：" + noteId));
+    }
+
     private boolean isBlank(String text) {
         return text == null || text.isBlank();
     }
@@ -963,12 +1266,33 @@ public class SelfService {
                     any = true;
                     continue;
                 }
+            } else if (token.startsWith(EVIDENCE_QUEST)) {
+                // 领域②：它自己的方向 / 笔记 / 作业记录同样是**真实存在的记录**，可以当证据。
+                // 没有这三个前缀，"它自己的时间"里第一次写入永远失败（坑 64 的证据死锁原样重演）——
+                // 作业的会话里没有它自己的对话行，它拿不到 conv:<id>。
+                Long id = parseId(token.substring(EVIDENCE_QUEST.length()));
+                if (id != null && questRepository.existsById(id)) {
+                    any = true;
+                    continue;
+                }
+            } else if (token.startsWith(EVIDENCE_NOTE)) {
+                Long id = parseId(token.substring(EVIDENCE_NOTE.length()));
+                if (id != null && questNoteRepository.existsById(id)) {
+                    any = true;
+                    continue;
+                }
+            } else if (token.startsWith(EVIDENCE_RUN)) {
+                Long id = parseId(token.substring(EVIDENCE_RUN.length()));
+                if (id != null && questRunRepository.existsById(id)) {
+                    any = true;
+                    continue;
+                }
             }
             invalid.append(invalid.length() == 0 ? "" : "、").append(token);
         }
         if (!any) {
             throw new IllegalArgumentException("证据对不上任何真实记录：" + invalid
-                    + "（格式：conv:<对话id> 或 event:<事件id>）");
+                    + "（格式：conv:<对话id> / event:<事件id> / quest:<方向id> / note:<笔记id> / run:<作业id>）");
         }
     }
 

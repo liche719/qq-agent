@@ -3,10 +3,14 @@ package com.liche.wechatagent.controller;
 import com.liche.wechatagent.agent.TurnTraceStore;
 import com.liche.wechatagent.self.AgentCommitment;
 import com.liche.wechatagent.self.AgentLesson;
+import com.liche.wechatagent.self.AgentQuest;
+import com.liche.wechatagent.self.AgentQuestNote;
+import com.liche.wechatagent.self.AgentQuestRun;
 import com.liche.wechatagent.self.AgentReflection;
 import com.liche.wechatagent.self.AgentSelfBlock;
 import com.liche.wechatagent.self.AgentSelfEvent;
 import com.liche.wechatagent.self.AgentStance;
+import com.liche.wechatagent.self.SelfQuestService;
 import com.liche.wechatagent.self.SelfReflectionService;
 import com.liche.wechatagent.self.SelfService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,12 +48,14 @@ public class AdminSelfController {
 
     private final SelfService selfService;
     private final SelfReflectionService reflectionService;
+    private final SelfQuestService questService;
     private final TurnTraceStore turnTraceStore;
 
     public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService,
-                               TurnTraceStore turnTraceStore) {
+                               SelfQuestService questService, TurnTraceStore turnTraceStore) {
         this.selfService = selfService;
         this.reflectionService = reflectionService;
+        this.questService = questService;
         this.turnTraceStore = turnTraceStore;
     }
 
@@ -364,10 +370,137 @@ public class AdminSelfController {
             }
             perDay.merge(day, tokensOf(reflection), Integer::sum);
         }
+        // 领域②「它自己的时间」也是它自己的开销，必须算进来（不然这块成本看不见）
+        for (AgentQuestRun run : selfService.recentQuestRuns(100)) {
+            if (run.getCreatedAt() == null) {
+                continue;
+            }
+            LocalDate day = run.getCreatedAt().toLocalDate();
+            if (day.isBefore(from)) {
+                continue;
+            }
+            perDay.merge(day, (run.getPromptTokens() == null ? 0 : run.getPromptTokens())
+                    + (run.getCompletionTokens() == null ? 0 : run.getCompletionTokens()), Integer::sum);
+        }
         List<Map<String, Object>> items = perDay.entrySet().stream()
                 .map(entry -> item(entry.getKey().format(DAY).substring(5), entry.getValue()))
                 .toList();
         return Map.of("items", items);
+    }
+
+    // ---------------------------------------------------------------- 三期领域②：它自己的方向
+
+    /**
+     * 它自己的方向（三期领域②）：**这块地盘是它自己的**——题目、选择理由、下一步都由它自己出。
+     * 面板要看的不是"有没有产出"，而是**它到底想做什么、为什么想做这个**（§7：偏好是选出来的）。
+     */
+    @GetMapping("/quests")
+    public Map<String, Object> quests() {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentQuest quest : selfService.quests()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + quest.getId());
+            row.put("title", quest.getTitle());
+            row.put("why", quest.getWhy());
+            row.put("next", quest.getNextStep() == null || quest.getNextStep().isBlank()
+                    ? "—" : quest.getNextStep());
+            row.put("progress", "推进 " + nz(quest.getStepCount()) + " 步｜笔记 " + nz(quest.getNoteCount())
+                    + " 条｜自己撤回 " + nz(quest.getRetractCount()) + " 条");
+            row.put("status", AgentQuest.STATUS_ACTIVE.equals(quest.getStatus()) ? "在做的"
+                    : (AgentQuest.STATUS_PAUSED.equals(quest.getStatus()) ? "暂停" : "已收掉"));
+            row.put("time", stamp(quest.getCreatedAt()));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 它为自己的方向写的笔记：撤回的也留着——撤回比例本身就是"它在核对"的证据（§9.3）。 */
+    @GetMapping("/quest-notes")
+    public Map<String, Object> questNotes(@RequestParam(defaultValue = "30") int limit) {
+        int window = Math.min(200, Math.max(1, limit));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentQuest quest : selfService.quests()) {
+            for (AgentQuestNote note : selfService.questNotes(quest.getId(), window)) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", "note:" + note.getId());
+                row.put("quest", quest.getTitle());
+                row.put("content", note.getContent());
+                row.put("source", note.getSourceUrl() == null || note.getSourceUrl().isBlank()
+                        ? "没写来源" : note.getSourceUrl());
+                row.put("state", note.isRetracted() ? "已撤回：" + note.getRetractReason() : "有效");
+                row.put("time", stamp(note.getCreatedAt()));
+                rows.add(row);
+            }
+        }
+        return Map.of("rows", rows);
+    }
+
+    /**
+     * 每周写了多少条笔记（§9.3 的标尺之一）。
+     *
+     * <p>反装判据：**条数一直涨、撤回比例恒为 0 = 它在堆料**。所以撤回数不藏起来，
+     * 它就在上面的清单里逐条可见。
+     */
+    @GetMapping("/quest-bars")
+    public Map<String, Object> questBars(@RequestParam(defaultValue = "8") int weeks) {
+        int window = Math.min(26, Math.max(1, weeks));
+        LocalDate thisWeek = LocalDate.now().minusDays(LocalDate.now().getDayOfWeek().getValue() - 1L);
+        Map<LocalDate, Integer> perWeek = new TreeMap<>();
+        for (int index = window - 1; index >= 0; index--) {
+            perWeek.put(thisWeek.minusWeeks(index), 0);
+        }
+        LocalDateTime since = thisWeek.minusWeeks(window - 1L).atStartOfDay();
+        for (AgentQuestNote note : selfService.recentQuestNotes(since)) {
+            if (note.getCreatedAt() == null) {
+                continue;
+            }
+            LocalDate day = note.getCreatedAt().toLocalDate();
+            LocalDate week = day.minusDays(day.getDayOfWeek().getValue() - 1L);
+            if (perWeek.containsKey(week)) {
+                perWeek.merge(week, 1, Integer::sum);
+            }
+        }
+        List<Map<String, Object>> items = perWeek.entrySet().stream()
+                .map(entry -> item(entry.getKey().format(DAY).substring(5), entry.getValue()))
+                .toList();
+        return Map.of("items", items);
+    }
+
+    /** 每次"自己的时间"的作业：状态、它自己写的总结、以及花了多少（成本入账）。 */
+    @GetMapping("/quest-runs")
+    public Map<String, Object> questRuns(@RequestParam(defaultValue = "20") int limit) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentQuestRun run : selfService.recentQuestRuns(Math.min(100, Math.max(1, limit)))) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + run.getId());
+            row.put("status", switch (run.getStatus()) {
+                case AgentQuestRun.STATUS_RAN -> "跑了";
+                case AgentQuestRun.STATUS_RUNNING -> "跑到一半";
+                case AgentQuestRun.STATUS_FAILED -> "失败";
+                default -> "跳过";
+            });
+            row.put("summary", run.getSummary() == null ? (run.getReason() == null ? "—" : run.getReason())
+                    : clip(run.getSummary(), 160));
+            row.put("cost", (nz(run.getPromptTokens()) + nz(run.getCompletionTokens())) + " tokens｜"
+                    + nz(run.getDurationMs()) + " ms");
+            row.put("counts", "笔记 " + nz(run.getNoteCount()) + " 条｜撤回 " + nz(run.getRetractCount()) + " 条");
+            row.put("time", stamp(run.getCreatedAt()));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */
+    @PostMapping("/quest/run")
+    public Map<String, Object> runQuestNow() {
+        SelfQuestService.Outcome outcome = questService.run("manual");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ran", outcome.ran());
+        result.put("reason", outcome.reason() == null ? "" : outcome.reason());
+        result.put("runId", outcome.runId() == null ? "" : ("run:" + outcome.runId()));
+        result.put("summary", outcome.summary() == null ? "" : outcome.summary());
+        result.put("tokens", outcome.promptTokens() + "/" + outcome.completionTokens());
+        return result;
     }
 
     // ---------------------------------------------------------------- 内部
@@ -393,6 +526,10 @@ public class AdminSelfController {
                 .filter(judge -> judge.getCreatedAt() != null && judge.getCreatedAt().isAfter(disagree.getCreatedAt()))
                 .anyMatch(judge -> judge.getStance() != null && disagree.getStance() != null
                         && !judge.getStance().equalsIgnoreCase(disagree.getStance()));
+    }
+
+    private int nz(Integer value) {
+        return value == null ? 0 : value;
     }
 
     private int tokensOf(AgentReflection reflection) {

@@ -96,6 +96,18 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .build();
             try (Response response = client.newCall(req).execute()) {
                 if (!response.isSuccessful() || response.body() == null) {
+                    // 原来只记一句 "HTTP 400"，服务端说的原因被整个丢掉——排"问时间就 400"那次
+                    // 只能靠猜。把响应体打出来，以后所有 4xx/5xx 都能一眼看到上游怎么说。
+                    String detail = "";
+                    try {
+                        detail = response.body() == null ? "" : response.body().string();
+                    } catch (Exception ignored) {
+                        // 读不出来就算了，不能因为记日志把请求本身弄挂
+                    }
+                    if (detail.length() > 800) {
+                        detail = detail.substring(0, 800) + "…";
+                    }
+                    log.warn("LLM 流式请求被拒 HTTP {} body={}", response.code(), detail);
                     record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0,
                             tokens);
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));

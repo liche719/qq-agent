@@ -37,8 +37,9 @@ public class TurnTraceStore {
     public record Section(String label, int chars, int limit, String preview) {
     }
 
-    /** 调用链上的一步：LLM 或工具 */
-    public record Step(String kind, String name, long durationMs, boolean ok, String detail) {
+    /** 调用链上的一步：LLM 或工具（token 只在 LLM 步上有值，工具步为 0） */
+    public record Step(String kind, String name, long durationMs, boolean ok, String detail,
+                       int promptTokens, int completionTokens) {
     }
 
     public record Turn(String userId, LocalDateTime startedAt, LocalDateTime finishedAt, int promptChars,
@@ -110,7 +111,8 @@ public class TurnTraceStore {
         }
         current.steps.add(new Step("LLM", scenario, durationMs, true,
                 "prompt " + promptTokens + " / completion " + completionTokens
-                        + (reasoningTokens > 0 ? "（含思考 " + reasoningTokens + "）" : "")));
+                        + (reasoningTokens > 0 ? "（含思考 " + reasoningTokens + "）" : ""),
+                promptTokens, completionTokens));
     }
 
     /** 记一次工具调用 */
@@ -119,7 +121,7 @@ public class TurnTraceStore {
         if (current == null || current.steps.size() >= MAX_STEPS) {
             return;
         }
-        current.steps.add(new Step("工具", name, durationMs, ok, clip(detail)));
+        current.steps.add(new Step("工具", name, durationMs, ok, clip(detail), 0, 0));
     }
 
     /**

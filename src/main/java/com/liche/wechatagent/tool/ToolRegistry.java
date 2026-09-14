@@ -113,6 +113,43 @@ public class ToolRegistry {
         return list;
     }
 
+    /**
+     * 只保留指定 provider 类提供的工具（三期领域②："它自己的时间"里的作用域）。
+     *
+     * @param allowedProviders provider 的**简单类名**（如 {@code AgentQuestTool}）；null/空 = 全量，行为不变
+     */
+    public List<ToolSpecification> specificationsOf(java.util.Set<String> allowedProviders) {
+        if (allowedProviders == null || allowedProviders.isEmpty()) {
+            return specifications();
+        }
+        List<ToolSpecification> list = new ArrayList<>();
+        for (ToolEntry e : entries.values()) {
+            if (allowedProviders.contains(providerName(e.tool()))) {
+                list.add(e.spec());
+            }
+        }
+        return list;
+    }
+
+    /**
+     * 这个工具名是不是允许的 provider 提供的。
+     *
+     * <p>为什么只过滤 schema 不够：模型有可能**幻觉出**一个被藏起来的工具名，而 {@link #execute}
+     * 是按名字查表的——不在这里再挡一道，藏起来的工具照样能被调起来。安全边界不能靠"它应该没见过"。
+     */
+    public boolean isProvidedBy(String name, java.util.Set<String> allowedProviders) {
+        if (allowedProviders == null || allowedProviders.isEmpty()) {
+            return true;
+        }
+        ToolEntry entry = entries.get(name);
+        return entry != null && allowedProviders.contains(providerName(entry.tool()));
+    }
+
+    /** CGLIB 代理下 getClass() 会是子类，所以取 user class 再取简单名 */
+    private static String providerName(Object tool) {
+        return org.springframework.util.ClassUtils.getUserClass(tool.getClass()).getSimpleName();
+    }
+
     public ToolExecutionClass executionClass(String name) {
         ToolEntry entry = entries.get(name);
         return policy(name).executionClass();

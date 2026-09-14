@@ -33,6 +33,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -97,6 +100,13 @@ public class AgentLoop {
     /** 工具失败详情要不要拼进给用户的回复（2026-09-14 默认关：只打 WARN 日志） */
     private final boolean toolFailureNoticeEnabled;
     private final Pattern currentTimePattern;
+
+    /** 问时间时给它的时间格式（与 TimeTool 同一时区来源） */
+    private static final DateTimeFormatter CURRENT_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm", java.util.Locale.CHINA);
+
+    @Value("${app.time-zone:Asia/Shanghai}")
+    private String timeZoneId = "Asia/Shanghai";
     private final Map<String, String> toolDisplayNames;
     private final ConversationMemoryService conversationMemoryService;
     /** 按用户状态裁剪工具集 */
@@ -199,20 +209,36 @@ public class AgentLoop {
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
                        List<ContextTurn> history, String userText, List<String> images, List<ExtractedDocument> documents,
                        StreamReplySink sink) {
+        return chat(userId, botId, channel, persona, coreSection, workSection, history, userText, images, documents,
+                sink, null);
+    }
+
+    /**
+     * 带作用域的一轮（三期领域②："它自己的时间"）。
+     *
+     * @param allowedToolProviders provider 的简单类名；非空时本轮**只下发也只允许执行**这些类提供的工具。
+     *                             null/空 = 全部工具，行为与不传时逐字节一致。
+     */
+    public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
+                       List<ContextTurn> history, String userText, List<String> images, List<ExtractedDocument> documents,
+                       StreamReplySink sink, Set<String> allowedToolProviders) {
         // 工作线程是复用的：先清掉上一轮可能残留的升档状态（thinkDeeper）
         LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
         try {
+            // 问时间的处理：原来靠**伪造**一条 assistant(tool_call) + tool 结果塞进历史，
+            // 但思考模式下上游要求 assistant 消息必须回传 reasoning_content，
+            // 伪造的那条没有 → HTTP 400（症状：用户一问「今天几号」就收到"出错了"，是线上真 bug）。
+            // 现在改成把时间作为**本轮输入的一部分**给它：不伪造历史、不动消息结构。
+            String effectiveText = requestsCurrentTime(userText, currentTimePattern)
+                    ? appendCurrentTime(userText) : userText;
             List<ChatMessage> messages = buildConversationMessages(userId, persona, coreSection, workSection,
-                    history, userText, images, documents);
+                    history, effectiveText, images, documents);
             Set<String> successfulTools = new LinkedHashSet<>();
             Map<String, ToolExecutionOutcome> failedTools = new java.util.LinkedHashMap<>();
             // 成功的工具结果也留一份：回复结尾的"参考来源"要用搜索工具返回的链接
             Map<String, ToolExecutionOutcome> toolResults = new java.util.LinkedHashMap<>();
-            if (requestsCurrentTime(userText, currentTimePattern)) {
-                addMandatoryCurrentTimeResult(messages, userId, successfulTools, failedTools);
-            }
-            return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink);
+            return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink, allowedToolProviders);
         } finally {
             LlmEscalation.clear();
             toolStatusService.unbind();
@@ -248,11 +274,32 @@ public class AgentLoop {
     // Runs tool rounds until a final answer is available and applies the failure fallback.
     private String runToolLoop(List<ChatMessage> messages, String userId, Set<String> successfulTools,
                                Map<String, ToolExecutionOutcome> failedTools,
-                               Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
-        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId);
+                               Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink,
+                               Set<String> allowedToolProviders) {
+        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId, allowedToolProviders);
+        int maxRounds = effectiveMaxRounds();
+        boolean scoped = allowedToolProviders != null && !allowedToolProviders.isEmpty();
         try {
-            for (int round = 0; round < effectiveMaxRounds(); round++) {
-                String roundText = streamOneRound(messages, specifications, userId, successfulTools, failedTools, toolResults);
+            for (int round = 0; round < maxRounds; round++) {
+                // 作用域调用（"它自己的时间"）到最后一步**把工具收走**，逼它用文字收尾：
+                // 否则轮数用完会掉进 fallbackReply，作业记录里只剩一句"这次处理没有完成"，
+                // 而它下次读到自己上次的总结时是断的——连续性正是这块要观察的东西。
+                // 只对作用域调用生效：普通对话的轮数行为一个字都不改。
+                boolean lastRound = scoped && round == maxRounds - 1;
+                if (lastRound) {
+                    // 光收走工具不够：模型会把工具调用**当文本吐出来**（实测第二次作业的"总结"
+                    // 就是一段 <tool_calls> 文本，等于没总结）。所以要明说一句工具已经没了。
+                    messages.add(UserMessage.from("（这一步没有工具可用了。请直接用文字说清："
+                            + "这一步做了什么、学到了什么、下一步打算干什么。不要输出工具调用格式。）"));
+                } else if (scoped && round == maxRounds - 2) {
+                    // 倒数第二步先说一声：**要落盘的东西现在就得落**。实测第三次作业的总结里写着
+                    // "selfQuestNote 这轮没调起来，下次得补记"——它想最后再记，而那一步工具已经没了。
+                    messages.add(UserMessage.from("（下一步就是最后一步，工具会被收回。"
+                            + "要留下来、要记下来的东西现在就得做；最后一步只能写字。）"));
+                }
+                List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
+                String roundText = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
+                        toolResults, allowedToolProviders);
                 if (roundText != null) {
                     return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
                 }
@@ -267,8 +314,9 @@ public class AgentLoop {
     }
 
     /** 按用户状态裁剪工具集：没有备考计划、近期也没聊考研的用户，不必背着 18 个考试工具 schema */
-    private List<ToolSpecification> trimmedSpecifications(List<ChatMessage> messages, String userId) {
-        List<ToolSpecification> all = toolRegistry.specifications();
+    private List<ToolSpecification> trimmedSpecifications(List<ChatMessage> messages, String userId,
+                                                          Set<String> allowedToolProviders) {
+        List<ToolSpecification> all = toolRegistry.specificationsOf(allowedToolProviders);
         if (toolSetTrimmer == null) {
             return all;
         }
@@ -357,7 +405,8 @@ public class AgentLoop {
      */
     private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
                                   Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
-                                  Map<String, ToolExecutionOutcome> toolResults) {
+                                  Map<String, ToolExecutionOutcome> toolResults,
+                                  Set<String> allowedToolProviders) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -386,7 +435,10 @@ public class AgentLoop {
                         if (ai.hasToolExecutionRequests()) {
                             hasTools.set(true);
                             for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
-                                ToolExecutionOutcome outcome = executeTool(request, userId);
+                                ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), allowedToolProviders)
+                                        ? executeTool(request, userId)
+                                        : ToolExecutionOutcome.failure(
+                                                "这个工具不在当前作用域里，换一个：" + request.name(), 0);
                                 ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
                                 log.debug("工具策略 name={} class={} user={}", request.name(), executionClass, userId);
                                 if (outcome.successful()) {
@@ -591,22 +643,25 @@ public class AgentLoop {
         return pattern != null && pattern.matcher(userText).matches();
     }
 
-    private void addMandatoryCurrentTimeResult(List<ChatMessage> messages, String userId,
-                                               Set<String> successfulTools,
-                                               Map<String, ToolExecutionOutcome> failedTools) {
-        ToolExecutionRequest request = ToolExecutionRequest.builder()
-                .id("policy-current-time")
-                .name("getCurrentTime")
-                .arguments("{}")
-                .build();
-        ToolExecutionOutcome outcome = executeTool(request, userId);
-        messages.add(AiMessage.from(request));
-        messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
-        if (outcome.successful()) {
-            successfulTools.add(request.name());
-            failedTools.remove(request.name());
-        } else {
-            failedTools.put(request.name(), outcome);
+    /**
+     * 把当前时间拼进本轮输入（原来是把一条伪造的工具调用塞进消息历史，见 chat 里的注释）。
+     *
+     * <p>为什么不做成工具结果：模型可能"看到了却不用"，所以这里用陈述句把事实直接给它，
+     * 并明确要求直接采用——这类问题不该靠模型自己想起来调工具。
+     */
+    private String appendCurrentTime(String userText) {
+        LocalDateTime now = LocalDateTime.now(currentZone());
+        String line = "\n\n【当前时间（系统直接给出的事实，请直接采用，不要说拿不到时间）】"
+                + now.format(CURRENT_TIME_FORMAT);
+        return (userText == null ? "" : userText) + line;
+    }
+
+    /** 与 TimeTool 用同一个时区来源（app.time-zone）；解析不了就退回 JVM 默认（启动时已固定）。 */
+    private ZoneId currentZone() {
+        try {
+            return ZoneId.of(timeZoneId);
+        } catch (RuntimeException ignored) {
+            return ZoneId.systemDefault();
         }
     }
 

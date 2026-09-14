@@ -49,6 +49,13 @@ public class AgentSelfEvent {
     public static final String KIND_LESSON = "LESSON";
     public static final String KIND_NOTE = "NOTE";
 
+    /** 三期领域②：它自己的方向（它拥有自己的想法想去做什么，不是机主派的任务） */
+    public static final String KIND_QUEST_OPENED = "QUEST_OPENED";
+    public static final String KIND_QUEST_STEP = "QUEST_STEP";
+    public static final String KIND_QUEST_NOTE = "QUEST_NOTE";
+    public static final String KIND_QUEST_RETRACT = "QUEST_RETRACT";
+    public static final String KIND_QUEST_CLOSED = "QUEST_CLOSED";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

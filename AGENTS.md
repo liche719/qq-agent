@@ -209,11 +209,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 62. **会变的信息不记进记忆（2026-09-14 用户定的）**：提示词加规则 12/13——**课表/教室/节次时间/临时日程/一次性数字一律不记**（要看就现场读他存的课表图），**只有用户说「记住」才记**，agent 自己从图片看出来的事实不入库。起因：库里躺着一批课表记忆（`晚上上课地点是8B304.305，必须记住` 等），而用户用截图纠正过的 7B-301 **当年没进库**（旧规则"只能依据 user 明确陈述"把图片核对结果也挡了）。**同一天试过"每天一次记忆归纳"并当天删除**：模型把两条原文用「；」拼起来当归纳、思考吃满 16384 额度、`replaces` 对不上原文就退化成重复新增——**完整版（含成本账）见 `docs/memory-extraction.md`**。
 63. **记忆写入的两层冲突处理（已上线验证）**：字面相似度 ≥0.72（`MemoryTextSimilarity`）→ 直接 `replaceFromExtraction`（旧行 SUPERSEDED 不删 + 变更日志）；**字面不像但可能是"换了说法"**（实测「数学目标分是130」→「…目标分数为140分」只有 0.3）→ `reconcileCoreWithModel()` 的**第二次小调用**只问"是不是已有某条的新版本"。**教训**：别在真实数据上做实验、先算预算、**先定方案再写代码**。**另**：`listActive` 用 `isExplicit` 过滤 `source_type`（只认 null/USER_EXPLICIT/USER_DERIVED），写错这个字段记忆会"凭空消失"。
 
-64. **自主模块一期（2026-09-14 做完并本地端到端验证，在 `next` 未部署）**：`self/` 包 + `V5__create_agent_self_tables.sql`（4 表新增，回滚＝drop）+ 通用注入挂点 `agent/PromptSection{,Provider}`（`SelfLoader` order=-10）+ 面板页签「它自己」+ 10 个工具；生产要配 `MEMORY_SELF_OWNER_OPENID` 才生效。**两个坑**：① **证据死锁**——模型看不到 `conversation_memory.id`，于是「证据必须真实存在」这条校验让**第一次写入永远失败**；解法＝只读工具 `selfRecall` 递真实编号，**别删**；② `@ConditionalOnProperty(memory.self-enabled)` **`SelfLoader` 与 `AgentSelfTool` 两处都要**，只加一处关不干净（开 60 / 关 50 工具）。**验注入别 grep 日志**＝往块里塞一个只在库里的暗号、让模型禁用工具答出来。详见 `docs/self-layer-plan.md` §7.1。
+64. **自主模块一期~三期①（2026-09-14/15，v1.1.0/v1.2.0 已上线）**：`self/` 包 + V5/V6 迁移 + 通用注入挂点 `agent/PromptSection{,Provider}`（`SelfLoader` order=-10）+ 面板页签「它自己」。反思＝攒够 12 轮触发（防抖 30 分钟、每天 ≤4 次）；**倾向只由程序提升**（模型只能记判断）；教训上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**四个坑**：① **证据死锁**——模型看不到 `conversation_memory.id`，「证据必须真实存在」让第一次写入永远失败 → 只读工具 `selfRecall` 递真实编号，**别删**；② `@ConditionalOnProperty(memory.self-enabled)` **`SelfLoader` 与 `AgentSelfTool` 两处都要**，只加一处关不干净；③ 反例优先＝反例侧独立达同一门槛即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；④ 反思会从**它自己刚写的教训**里再推一条同类 → 反思输入排除 REFLECT/LESSON。详见 `docs/self-layer-plan.md` §7.1~7.4。
 
-65. **自主模块二期（2026-09-14/15）**：反思流程（step-count 触发/成本入账/防抖）+ 判断→倾向（`StancePromoter` 纯函数 + `agent_stance` 表；**倾向只由程序提升**，模型只能记判断）+ FSRS 复查 + `selfJudge`/`selfDisagree` + 面板。**两个坑**：① 反例优先＝反例侧**独立达同一门槛**即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；② 定时与手动会前后脚重复反思 → 必须防抖。详见 `docs/self-layer-plan.md` §7.2。
-
-66. **自主模块三期①教训清单（v1.2.0）**：`agent_lesson`（V6）+ `selfLesson`/`selfLessonEdit`（14 个 self 工具）+ 面板清单与每周趋势；上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**两个坑**：① 反思会从**它自己刚写的教训**里再推一条同类（清单膨胀）→ 反思输入排除 REFLECT/LESSON；② 模型会**拒绝伪造教训**（让它记一件它没干过的事，它回「往我账上记没发生的错，我不干」）——这是设计要的；③ 面板「上下文检查器+调用链」已做（`/self/turn`、`/self/trace`，**只留最近一轮、重启清零**）。详见 `docs/self-layer-plan.md` §7.3。
+65. **自主模块三期②「它自己的时间」（2026-09-15 本地验收，未部署）**：`agent_quest{,_note,_run}`（V7）+ 6 个 `selfQuest*` 工具 + `SelfQuestService` —— **用 `AgentLoop.chat` 跑完整一轮带工具的 agent**（领域要做事就得有手），每天 1 次、独立作用域 `__self__`、工具白名单五类、成本入账。**三个坑**：① **思考模式下伪造 assistant 消息＝HTTP 400**：原来问时间的兜底会伪造一条 `assistant(tool_call)+tool` 塞进消息历史，而思考模式要求 assistant 必须回传 `reasoning_content` → **用户一问「今天几号」就收到"出错了"**（**线上真 bug**，这次顺带挖出来的）；改成把时间拼进本轮输入，**别再伪造历史**，并把 400 的响应体打进日志（原来只记"HTTP 400"，靠这行才定位到）；② **`findById(null)` 抛异常、不是返回空**，`ifPresent` 兜不住；③ 光"把工具收走"不够，模型会把工具调用当文本吐出来 → 倒数第二步提醒"要记的现在记"。**借机主 userId 跑会污染用户档案与长期记忆**，必须用独立 scope。详见 `docs/self-layer-plan.md` §7.5。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -232,7 +230,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
 - **CI**：push `main` 即构建+验签上传+部署+自检；供应链细节见坑 47/50。**09-13 GitHub 抽风过一轮（坑 56）。**
 - **仍未做**：⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。（③ 部署私钥降权、④ SearXNG 密钥出仓库已做）
-- **自主模块（一期+二期）09-15 上线，tag `v1.1.0`**：面板页签「它自己」、12 个 self 工具（62 工具）、5 张新表；反思＝攒够 12 轮触发（防抖 30 分钟、每天最多 4 次）；生产 `.env` 已配 `MEMORY_SELF_OWNER_OPENID`。空表时提示词逐字节不变——**它先写东西才有存在感**。
+- **自主模块一期~三期①已上线（tag `v1.1.0`/`v1.2.0`）**：面板页签「它自己」、20 个 self 工具（70 工具）、V5/V6 八张表；反思＝攒够 12 轮触发（防抖 30 分钟、每天 ≤4 次）；生产 `.env` 已配 `MEMORY_SELF_OWNER_OPENID`。空表时提示词逐字节不变——**它先写东西才有存在感**。**三期②「它自己的时间」已本地验收、未部署**：部署前**必须先在生产建 V7 的三张表**，否则 `validate` 让容器起不来。
 - 本地：JAR 未跑、mysql/redis 容器已停；本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引

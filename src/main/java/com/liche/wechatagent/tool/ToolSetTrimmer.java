@@ -1,6 +1,7 @@
 package com.liche.wechatagent.tool;
 
 import com.liche.wechatagent.exam.ExamService;
+import com.liche.wechatagent.self.SelfService;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,13 @@ public class ToolSetTrimmer {
     /** 永远不裁的两个：没有它们，新用户连计划都建不出来 */
     private static final Set<String> ALWAYS_KEEP = Set.of("saveExamPlan", "viewExamPlan");
 
+    /**
+     * 三期领域②：`selfQuest*` 这组工具只在**它自己的时间**里下发（见
+     * {@code SelfQuestService} 的作用域白名单）。机主对话里它用不上「开一个自己的方向」，
+     * 没必要每轮都为这几段 schema 付 prompt token，更没必要给它一个在聊天里乱开方向的入口。
+     */
+    private static final String QUEST_TOOL_PREFIX = "selfQuest";
+
     /** 命中任一就认为"这条消息/最近在聊考研"，于是不裁 */
     private static final List<String> EXAM_KEYWORDS = List.of(
             "考研", "备考", "初试", "复试", "考试", "复习", "背书", "刷题", "真题", "错题", "打卡",
@@ -78,42 +86,69 @@ public class ToolSetTrimmer {
         if (!enabled || all == null || all.isEmpty()) {
             return new TrimResult(all, Set.of(), "未启用");
         }
+        // 先按作用域裁（它自己的方向这组只在它自己的时间里出现），再做考研那套裁剪
+        Set<String> hidden = new LinkedHashSet<>();
+        List<ToolSpecification> base = withoutQuestTools(all, userId, hidden);
+        if (!hidden.isEmpty() && log.isInfoEnabled()) {
+            // 这条日志要独立打：下面几个 early return（正在聊考研 / 已有备考计划）都会直接返回，
+            // 只在最后那行打日志的话，"领域工具被摘掉了"这件事在日志里根本看不见（实测踩到）。
+            log.info("按作用域裁掉它自己的工具 {} 个（机主对话里不下发）：{}",
+                    hidden.size(), String.join("、", hidden));
+        }
+        String scopeNote = hidden.isEmpty() ? "" : "，另按作用域裁 " + hidden.size() + " 个它自己的工具";
         if (userId == null || userId.isBlank()) {
-            return new TrimResult(all, Set.of(), "拿不到用户，保守全给");
+            return new TrimResult(base, hidden, "拿不到用户，保守全给" + scopeNote);
         }
         if (containsExamKeyword(userText)) {
-            return new TrimResult(all, Set.of(), "本条消息提到考研");
+            return new TrimResult(base, hidden, "本条消息提到考研" + scopeNote);
         }
         if (containsExamKeyword(String.join(" ", recentUserText == null ? List.of() : recentUserText))) {
-            return new TrimResult(all, Set.of(), "最近几轮在聊考研");
+            return new TrimResult(base, hidden, "最近几轮在聊考研" + scopeNote);
         }
         if (examService != null && examService.plan(userId) != null) {
-            return new TrimResult(all, Set.of(), "该用户已有备考计划");
+            return new TrimResult(base, hidden, "该用户已有备考计划" + scopeNote);
         }
         Set<String> present = new LinkedHashSet<>();
-        for (ToolSpecification spec : all) {
+        for (ToolSpecification spec : base) {
             present.add(spec.name());
         }
-        Set<String> hidden = new LinkedHashSet<>();
         for (String name : EXAM_TOOLS) {
             if (present.contains(name) && !ALWAYS_KEEP.contains(name)) {
                 hidden.add(name);
             }
         }
-        if (hidden.isEmpty()) {
-            return new TrimResult(all, Set.of(), "没有可裁的考试工具");
-        }
-        List<ToolSpecification> kept = new ArrayList<>(all.size() - hidden.size());
-        for (ToolSpecification spec : all) {
+        List<ToolSpecification> kept = new ArrayList<>(base.size());
+        for (ToolSpecification spec : base) {
             if (!hidden.contains(spec.name())) {
                 kept.add(spec);
             }
         }
         if (log.isInfoEnabled()) {
-            log.info("本轮工具集已裁剪 user={} 保留 {} 个 / 裁掉 {} 个（考试组，用户没有备考计划且近期没聊考研）",
-                    userId, kept.size(), hidden.size());
+            log.info("本轮工具集已裁剪 user={} 保留 {} 个 / 裁掉 {} 个（{}）",
+                    userId, kept.size(), hidden.size(), scopeNote.isEmpty() ? "考试组" : "考试组 + 作用域");
         }
-        return new TrimResult(kept, hidden, "用户没有备考计划且近期没聊考研");
+        return new TrimResult(kept, hidden, "用户没有备考计划且近期没聊考研" + scopeNote);
+    }
+
+    /**
+     * 把「它自己的方向」那组工具从非该作用域的对话里摘掉。
+     *
+     * @param hidden 出参：被摘掉的名字（调用方要合并进最终结果）
+     */
+    private List<ToolSpecification> withoutQuestTools(List<ToolSpecification> all, String userId,
+                                                      Set<String> hidden) {
+        if (userId != null && SelfService.SELF_SCOPE.equals(userId.trim())) {
+            return all;
+        }
+        List<ToolSpecification> base = new ArrayList<>(all.size());
+        for (ToolSpecification spec : all) {
+            if (spec.name() != null && spec.name().startsWith(QUEST_TOOL_PREFIX)) {
+                hidden.add(spec.name());
+            } else {
+                base.add(spec);
+            }
+        }
+        return base;
     }
 
     private boolean containsExamKeyword(String text) {

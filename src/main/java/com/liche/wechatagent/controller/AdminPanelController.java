@@ -110,6 +110,30 @@ public class AdminPanelController {
                         column("review", "复查（FSRS）", true),
                         column("status", "状态", false)), List.of()),
                 bars("每周教训事件数（看趋势，不看绝对值）", "/api/admin/self/lesson-bars?weeks=8", "次"),
+                table("它自己的方向（不是给你办事的）", "/api/admin/self/quests", List.of(
+                        column("id", "#", false),
+                        column("title", "题目", true),
+                        column("why", "它为什么想做这个", true),
+                        column("next", "它写的下一步", true),
+                        column("progress", "推进 / 笔记 / 撤回", false),
+                        column("status", "状态", false),
+                        column("time", "开于", false)), List.of()),
+                table("它为自己写的笔记（带来源才算数）", "/api/admin/self/quest-notes", List.of(
+                        column("id", "#", false),
+                        column("quest", "方向", false),
+                        column("content", "内容", true),
+                        column("source", "来源", true),
+                        column("state", "状态", false),
+                        column("time", "时间", false)), List.of()),
+                bars("每周为自己写的笔记（条数一直涨但从不撤回＝在堆料）",
+                        "/api/admin/self/quest-bars?weeks=8", "条"),
+                table("它自己的时间（每次作业与花销）", "/api/admin/self/quest-runs?limit=20", List.of(
+                        column("id", "#", false),
+                        column("status", "结果", false),
+                        column("summary", "它这一轮写了什么", true),
+                        column("cost", "成本", false),
+                        column("counts", "当时的笔记/撤回", false),
+                        column("time", "时间", false)), List.of()),
                 table("分歧（它跟你意见不同的记录）", "/api/admin/self/disagreements", List.of(
                         column("id", "#", false),
                         column("topic", "类别", false),
@@ -144,7 +168,9 @@ public class AdminPanelController {
         section.put("kind", "actions");
         section.put("title", "排障");
         section.put("actions", List.of(
-                action("立即反思一次", "/api/admin/self/reflect", "现在跑一次反思？会花一次模型调用（预算照常生效）。", null)));
+                action("立即反思一次", "/api/admin/self/reflect", "现在跑一次反思？会花一次模型调用（预算照常生效）。", null),
+                action("让它动一次自己的事", "/api/admin/self/quest/run",
+                        "现在叫它去做一会儿自己的事？会花一次完整对话级的调用（预算与防抖照常生效）。", null)));
         return section;
     }
 
