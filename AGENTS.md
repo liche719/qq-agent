@@ -36,7 +36,7 @@
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key`/`SAVED_Ali_Secret`） |
 | 墨墨 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`，或面板「背单词」页存进 `maimemo_setting`（后者优先）；**有效期约一天** |
 | 墨墨 OIDC 凭据（长期方案） | 服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`（600）；换来的 token 存 `maimemo_setting` 表 |
-| 部署私钥 | 仅存于 GitHub Secrets `DEPLOY_SSH_KEY` |
+| 部署私钥 / 上传验签密钥 | GitHub Secrets `DEPLOY_SSH_KEY`、`DEPLOY_TAR_SECRET`（后者服务器副本 `/etc/wechat-deploy.secret` 600） |
 
 ## 2. 本地开发与运行
 
@@ -118,7 +118,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
 - 构建步骤用钉到 SHA 的 `docker/build-push-action` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（纯后端约 192 秒、含前端约 240 秒）。
-- 流程：runner 上 `docker build` → `docker save | gzip` → scp 镜像与 compose/settings 到服务器 → `docker load` → `docker compose up -d --no-build agent` → `docker image prune -f` → **按 image id 保留两代镜像的 tag**（坑 17）。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
+- 流程：`docker build` → `docker save | gzip` → **`wechat-deploy upload-*`（走 stdin，HMAC 验签）** → **`wechat-deploy deploy <sha>`**（load、只重建 agent、重启 searxng、按 image id 保留两代镜像 tag）。服务端细节见 `docs/deploy-security.md`。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
 - 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥已删除，轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）、`DEPLOY_HOST_KEY`（服务器主机指纹，替代 `ssh-keyscan`，见坑 50）。
 - **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（备案期间自动跳过，通过后自动生效）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
 - **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
@@ -142,7 +142,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 9. **`/api/admin/*` 的鉴权语义**（2026-09-12 修正）：`AdminAccessFilter` 原先对 dashboard 路径**只校验来源 IP 就直接放行**，密钥形同虚设（面板数据全靠 nginx Basic Auth 挡着）。现已统一为「带正确 `X-Agent-Admin-Key` 头，或在 require-key=false 时回环免密钥」；`require-key=true`（服务器 `.env`）时面板接口必须带口令。历史测试 `AdminAccessFilterTest` 正是按这个语义写的（其中「回环在 local 模式下免密钥」一条与项目文档相冲突，属预期差异）；CI 的 Dockerfile 用 `-DskipTests`，不跑测试。
 10. 失败封禁按**来源 IP** 计数：直连来源是回环时用 `X-Forwarded-For` 的**最后一段**（代理追加的那段才是真实地址；取第一段会被客户端伪造，既可能绕过封禁也可能反过来封禁别人）。实测：本机连错 5 次后本机 429，另一来源 IP 仍 200（别人乱输不会连累你）。
 11. **CSS 里只写标准 `backdrop-filter`**：手写一行 `-webkit-backdrop-filter` 会被 Vite 8 的 CSS 压缩（lightningcss）合并掉标准属性，构建产物里只剩带前缀的那条，而 Chromium 根本不认（`CSS.supports('-webkit-backdrop-filter')` 为 false）→ 毛玻璃**静默失效**。让构建工具自己加前缀即可。
-12. 不要用 PowerShell 5.1 的 `Get-Content -Raw` + `Set-Content` 往返改 UTF-8 源文件：会按 ANSI 读取、再写成带 BOM 的 UTF-8，中文全变乱码（Python 直接语法报错）。用 write 工具或 `[IO.File]::ReadAllText` + `WriteAllText(..., UTF8Encoding($false))`。
+12. 不要用 PowerShell 5.1 的 `Get-Content -Raw` + `Set-Content` 往返改 UTF-8 源文件：会按 ANSI 读取、再写成带 BOM 的 UTF-8，中文全变乱码（Python 直接语法报错）。用 write 工具或 `[IO.File]::ReadAllText` + `WriteAllText(..., UTF8Encoding($false))`。**第二面（2026-09-14）**：`Get-Content -Raw | ssh` 同样按 ANSI 读，GBK 解码会吃掉紧跟的 ASCII 引号（远端报 `unexpected EOF while looking for matching`）。**推脚本给服务器一律 base64**，并带 `</dev/null`——脚本里的 `ssh` 会吞掉 stdin、吃掉后半段（同坑 14）。
 13. 前端改动必须 `cd web && npm run build`（或走 CI 的 Dockerfile）才会进 jar；`src/main/resources/static/` 已在 `.gitignore`（构建产物不入库），新克隆的仓库直接 `mvn package` 是**不带界面**的。
 14. **经 stdin 传给 `bash` 的远程脚本里不能直接用 `docker exec -i`**：它会读走 stdin（也就是脚本剩下的部分），导致脚本在后面某行静默中断。要么 `< /dev/null`，要么把整段 SQL 用 heredoc（heredoc 会把该命令的 stdin 换成 here-doc，反而正常）。
 15. 后端 `AdminDashboardController.userList()` 用 `String.valueOf(u.getLastSeenAt())`，空值会序列化成**字符串 `"null"`**，前端按字符串排序时 `"null"` 会排到最前（`'n' > '2'`）。前端 `labels.js` 已把 `"null"/"undefined"/"NaN"` 当空值处理，用户列表也只用合法日期参与排序。
@@ -182,7 +182,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 47. **CI 自检的凭据不该走公网、而且不能用 `--resolve` 绕（2026-09-13 修，含一次我自己的误改）**：① 我一度把自检统一改成 `curl --resolve ...` 以便去掉 `-k`，结果**流水线恒红**——**备案期间 A 记录 DISABLED，阿里云按 SNI 拦未备案域名**，ClientHello 带 `liche.cloud` 直接被掐断（服务器本机发同样请求却是 200，只看服务器会误判）。**备案期间别用 `--resolve` 校验域名。** ② 正确做法（现状）：**不带口令的检查走 runner IP 直连 + `-k`**；**带口令的两项挪到服务器本机 `curl -sk https://127.0.0.1/...`**（流量不出主机）；域名证书校验只在域名真解析到本机时才跑。③ `code()` 加了 `--retry 3 --retry-connrefused --retry-delay 2`、就绪窗口 2→4 分钟，否则容器刚重建时"还在启动"会被误判成 000 满屏红（误报过一次）。
 48. **`docker compose up -d <服务>` 会顺带重建"配置变了的依赖服务"**（2026-09-13 踩到）：CI 那一步只写 `up -d --no-build agent`，但 agent 有 `depends_on`，而我刚把 mysql/redis/searxng 的 `image` 改成 digest → **三个数据服务被一起重建**（数据没丢，都在命名卷里）。所以：**改镜像版本 = 部署时连 MySQL/Redis/SearXNG 一起重启**；改 MySQL 镜像**必须与数据卷版本一致**（卷由 8.0.46 创建）。想彻底避免可以加 `--no-deps`，但那样全新机器上依赖不会被拉起，所以保持现状。
 49. **镜像一律钉 digest，别用浮动 tag**（2026-09-13）：`searxng/searxng:latest` / `redis:7-alpine` 这种会跟着上游走，上游一次回归会在下次重建时静默生效、线上版本不可复现。现在 `docker-compose.remote.yml`（以及本机 `docker-compose.yml` 的 mysql）都写成 `镜像:tag@sha256:...`，钉的就是**当天实测在跑的那一层**（searxng / redis 7.4.11 / mysql 8.0.46）。换版本步骤：`docker pull <img>` → `docker image inspect <img> -f '{{index .RepoDigests 0}}'` → 改 compose 里的 digest → push（CI 会把 compose scp 上去，**改服务器上的那份会被覆盖**）。
-50. **CI 供应链（2026-09-13）**：三个 action **钉到 commit SHA**（注释里保留版本号；浮动 tag 被上游移动就能在**持有部署私钥的 runner** 上执行任意代码）；job 加 `permissions: contents: read`；**主机指纹由 Secret `DEPLOY_HOST_KEY` 固定**，不再 `ssh-keyscan`（keyscan 是"第一次见到就信任"，在途攻击者可在首次部署时冒充目标主机），并写了 `~/.ssh/config` 的 `StrictHostKeyChecking yes`（默认 `ask` 在非交互 shell 里会变成"提示并卡住"）。指纹值取自服务器自己的 `/etc/ssh/ssh_host_ed25519_key.pub`，并与本机 known_hosts 交叉核对一致（说明当初的 TOFU 没被中间人）。**仍未做**：部署公钥加 `from=…,restrict,command=…` 并把 `DEPLOY_USER` 降权——得先把 CI 里那串 `docker load/rmi/prune/rm` 收敛成服务端包装脚本，否则一加 `command=` 部署立刻全废。
+50. **CI 供应链（2026-09-13）**：三个 action **钉到 commit SHA**（注释里保留版本号；浮动 tag 被上游移动就能在**持有部署私钥的 runner** 上执行任意代码）；job 加 `permissions: contents: read`；**主机指纹由 Secret `DEPLOY_HOST_KEY` 固定**，不再 `ssh-keyscan`（keyscan 是"第一次见到就信任"，在途攻击者可在首次部署时冒充目标主机），并写了 `~/.ssh/config` 的 `StrictHostKeyChecking yes`（默认 `ask` 在非交互 shell 里会变成"提示并卡住"）。指纹值取自服务器自己的 `/etc/ssh/ssh_host_ed25519_key.pub`，并与本机 known_hosts 交叉核对一致（说明当初的 TOFU 没被中间人）。**部署私钥降权（2026-09-14 做完，详见 `docs/deploy-security.md`）**：远端动作全收敛到服务器 `/usr/local/bin/wechat-deploy`（仓库留档 `deploy/server/wechat-deploy`），私钥改成 `restrict,command=…` → 拿不到 shell、不能转发端口/传 PTY/scp；**三个上传都要 HMAC-SHA256 验签**（`DEPLOY_TAR_SECRET` + 服务器 `/etc/wechat-deploy.secret`），否则光有私钥就能推一个自造镜像（= root）。**没加 `from=`**：runner 出口 IP 有 6980 条 CIDR 且会变。
 
 51. **网关"半开连接"的自愈（2026-09-13 加）+ 造半开连接的正确姿势**：`QqChannel` 每次心跳（`startHeartbeat` 的定时任务）顺带体检：连续 `SILENT_INTERVALS`(3) 个心跳周期收不到**任何**帧（心跳 ACK 也算帧）就判定半开 → 关掉旧 socket（reason `heartbeat timeout`）并 `reconnect()`。判定与 `isGatewayConnected()` 共用 `gatewayWentSilent()`，所以"面板显示异常/告警"与"触发重连"是同一个条件。**为什么要自愈**：半开时 OkHttp 的 `onFailure`/`onClosed` **都不会回调**，只有告警的话机器人会一直聋着。**验证状态**：误判已排除（30+ 分钟无 `半开连接` 日志）；**"触发"那一步未实测到**（两次都没能稳定造出静默条件）。
     - **造半开连接**：只掐**那条长连接**的入站（动了 TCP 就走 `onFailure`）：从 `ss -tnp state established | grep -i java | grep ':443'` 取本地端口（**必须 `grep -vE '^443$'` 排掉 443**——那是面板入站端口，我漏了这步，一条 DROP 把**面板从外部整个封了**），再 `iptables -I INPUT -p tcp --dport <端口> -j DROP`；要 `lastGatewayEventAt` 连续 45 秒不推进才算成功（网关是多 IP CDN）。`ss` 里的 `[::ffff:1.2.3.4]` 不能直接喂 iptables，先剥出四段点分。
@@ -221,13 +221,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ## 7. 当前状态（2026-09-14 · 记忆链路收口之后）
 
 - **4 个容器全部 running**，应用跑 **`production` profile**（`ddl-auto=validate`，冷启动约 35 秒，零 ERROR），无告警。
-- **面板入口 `https://120.25.170.92/`**（备案期间：根路径 200、**编码路径 `/api/adm%69n/overview` = 401**）。用域名会提示证书不匹配，且**带 `liche.cloud` SNI 会被阿里云掐断**（坑 47）。
+- **面板入口 `https://120.25.170.92/`**（备案期间用 IP；用域名会证书不匹配、带 `liche.cloud` SNI 会被阿里云掐断，见坑 47）。
 - **用户的考研数据（真实数据，别乱动）**：`exam_plan` 1 行（南京理工大学 · 计算机专硕 22408，阶段 BASIC，每天 300 分钟，四科 数学 130/英语 70/408 120/政治 70，**考试日期 2027-12-25**）；`exam_task` 今天 3 条；进度/错题/里程碑/打卡都是 0。**他自己用聊天让 agent 改过一次计划**（09-13 18:03），所以"只改某一项"这条路是通的。
 - 其余数据（09-14 复查）：`user_profile` 3、`conversation_memory` 662、`user_core_memory` 25、`user_work_memory` 60、`reminder_task` 18、`scheduled_task` 2、`stored_media` 6、`memory_archive` 3。**用户自建任务 #5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）都是他的数据，不要删。** 墨墨 token 在**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（**有效期约一天，随时可能过期**）。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
-- **CI 自验证**：push `main` → 构建 → 部署 → 自检（无口令各项走 IP 直连，带口令两项在服务器本机跑）；action 钉 SHA、主机指纹靠 `DEPLOY_HOST_KEY`、旧镜像只留两个 tag。**09-13 GitHub 抽风过一轮（坑 56）。**
-- **09-13 已完成**：基础设施加固(53)、通道健壮性(54)、网关半开自愈(51)、定时任务写回(55)、考研模块两批、面板不闪屏(57)、备份改 zip(58)、媒体记忆(59)、调用档位与工具裁剪(60、61)；对应文档都在 `docs/`。
-- **仍未做**：③ 部署私钥降权（`from=…,restrict,command=…` + `DEPLOY_USER`）；⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。
+- **CI**：push `main` 即构建+验签上传+部署+自检；供应链细节见坑 47/50。**09-13 GitHub 抽风过一轮（坑 56）。**
+- **仍未做**：⑥ 墨墨回调 IP 限流；⑧ 容器 `read_only` + 非 root 用户（坑 53 末）。（③ 部署私钥降权、④ SearXNG 密钥出仓库已做）
 - 本地：Docker Desktop 未启动、本地 JAR 未运行（与远程**共用同一个 QQ AppID，不要同时启动**）。
 
 ## 8. 凭据索引
@@ -240,6 +239,6 @@ Codex 会话原始记录在 `C:\Users\33721\.codex\sessions\`（Codex 专有格�
 
 ## 10. 工作区结构（约 59MB）
 
-- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。2026-09-14 清过一次：根目录的探针脚本、旧截图目录、带明文口令的 `.sshchk2\` 已删。
-- 整理时删掉的都是可重建物（`target/`、本地 `logs/`、旧截图等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份，本地调试完顺手删。
+- `AGENTS.md`（记忆入口）/ `DS-HARNESS-PROMPT.md`（初始提示词）/ `.git-ca\`（导出的系统根证书，**push 依赖它不能删**）/ `wechat-agent-java\`（git 仓库；面板验证工具在它的 `tools\ui-verify\`）。2026-09-14 清过探针脚本/旧截图/明文口令目录。
+- 整理时删掉的都是可重建物（`target/`、本地 `logs/` 等）。`backup/`、`stored-media/`、`logs/`、`tmp/` 是**本地跑 JAR 时生成**的，服务器各有独立一份。
 
