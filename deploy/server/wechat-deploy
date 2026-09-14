@@ -162,10 +162,11 @@ mkdir -p "$INCOMING"
 chmod 700 "$BASE" "$INCOMING"
 
 set -f   # 原始命令里带 * 之类的字符时不做 glob 展开
-set -- ${SSH_ORIGINAL_COMMAND:-}
+# 装了 command= 之后，客户端的命令在 SSH_ORIGINAL_COMMAND 里；
+# 直接在服务器上手工执行（排障/兜底）时没有这个变量，就用脚本自己的参数。
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then set -- $SSH_ORIGINAL_COMMAND; fi
 [ "$#" -ge 1 ] || usage
-[ "$1" = "wechat-deploy" ] || die "只接受 wechat-deploy 开头的命令"
-shift
+[ "$1" = "wechat-deploy" ] && shift
 [ "$#" -ge 1 ] || usage
 sub=$1; shift
 
