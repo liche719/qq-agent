@@ -55,6 +55,8 @@ public class AgentSelfEvent {
     public static final String KIND_QUEST_NOTE = "QUEST_NOTE";
     public static final String KIND_QUEST_RETRACT = "QUEST_RETRACT";
     public static final String KIND_QUEST_CLOSED = "QUEST_CLOSED";
+    /** 它自己决定"今天先到这"——时间归它自己的那一半：额度够也不代表它必须动 */
+    public static final String KIND_QUEST_REST = "QUEST_REST";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

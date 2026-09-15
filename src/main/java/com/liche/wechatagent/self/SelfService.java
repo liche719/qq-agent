@@ -72,6 +72,7 @@ public class SelfService {
     private final AgentQuestRepository questRepository;
     private final AgentQuestNoteRepository questNoteRepository;
     private final AgentQuestRunRepository questRunRepository;
+    private final AgentSelfUtteranceRepository utteranceRepository;
     private final ConversationMemoryRepository conversationMemoryRepository;
     private final boolean enabled;
     private final String ownerOpenId;
@@ -79,6 +80,7 @@ public class SelfService {
     private final int maxOpenCommitments;
     private final int maxActiveStances;
     private final int maxLessons;
+    private final int maxActiveQuests;
     private final double lessonMergeSimilarity;
     private final int cleanReviewsToClose;
     private final double decay;
@@ -93,6 +95,7 @@ public class SelfService {
                        AgentQuestRepository questRepository,
                        AgentQuestNoteRepository questNoteRepository,
                        AgentQuestRunRepository questRunRepository,
+                       AgentSelfUtteranceRepository utteranceRepository,
                        ConversationMemoryRepository conversationMemoryRepository,
                        @Value("${memory.self-enabled:true}") boolean enabled,
                        @Value("${memory.self-owner-openid:}") String ownerOpenId,
@@ -100,6 +103,7 @@ public class SelfService {
                        @Value("${memory.self-max-commitments:20}") int maxOpenCommitments,
                        @Value("${memory.self-stance-max-active:5}") int maxActiveStances,
                        @Value("${memory.self-max-lessons:30}") int maxLessons,
+                       @Value("${memory.self-max-active-quests:2}") int maxActiveQuests,
                        @Value("${memory.self-lesson-merge-similarity:0.72}") double lessonMergeSimilarity,
                        @Value("${memory.self-lesson-clean-reviews-to-close:3}") int cleanReviewsToClose,
                        @Value("${memory.self-fsrs-decay:-0.1542}") double decay,
@@ -113,6 +117,7 @@ public class SelfService {
         this.questRepository = questRepository;
         this.questNoteRepository = questNoteRepository;
         this.questRunRepository = questRunRepository;
+        this.utteranceRepository = utteranceRepository;
         this.conversationMemoryRepository = conversationMemoryRepository;
         this.enabled = enabled;
         this.ownerOpenId = ownerOpenId == null ? "" : ownerOpenId.trim();
@@ -120,6 +125,7 @@ public class SelfService {
         this.maxOpenCommitments = Math.max(1, maxOpenCommitments);
         this.maxActiveStances = Math.max(1, maxActiveStances);
         this.maxLessons = Math.max(5, maxLessons);
+        this.maxActiveQuests = Math.max(1, maxActiveQuests);
         this.lessonMergeSimilarity = Math.min(0.95, Math.max(0.5, lessonMergeSimilarity));
         this.cleanReviewsToClose = Math.max(1, cleanReviewsToClose);
         this.decay = decay > 0 ? -decay : (decay == 0 ? -0.1542 : decay);
@@ -608,6 +614,39 @@ public class SelfService {
     }
 
     /**
+     * 兴趣累积：自上次反思以来**它自己**产生的事件按重要度之和。
+     *
+     * <p>这是"不等机主说话也会想"的判据（Generative Agents 用的就是 importance 累加过阈值，
+     * 不是"机主说了多少句"）。用机主的消息量当触发，它的思考就变成机主对话量的影子——
+     * 而这个模块要的是**它自己的事占大头**。
+     */
+    @Transactional(readOnly = true)
+    public int interestSinceLastReflection() {
+        LocalDateTime since = lastReflection().map(AgentReflection::getCreatedAt)
+                .orElse(LocalDateTime.now().minusDays(2));
+        return eventsSince(since).stream()
+                .filter(event -> !AgentSelfEvent.KIND_REFLECT.equals(event.getKind()))
+                .mapToInt(event -> event.getImportance() == null ? 0 : event.getImportance())
+                .sum();
+    }
+
+    /**
+     * 手上还有没有没结的事：欠着的承诺、或自己方向里还写着"下一步"。
+     *
+     * <p>闲置触发的**第二个条件**——只有"很久没动"还不够，还得"有料可想"，
+     * 否则就是空转烧钱（spec §8 的 open loop：没做完的事会被反复想起）。
+     */
+    @Transactional(readOnly = true)
+    public boolean hasOpenLoops() {
+        if (countOpenCommitments() > 0) {
+            return true;
+        }
+        return activeQuest()
+                .map(quest -> quest.getNextStep() != null && !quest.getNextStep().isBlank())
+                .orElse(false);
+    }
+
+    /**
      * 反思落库。**必须带证据链**（读了哪几条事件），否则整条拒绝——
      * 对应 spec §4 的"合成失败就丢弃，不写半成品"。
      */
@@ -949,8 +988,64 @@ public class SelfService {
                 .toList();
     }
 
-    /** 标尺用的全量笔记（跨方向，按时间倒序） */
+    /**
+     * 它今天说了"先到这"吗。
+     *
+     * <p>时间归它自己的另一半：**额度够不代表它必须动**。一天的额度是上限，不是任务；
+     * 它可以今天用满、也可以今天一次都不动（后者靠 {@link #restForToday} 明确表态）。
+     */
     @Transactional(readOnly = true)
+    public boolean restedToday() {
+        return eventsSince(LocalDate.now().atStartOfDay()).stream()
+                .anyMatch(event -> AgentSelfEvent.KIND_QUEST_REST.equals(event.getKind()));
+    }
+
+    /** 它自己决定"今天先到这"（写一条事件，今天剩下的机会就不再叫它）。 */
+    @Transactional
+    public AgentSelfEvent restForToday(String reason, String evidence) {
+        return appendEvent(AgentSelfEvent.KIND_QUEST_REST,
+                isBlank(reason) ? "今天先到这" : "今天先到这：" + reason, evidence, null, null, 1);
+    }
+
+    // ---------------------------------------------------------------- 三期领域②：它的「口」
+
+    /**
+     * 记下它想说、但**现在不说**的一句话。
+     *
+     * <p>这是"它有自己的表达"的第三种状态：既不憋着（等于没有表达），也不打扰机主（用户明确不要）。
+     * {@code why} 必填——面板上只看句子看不出它在想什么，"为什么想说"才是有信息量的那一半，
+     * 也是以后决定要不要开口时唯一的判据来源（**它自己想说的**，不是"对机主有没有用"）。
+     */
+    @Transactional
+    public AgentSelfUtterance wantToSay(String content, String why, Long questId, String evidence) {
+        requireEvidence(evidence);
+        if (isBlank(content) || isBlank(why)) {
+            throw new IllegalArgumentException("想说什么、以及为什么想说，都要写（只写句子的话，看不出你在想什么）");
+        }
+        AgentSelfUtterance utterance = new AgentSelfUtterance();
+        utterance.setContent(clip(content, 1000));
+        utterance.setWhy(clip(why, 500));
+        utterance.setQuestId(questId);
+        utterance.setStatus(AgentSelfUtterance.STATUS_PENDING);
+        utterance.setEvidence(evidence.trim());
+        utterance.setCreatedAt(LocalDateTime.now());
+        return utteranceRepository.save(utterance);
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentSelfUtterance> recentUtterances(int limit) {
+        return utteranceRepository.findAllByOrderByCreatedAtDesc().stream()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    /** 这段时间它攒了多少想说的话——**表达欲的观测值**，不是"该不该发"的判据（发不发是另一层的事） */
+    @Transactional(readOnly = true)
+    public long countUtterancesSince(LocalDateTime since) {
+        return utteranceRepository.countByCreatedAtAfter(since);
+    }
+
+    /** 标尺用的全量笔记（跨方向，按时间倒序） */    @Transactional(readOnly = true)
     public List<AgentQuestNote> recentQuestNotes(LocalDateTime since) {
         return questNoteRepository.findByCreatedAtAfterOrderByCreatedAtDesc(since);
     }
@@ -999,14 +1094,18 @@ public class SelfService {
             throw new IllegalArgumentException("题目和「为什么选这个」都必须写：不写理由的选题看不出偏好");
         }
         LocalDateTime now = LocalDateTime.now();
-        activeQuest().ifPresent(existing -> {
-            existing.setStatus(AgentQuest.STATUS_CLOSED);
-            existing.setClosedAt(now);
-            existing.setUpdatedAt(now);
-            existing.setEvidence(evidence.trim());
-            questRepository.save(existing);
-            log.info("领域 #{}「{}」被新方向顶掉，自动关闭", existing.getId(), existing.getTitle());
-        });
+        // 同时开着的方向有上限（§9 写的是 1–2 个：稀缺才有取舍，但也没必要只许做一件事）。
+        // 超了就**关掉最旧的**——换方向是它的自由，可"同时几个"由程序保证，不靠它自觉。
+        List<AgentQuest> active = questRepository.findByStatusOrderByUpdatedAtDesc(AgentQuest.STATUS_ACTIVE);
+        for (int index = maxActiveQuests - 1; index < active.size(); index++) {
+            AgentQuest oldest = active.get(index);
+            oldest.setStatus(AgentQuest.STATUS_CLOSED);
+            oldest.setClosedAt(now);
+            oldest.setUpdatedAt(now);
+            oldest.setEvidence(evidence.trim());
+            questRepository.save(oldest);
+            log.info("领域 #{}「{}」被新方向顶掉，自动关闭", oldest.getId(), oldest.getTitle());
+        }
         AgentQuest quest = new AgentQuest();
         quest.setTitle(clip(title, 200));
         quest.setWhy(clip(why, 600));

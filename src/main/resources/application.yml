@@ -324,12 +324,21 @@ memory:
   self-lesson-merge-similarity: ${MEMORY_SELF_LESSON_MERGE_SIMILARITY:0.72}
   self-lesson-clean-reviews-to-close: ${MEMORY_SELF_LESSON_CLEAN_REVIEWS_TO_CLOSE:3}
   self-max-lessons-in-prompt: ${MEMORY_SELF_MAX_LESSONS_IN_PROMPT:3}
-  # 三期领域②：「它自己的时间」——每天一笔预算，它自己决定往哪推（不是给机主办事）。
-  # mode=off 关闭；daily 每天到点叫它一次。预算含跳过/失败（否则失败重试能把预算吃穿）。
+  # 三期领域②：「它自己的时间」——每天给它几次机会，用几次由它自己决定（不是给机主办事）。
+  # cron 给三个时间点：一天三次机会；额度是**上限不是任务**，它可以用 selfQuestRest 说"今天先到这"。
+  # 预算含跳过/失败（否则失败重试能把预算吃穿）。
   self-quest-mode: ${MEMORY_SELF_QUEST_MODE:daily}
-  self-quest-cron: ${MEMORY_SELF_QUEST_CRON:0 40 22 * * *}
-  self-quest-daily-call-limit: ${MEMORY_SELF_QUEST_DAILY_CALL_LIMIT:1}
+  self-quest-cron: ${MEMORY_SELF_QUEST_CRON:0 0 10,16,22 * * *}
+  self-quest-daily-call-limit: ${MEMORY_SELF_QUEST_DAILY_CALL_LIMIT:2}
   self-quest-min-interval-minutes: ${MEMORY_SELF_QUEST_MIN_INTERVAL_MINUTES:180}
+  # 同时开着的方向数（§9 说 1–2 个：稀缺才有取舍）
+  self-max-active-quests: ${MEMORY_SELF_MAX_ACTIVE_QUESTS:2}
+  # "不等机主说话也会想"：它自己事件的兴趣累积过阈值就触发反思（Generative Agents 的判据）+ 闲置超时。
+  # mode=off 是总闸，关掉之后这三条都不自动跑。
+  self-reflect-on-interest: ${MEMORY_SELF_REFLECT_ON_INTEREST:true}
+  self-reflect-interest-threshold: ${MEMORY_SELF_REFLECT_INTEREST_THRESHOLD:150}
+  self-reflect-on-idle: ${MEMORY_SELF_REFLECT_ON_IDLE:true}
+  self-reflect-idle-hours: ${MEMORY_SELF_REFLECT_IDLE_HOURS:20}
   # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
   history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
   conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}

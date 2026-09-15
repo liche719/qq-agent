@@ -216,12 +216,11 @@ public class AgentLoop {
     /**
      * 带作用域的一轮（三期领域②："它自己的时间"）。
      *
-     * @param allowedToolProviders provider 的简单类名；非空时本轮**只下发也只允许执行**这些类提供的工具。
-     *                             null/空 = 全部工具，行为与不传时逐字节一致。
+     * @param scope 作用域；null 或未限定 = 全部工具，行为与不传时逐字节一致
      */
     public String chat(String userId, String botId, String channel, String persona, String coreSection, String workSection,
                        List<ContextTurn> history, String userText, List<String> images, List<ExtractedDocument> documents,
-                       StreamReplySink sink, Set<String> allowedToolProviders) {
+                       StreamReplySink sink, TurnScope scope) {
         // 工作线程是复用的：先清掉上一轮可能残留的升档状态（thinkDeeper）
         LlmEscalation.clear();
         toolStatusService.bind(userId, null, botId, channel);
@@ -238,7 +237,7 @@ public class AgentLoop {
             Map<String, ToolExecutionOutcome> failedTools = new java.util.LinkedHashMap<>();
             // 成功的工具结果也留一份：回复结尾的"参考来源"要用搜索工具返回的链接
             Map<String, ToolExecutionOutcome> toolResults = new java.util.LinkedHashMap<>();
-            return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink, allowedToolProviders);
+            return runToolLoop(messages, userId, successfulTools, failedTools, toolResults, sink, scope);
         } finally {
             LlmEscalation.clear();
             toolStatusService.unbind();
@@ -275,10 +274,10 @@ public class AgentLoop {
     private String runToolLoop(List<ChatMessage> messages, String userId, Set<String> successfulTools,
                                Map<String, ToolExecutionOutcome> failedTools,
                                Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink,
-                               Set<String> allowedToolProviders) {
-        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId, allowedToolProviders);
-        int maxRounds = effectiveMaxRounds();
-        boolean scoped = allowedToolProviders != null && !allowedToolProviders.isEmpty();
+                               TurnScope scope) {
+        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId, scope);
+        int maxRounds = effectiveMaxRounds(scope);
+        boolean scoped = scope != null && scope.isScoped();
         try {
             for (int round = 0; round < maxRounds; round++) {
                 // 作用域调用（"它自己的时间"）到最后一步**把工具收走**，逼它用文字收尾：
@@ -299,7 +298,7 @@ public class AgentLoop {
                 }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
                 String roundText = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
-                        toolResults, allowedToolProviders);
+                        toolResults, scope);
                 if (roundText != null) {
                     return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
                 }
@@ -315,8 +314,8 @@ public class AgentLoop {
 
     /** 按用户状态裁剪工具集：没有备考计划、近期也没聊考研的用户，不必背着 18 个考试工具 schema */
     private List<ToolSpecification> trimmedSpecifications(List<ChatMessage> messages, String userId,
-                                                          Set<String> allowedToolProviders) {
-        List<ToolSpecification> all = toolRegistry.specificationsOf(allowedToolProviders);
+                                                          TurnScope scope) {
+        List<ToolSpecification> all = toolRegistry.specificationsOf(scope);
         if (toolSetTrimmer == null) {
             return all;
         }
@@ -348,7 +347,11 @@ public class AgentLoop {
     }
 
     /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */
-    private int effectiveMaxRounds() {
+    private int effectiveMaxRounds(TurnScope scope) {
+        // 作用域自带轮数时以它为准（"它自己的时间"想更深地做一件事，就不该被对话那档的 8 轮卡住）
+        if (scope != null && scope.maxRounds() > 0) {
+            return scope.maxRounds();
+        }
         return LlmEscalation.active() ? Math.max(maxToolRounds, deepToolRounds) : maxToolRounds;
     }
 
@@ -406,7 +409,7 @@ public class AgentLoop {
     private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
                                   Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                   Map<String, ToolExecutionOutcome> toolResults,
-                                  Set<String> allowedToolProviders) {
+                                  TurnScope scope) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -435,7 +438,7 @@ public class AgentLoop {
                         if (ai.hasToolExecutionRequests()) {
                             hasTools.set(true);
                             for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
-                                ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), allowedToolProviders)
+                                ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
                                         ? executeTool(request, userId)
                                         : ToolExecutionOutcome.failure(
                                                 "这个工具不在当前作用域里，换一个：" + request.name(), 0);

@@ -127,6 +127,12 @@ public class AdminPanelController {
                         column("time", "时间", false)), List.of()),
                 bars("每周为自己写的笔记（条数一直涨但从不撤回＝在堆料）",
                         "/api/admin/self/quest-bars?weeks=8", "条"),
+                table("它想说、但没跟你说的话（口留着，不打扰你）", "/api/admin/self/utterances", List.of(
+                        column("id", "#", false),
+                        column("content", "它想说什么", true),
+                        column("why", "为什么想说", true),
+                        column("state", "状态", false),
+                        column("time", "时间", false)), List.of()),
                 table("它自己的时间（每次作业与花销）", "/api/admin/self/quest-runs?limit=20", List.of(
                         column("id", "#", false),
                         column("status", "结果", false),

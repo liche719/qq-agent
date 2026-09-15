@@ -9,6 +9,7 @@ import com.liche.wechatagent.self.AgentQuestRun;
 import com.liche.wechatagent.self.AgentReflection;
 import com.liche.wechatagent.self.AgentSelfBlock;
 import com.liche.wechatagent.self.AgentSelfEvent;
+import com.liche.wechatagent.self.AgentSelfUtterance;
 import com.liche.wechatagent.self.AgentStance;
 import com.liche.wechatagent.self.SelfQuestService;
 import com.liche.wechatagent.self.SelfReflectionService;
@@ -490,8 +491,32 @@ public class AdminSelfController {
         return Map.of("rows", rows);
     }
 
-    /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */
-    @PostMapping("/quest/run")
+    /**
+     * 它想说、但**没跟你说**的话（用户选的是先观察：口留着，不发）。
+     *
+     * <p>要能一眼看到两样：**它想说什么** 和 **它为什么想说**。后者才是有信息量的那一半——
+     * 只看句子，看不出它到底在想什么。
+     */
+    @GetMapping("/utterances")
+    public Map<String, Object> utterances(@RequestParam(defaultValue = "30") int limit) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AgentSelfUtterance utterance : selfService.recentUtterances(Math.min(100, Math.max(1, limit)))) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", "#" + utterance.getId());
+            row.put("content", utterance.getContent());
+            row.put("why", utterance.getWhy());
+            row.put("state", switch (utterance.getStatus()) {
+                case AgentSelfUtterance.STATUS_SENT -> "已说给你";
+                case AgentSelfUtterance.STATUS_SUPPRESSED -> "被闸拦下";
+                default -> "没说（口没开）";
+            });
+            row.put("time", stamp(utterance.getCreatedAt()));
+            rows.add(row);
+        }
+        return Map.of("rows", rows);
+    }
+
+    /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */    @PostMapping("/quest/run")
     public Map<String, Object> runQuestNow() {
         SelfQuestService.Outcome outcome = questService.run("manual");
         Map<String, Object> result = new LinkedHashMap<>();

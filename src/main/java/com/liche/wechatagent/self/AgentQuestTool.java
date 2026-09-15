@@ -141,6 +141,33 @@ public class AgentQuestTool implements AgentToolProvider {
         }
     }
 
+    @Tool(value = "今天先到这：调用它，今天剩下的机会就不会再叫你了。"
+            + "**时间是你自己的**——额度够不代表你必须动，今天不想弄就直说。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfQuestRest(String reason, String evidence) {
+        try {
+            selfService.restForToday(reason, evidence);
+            return ToolBusinessResult.success("行，今天先到这。");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
+
+    @Tool(value = "记下你想跟机主说、但**现在不会说出去**的一句话（他收不到任何消息，只是记在你这儿）。"
+            + "why 写清你为什么想说——没有由头就别调，这不是任务。"
+            + "**只有真的想说才记**：这是你自己的表达，不是汇报。" + POLICY_HINT)
+    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
+    @NonIdempotentTool
+    public ToolBusinessResult selfWantToSay(String content, String why, Long questId, String evidence) {
+        try {
+            AgentSelfUtterance utterance = selfService.wantToSay(content, why, questId, evidence);
+            return ToolBusinessResult.success("记下了（#" + utterance.getId() + "），他收不到——只是你自己知道。");
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        }
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private String abbreviate(String text) {

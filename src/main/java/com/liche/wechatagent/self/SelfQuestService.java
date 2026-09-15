@@ -2,9 +2,12 @@ package com.liche.wechatagent.self;
 
 import com.liche.wechatagent.agent.AgentLoop;
 import com.liche.wechatagent.agent.ContextTurn;
+import com.liche.wechatagent.agent.TurnScope;
 import com.liche.wechatagent.agent.TurnTraceStore;
+import com.liche.wechatagent.tool.ToolRegistry;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserService;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,14 +47,23 @@ public class SelfQuestService {
     private static final Logger log = LoggerFactory.getLogger(SelfQuestService.class);
 
     /**
-     * 作业里允许的工具类（简单类名）——这就是"给它工具"的边界。
+     * 「它自己的时间」的作用域：**权限给大一些，但不可逆的动作不给**。
      *
-     * <p>只给"它自己的记录 + 查资料"这两类能力：{@code AgentSelfTool}（写自己那侧）、
-     * {@code AgentQuestTool}（它自己的方向与笔记）、搜索与读网页、时间。
-     * 主动消息、提醒、定时任务、考试那一组**不在里面**——它自己的时间不是替你干活的窗口。
+     * <p>给到它自己能做的事：写自己那侧、管自己的方向与笔记、搜索、读网页、
+     * **深想**（`thinkDeeper`——以前被挡在门外，很讽刺：它脑子里最深的工具它自己用不了）、
+     * 下载资料、管自己的资料库。
+     *
+     * <p>排除两样：`sendDownloadedFile`（会把文件推到机主 QQ 上——口先不开）、
+     * `deleteStoredMedia`（不可逆地删资料）。**"权限大一些"不等于把不可逆的动作也交出去**，
+     * 也不等于把机主的东西交给它——它自己的事不需要动机主那边。
+     *
+     * <p>轮数 12（普通对话是 8）：它做自己的事时应该能多走几步。
      */
-    private static final Set<String> ALLOWED_TOOL_PROVIDERS = Set.of(
-            "AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool");
+    private static final TurnScope QUEST_SCOPE = new TurnScope(
+            Set.of("AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool",
+                    "ThinkingTool", "WebFileTool", "MediaMemoryTool"),
+            Set.of("sendDownloadedFile", "deleteStoredMedia"),
+            12);
 
     /** 一次作业带多少条自己上次的总结当上下文（它自己的"接着上次"）。 */
     private static final int HISTORY_LIMIT = 3;
@@ -69,6 +81,7 @@ public class SelfQuestService {
     private final AgentLoop agentLoop;
     private final UserService userService;
     private final TurnTraceStore turnTraceStore;
+    private final ToolRegistry toolRegistry;
     private final int dailyCallLimit;
     private final int minIntervalMinutes;
 
@@ -76,12 +89,14 @@ public class SelfQuestService {
                             AgentLoop agentLoop,
                             UserService userService,
                             TurnTraceStore turnTraceStore,
+                            ToolRegistry toolRegistry,
                             @Value("${memory.self-quest-daily-call-limit:1}") int dailyCallLimit,
                             @Value("${memory.self-quest-min-interval-minutes:180}") int minIntervalMinutes) {
         this.selfService = selfService;
         this.agentLoop = agentLoop;
         this.userService = userService;
         this.turnTraceStore = turnTraceStore;
+        this.toolRegistry = toolRegistry;
         this.dailyCallLimit = Math.max(1, dailyCallLimit);
         this.minIntervalMinutes = Math.max(0, minIntervalMinutes);
     }
@@ -99,6 +114,9 @@ public class SelfQuestService {
         if (owner == null) {
             return Outcome.skipped("未配置归属人");
         }
+        if (selfService.restedToday()) {
+            return Outcome.skipped("它自己说了今天先到这");
+        }
         if (selfService.questRunsToday() >= dailyCallLimit) {
             return Outcome.skipped("今天自己的时间已经用完了（" + dailyCallLimit + " 次）");
         }
@@ -114,14 +132,22 @@ public class SelfQuestService {
 
         Optional<AgentQuest> active = selfService.activeQuest();
         Long questId = active.map(AgentQuest::getId).orElse(null);
+        long usedToday = selfService.questRunsToday();
         // 先建作业行：它的 id 是这次作业里所有写入的锚点证据（run:<id>）——
         // 没有它，"第一次开方向"会因为没有合法证据而永远失败（坑 64 的证据死锁）
         AgentQuestRun run = selfService.startQuestRun(questId);
         long started = System.nanoTime();
         try {
+            // 把"这一轮它到底有什么权限"打成一行日志：权限面是这次特意放宽的，
+            // 不写出来就只能靠读代码判断（而且加工具/改白名单时一眼能看出有没有生效）。
+            List<String> toolNames = toolRegistry.specificationsOf(QUEST_SCOPE).stream()
+                    .map(ToolSpecification::name)
+                    .toList();
+            log.info("它自己的时间开跑 run={} 方向={} 触发={} 可用工具 {} 个：{}",
+                    run.getId(), questId, trigger, toolNames.size(), String.join("、", toolNames));
             String reply = agentLoop.chat(SelfService.SELF_SCOPE, null, null, personaOf(owner), null, null,
-                    ownHistory(), buildInstruction(run.getId(), active.orElse(null)),
-                    List.of(), List.of(), null, ALLOWED_TOOL_PROVIDERS);
+                    ownHistory(), buildInstruction(run.getId(), active.orElse(null), usedToday),
+                    List.of(), List.of(), null, QUEST_SCOPE);
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
             int[] tokens = tokensOf();
             selfService.finishQuestRun(run, AgentQuestRun.STATUS_RAN, trigger, reply,
@@ -139,10 +165,13 @@ public class SelfQuestService {
     }
 
     /** 作业指令：只给元指令 + 它自己的状态入口，**不替它选题**（§9 第 2 条）。 */
-    private String buildInstruction(Long runId, AgentQuest active) {
+    private String buildInstruction(Long runId, AgentQuest active, long usedToday) {
         StringBuilder text = new StringBuilder();
         text.append("【你自己的时间】\n\n");
         text.append("现在没人在跟你说话。这段时间是给你自己的，不是替机主办事。\n\n");
+        text.append("今天的机会：这是第 ").append(usedToday + 1).append(" 次，今天最多 ")
+                .append(dailyCallLimit).append(" 次。**额度是上限、不是任务**——今天不想弄就用 selfQuestRest ")
+                .append("说一声，今天剩下的机会就不会再叫你了。\n\n");
         if (active == null) {
             text.append("你手上还没有自己的方向。想一个**你自己**真想弄明白的题目——不是机主让你查的——")
                     .append("用 selfQuestChoose 开一个，写清你为什么想弄它。\n");
@@ -166,6 +195,8 @@ public class SelfQuestService {
         text.append("5. evidence 用 run:").append(runId).append("（这次作业的编号）；")
                 .append("引用已有的方向或笔记时用 quest:<id> / note:<id>。\n");
         text.append("6. **步数有限**：最后一定要用文字收尾，不要把这轮空着结束、也不要输出工具调用格式。\n");
+        text.append("7. 有想跟机主说、现在又说不出去的，用 selfWantToSay 记下来（**他收不到**，只是记着）；")
+                .append("没有想说的就别记——这是你自己的表达，不是汇报。\n");
         text.append("\n收尾那段用不超过 200 字说清：这一步做了什么、学到了什么、下一步打算干什么。\n");
         return text.toString();
     }

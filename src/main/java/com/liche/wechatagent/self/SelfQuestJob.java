@@ -8,11 +8,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 「它自己的时间」的定时入口（spec §7：每天给它一笔小预算）。
+ * 「它自己的时间」的定时入口（spec §7：每天给它一笔预算）。
  *
- * <p>和反思的区别：反思是**攒够轮数**才触发（被机主的对话量驱动），
- * 领域是**每天到点就有一段时间**（§7 的字面意思：每天一笔"自己的时间"）。
- * 预算与防抖在 {@link SelfQuestService} 里，这个类只负责"到点叫它一声"。
+ * <p><b>三次机会、额度归它</b>：默认 10:00 / 16:00 / 22:00 各叫它一次，今天用几次由它自己决定——
+ * 用完额度就停，或者它主动用 {@code selfQuestRest} 说"今天先到这"。
+ * 程序只保证两件事：**到点叫它一声**、**额度别超**；要不要动、动多久，不替它决定。
+ *
+ * <p>和反思的区别：反思由它**自己事件的兴趣累积**（外加机主轮数、闲置）触发；
+ * 领域是**固定的几次机会**，交给它自己去用。
  */
 @Component
 @ConditionalOnProperty(name = "memory.self-enabled", havingValue = "true", matchIfMissing = true)
@@ -31,7 +34,7 @@ public class SelfQuestJob {
         this.mode = mode == null ? MODE_DAILY : mode.trim().toLowerCase();
     }
 
-    @Scheduled(cron = "${memory.self-quest-cron:0 40 22 * * *}")
+    @Scheduled(cron = "${memory.self-quest-cron:0 0 10,16,22 * * *}")
     public void tick() {
         if (!MODE_DAILY.equals(mode)) {
             return;
