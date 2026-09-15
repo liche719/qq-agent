@@ -82,12 +82,12 @@ public class AgentLoop {
         this.turnTraceStore = turnTraceStore;
     }
 
-    /** 花销账（setter 注入：单元测试直接 new AgentLoop 时为 null，那时按钱熔断自动失效） */
-    private com.liche.wechatagent.config.LlmCostLedger costLedger;
+    /** 花销读数（setter 注入：单元测试直接 new AgentLoop 时为 null，那时按钱熔断自动失效） */
+    private com.liche.wechatagent.config.LlmSpendMeter spendMeter;
 
     @Autowired(required = false)
-    public void setCostLedger(com.liche.wechatagent.config.LlmCostLedger costLedger) {
-        this.costLedger = costLedger;
+    public void setSpendMeter(com.liche.wechatagent.config.LlmSpendMeter spendMeter) {
+        this.spendMeter = spendMeter;
     }
     private final ToolRegistry toolRegistry;
     private final ToolStatusService toolStatusService;
@@ -288,11 +288,11 @@ public class AgentLoop {
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();
         double budgetYuan = scope == null ? 0 : scope.budgetYuan();
-        double spentAtStart = costLedger == null ? 0 : costLedger.totalYuan();
+        double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         try {
             for (int round = 0; round < maxRounds; round++) {
                 // 按**钱**熔断（作用域调用专用）：轮数不是钱的代理——每轮 prompt 大小差很多
-                double spent = costLedger == null ? 0 : costLedger.totalYuan() - spentAtStart;
+                double spent = spendMeter == null ? 0 : spendMeter.totalYuan() - spentAtStart;
                 boolean budgetOut = budgetYuan > 0 && spent >= budgetYuan;
                 boolean nearBudget = budgetYuan > 0 && !budgetOut && spent >= budgetYuan * 0.8;
                 // 作用域调用（"它自己的时间"）到最后一步**把工具收走**，逼它用文字收尾：

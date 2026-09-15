@@ -4,7 +4,7 @@ import com.liche.wechatagent.agent.AgentLoop;
 import com.liche.wechatagent.agent.ContextTurn;
 import com.liche.wechatagent.agent.TurnScope;
 import com.liche.wechatagent.agent.TurnTraceStore;
-import com.liche.wechatagent.config.LlmCostLedger;
+import com.liche.wechatagent.config.LlmSpendMeter;
 import com.liche.wechatagent.tool.ToolRegistry;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserService;
@@ -88,7 +88,7 @@ public class SelfQuestService {
     private final UserService userService;
     private final TurnTraceStore turnTraceStore;
     private final ToolRegistry toolRegistry;
-    private final LlmCostLedger costLedger;
+    private final LlmSpendMeter spendMeter;
     private final double dailyBudgetYuan;
     private final double budgetOverrunFactor;
     private final double singleBudgetRatio;
@@ -102,7 +102,7 @@ public class SelfQuestService {
                             UserService userService,
                             TurnTraceStore turnTraceStore,
                             ToolRegistry toolRegistry,
-                            LlmCostLedger costLedger,
+                            LlmSpendMeter spendMeter,
                             @Value("${memory.self-quest-daily-budget-yuan:0.5}") double dailyBudgetYuan,
                             @Value("${memory.self-quest-budget-overrun-factor:1.5}") double budgetOverrunFactor,
                             @Value("${memory.self-quest-single-budget-ratio:0.6}") double singleBudgetRatio,
@@ -115,7 +115,7 @@ public class SelfQuestService {
         this.userService = userService;
         this.turnTraceStore = turnTraceStore;
         this.toolRegistry = toolRegistry;
-        this.costLedger = costLedger;
+        this.spendMeter = spendMeter;
         this.dailyBudgetYuan = Math.max(0.01, dailyBudgetYuan);
         this.budgetOverrunFactor = Math.max(1.0, budgetOverrunFactor);
         this.singleBudgetRatio = Math.min(1.0, Math.max(0.1, singleBudgetRatio));
@@ -194,7 +194,7 @@ public class SelfQuestService {
         int notesBefore = active.map(q -> nz(q.getNoteCount())).orElse(0);
         int stepsBefore = active.map(q -> nz(q.getStepCount())).orElse(0);
         double spentTodayBefore = spentToday;
-        double costAtStart = costLedger == null ? 0 : costLedger.totalYuan();
+        double costAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
 
         // 单次先给日预算的一部分；当天余量不够就只给余量
         double single = Math.min(dailyBudgetYuan * singleBudgetRatio, cap - spentToday);
@@ -226,7 +226,7 @@ public class SelfQuestService {
 
         // 报**这次"自己的时间"总共花了多少**（含续期那一回合），不是只报最后一次——
         // 否则面板上"花 0.09 元"和账上被扣的 0.15 元对不上（实测踩到）。
-        double totalCost = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costAtStart);
+        double totalCost = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costAtStart);
         return new Outcome(true, null, last.questId(), last.runId(), last.summary(),
                 last.promptTokens(), last.completionTokens(), last.durationMs(),
                 totalCost, extended, produced);
@@ -237,9 +237,9 @@ public class SelfQuestService {
                             double spentTodayBefore) {
         AgentQuestRun run = selfService.startQuestRun(questId, BigDecimal.valueOf(budgetYuan), extended);
         long started = System.nanoTime();
-        double costBefore = costLedger == null ? 0 : costLedger.totalYuan();
-        long hitBefore = costLedger == null ? 0 : costLedger.cacheHitTokens();
-        long missBefore = costLedger == null ? 0 : costLedger.cacheMissTokens();
+        double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
+        long hitBefore = spendMeter == null ? 0 : spendMeter.cacheHitTokens();
+        long missBefore = spendMeter == null ? 0 : spendMeter.cacheMissTokens();
         try {
             // 把"这一轮它到底有什么权限、多少钱"打成一行：权限面与预算是特意放宽/收紧的，
             // 不写出来就只能靠读代码判断（而且改白名单/预算时一眼能看出有没有生效）。
@@ -255,9 +255,9 @@ public class SelfQuestService {
                     List.of(), List.of(), null, questScope(budgetYuan));
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
             int[] tokens = tokensOf();
-            double yuan = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costBefore);
-            long hit = Math.max(0, (costLedger == null ? 0 : costLedger.cacheHitTokens()) - hitBefore);
-            long miss = Math.max(0, (costLedger == null ? 0 : costLedger.cacheMissTokens()) - missBefore);
+            double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
+            long hit = Math.max(0, (spendMeter == null ? 0 : spendMeter.cacheHitTokens()) - hitBefore);
+            long miss = Math.max(0, (spendMeter == null ? 0 : spendMeter.cacheMissTokens()) - missBefore);
             selfService.finishQuestRun(run, AgentQuestRun.STATUS_RAN, trigger, reply,
                     new SelfService.RunCost(tokens[0], tokens[1], durationMs,
                             BigDecimal.valueOf(yuan), hit, miss));
@@ -267,7 +267,7 @@ public class SelfQuestService {
             return new Attempt(run.getId(), settledQuest, reply, tokens[0], tokens[1], durationMs, yuan);
         } catch (RuntimeException exception) {
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
-            double yuan = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costBefore);
+            double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
             selfService.finishQuestRun(run, AgentQuestRun.STATUS_FAILED,
                     exception.getClass().getSimpleName() + ": " + exception.getMessage(), null,
                     new SelfService.RunCost(0, 0, durationMs, BigDecimal.valueOf(yuan), 0, 0));
@@ -370,7 +370,7 @@ public class SelfQuestService {
      * 这一轮的 token（面板展示用）。
      *
      * <p>从调用链上汇总而不是让模型自己报：{@link TurnTraceStore} 是流式模型实测的 usage，
-     * 已经把思考 token 算在里面（坑 60 的教训）。**钱的账走 {@link LlmCostLedger}**，
+     * 已经把思考 token 算在里面（坑 60 的教训）。**钱的账走 {@link LlmSpendMeter}**，
      * 那边还分 cache 命中/未命中。
      */
     private int[] tokensOf() {

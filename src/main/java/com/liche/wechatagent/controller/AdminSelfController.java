@@ -523,7 +523,7 @@ public class AdminSelfController {
             row.put("state", switch (utterance.getStatus()) {
                 case AgentSelfUtterance.STATUS_SENT -> "已说给你";
                 case AgentSelfUtterance.STATUS_SUPPRESSED -> "被闸拦下";
-                default -> "没说（口没开）";
+                default -> "排着队（还没发出去）";
             });
             row.put("time", stamp(utterance.getCreatedAt()));
             rows.add(row);

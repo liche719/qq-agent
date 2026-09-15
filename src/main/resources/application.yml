@@ -74,7 +74,10 @@ llm:
     cache-hit-per-million: ${LLM_PRICE_CACHE_HIT_PER_MILLION:0.02}
     cache-miss-per-million: ${LLM_PRICE_CACHE_MISS_PER_MILLION:1.0}
     output-per-million: ${LLM_PRICE_OUTPUT_PER_MILLION:4.0}
+    # 峰时倍率与时段（UTC，形如 `1-4,6-10`）。**时段留空 = 没有峰谷价**——
+    # 换厂商/换模型只改这几行，代码不用动（这是 2026-09-15 计费解耦的落点之一）。
     peak-multiplier: ${LLM_PRICE_PEAK_MULTIPLIER:2.0}
+    peak-windows-utc: ${LLM_PRICE_PEAK_WINDOWS_UTC:1-4,6-10}
   temperature: ${LLM_TEMPERATURE:0.7}
   timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
   connect-timeout-seconds: ${LLM_CONNECT_TIMEOUT_SECONDS:5}

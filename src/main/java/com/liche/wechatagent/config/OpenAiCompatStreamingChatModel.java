@@ -22,7 +22,6 @@ import okhttp3.Response;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,12 +44,12 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private final LlmScenarioSettings scenarioSettings;
     /** 指标采集，可为 null（单元测试直接构造时不需要） */
     private final RuntimeMetrics metrics;
-    /** 花销账；setter 注入，单测直接 new 时为 null（那时不计费） */
-    private LlmCostLedger costLedger;
+    /** 用量接收端（setter 注入，单测直接 new 时为空——那时不记账）。**模型层不认识钱**。 */
+    private List<LlmUsageSink> usageSinks = List.of();
 
     @Autowired(required = false)
-    public void setCostLedger(LlmCostLedger costLedger) {
-        this.costLedger = costLedger;
+    public void setUsageSinks(List<LlmUsageSink> usageSinks) {
+        this.usageSinks = usageSinks == null ? List.of() : usageSinks;
     }
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
@@ -93,7 +92,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
         // 所以对话这几档的 token 也能照实记账，面板「按场景」表格不再恒为 0。取最后一个非空 usage。
         int[] tokens = new int[3]; // prompt / completion / reasoning
-        int[] cacheTokens = new int[2]; // cache hit / cache miss（计价用）
+        int[] cachedTokens = new int[1]; // 缓存命中的输入（计价关键；服务端没给就是 0）
         try {
             Request req = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
@@ -150,9 +149,15 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                             tokens[1] = usageNode.path("completion_tokens").asInt(tokens[1]);
                             tokens[2] = usageNode.path("completion_tokens_details").path("reasoning_tokens")
                                     .asInt(tokens[2]);
-                            // 计价要用的两个字段：官方响应里实测有（缓存命中比未命中便宜 50 倍）
-                            cacheTokens[0] = usageNode.path("prompt_cache_hit_tokens").asInt(cacheTokens[0]);
-                            cacheTokens[1] = usageNode.path("prompt_cache_miss_tokens").asInt(cacheTokens[1]);
+                            // 缓存命中的输入：**优先 OpenAI 标准的嵌套字段**，回退 DeepSeek 的平铺字段。
+                            // 两个都没有就是 0——记账方按"全部未命中"算（宁高估不低估）。
+                            JsonNode details = usageNode.path("prompt_tokens_details");
+                            if (details.isObject() && details.has("cached_tokens")) {
+                                cachedTokens[0] = details.path("cached_tokens").asInt(0);
+                            } else {
+                                cachedTokens[0] = usageNode.path("prompt_cache_hit_tokens")
+                                        .asInt(cachedTokens[0]);
+                            }
                         }
                         JsonNode delta = node.path("choices").path(0).path("delta");
                         // 这个模型默认就带思考：思考走 delta.reasoning_content（不推给用户，只用来记账）
@@ -211,7 +216,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                 // 否则只有 metrics 拿得到 token，调用链/诊断视图只能显示 0（2026-09-15）
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage)
                         .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
-                recordCost(cacheTokens, tokens);
+                publishUsage(cachedTokens, tokens);
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
                         tokens);
             }
@@ -226,15 +231,27 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         return override == null ? temperature : override;
     }
 
-    private void recordCost(int[] cacheTokens, int[] tokens) {
-        if (costLedger == null) {
+    /**
+     * 把这一次的用量交给所有接收端（2026-09-15 解耦后：**模型层不认识钱**）。
+     *
+     * <p>字段名映射只在这里做（标准字段优先、厂商字段回退），谁要拿它做什么
+     * （记账、按钱熔断、写审计）由 {@link LlmUsageSink} 的实现决定。换模型实现时，
+     * 只要它也把用量归一化后广播出去，计费一行都不用改。
+     */
+    private void publishUsage(int[] cachedTokens, int[] tokens) {
+        if (usageSinks.isEmpty()) {
             return;
         }
-        int hit = Math.max(0, cacheTokens[0]);
-        // 服务端没给缓存字段时（非 DeepSeek 的兼容实现）**按全部未命中算**——
-        // 宁可高估，也不要因为算少了让预算失控。
-        int miss = (hit > 0 || cacheTokens[1] > 0) ? Math.max(0, cacheTokens[1]) : Math.max(0, tokens[0]);
-        costLedger.record(hit, miss, Math.max(0, tokens[1]), Instant.now());
+        LlmUsage usage = new LlmUsage(Math.max(0, tokens[0]), Math.max(0, tokens[1]),
+                Math.max(0, tokens[2]), Math.max(0, cachedTokens[0]));
+        for (LlmUsageSink sink : usageSinks) {
+            try {
+                sink.accept(usage);
+            } catch (RuntimeException exception) {
+                // 记账失败不能把模型调用带崩（约定见 LlmUsageSink）
+                log.warn("用量接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,

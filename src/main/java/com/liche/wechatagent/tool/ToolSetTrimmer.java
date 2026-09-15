@@ -1,7 +1,6 @@
 package com.liche.wechatagent.tool;
 
 import com.liche.wechatagent.exam.ExamService;
-import com.liche.wechatagent.self.SelfService;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,12 +46,8 @@ public class ToolSetTrimmer {
     /** 永远不裁的两个：没有它们，新用户连计划都建不出来 */
     private static final Set<String> ALWAYS_KEEP = Set.of("saveExamPlan", "viewExamPlan");
 
-    /**
-     * 三期领域②：`selfQuest*` 这组工具只在**它自己的时间**里下发（见
-     * {@code SelfQuestService} 的作用域白名单）。机主对话里它用不上「开一个自己的方向」，
-     * 没必要每轮都为这几段 schema 付 prompt token，更没必要给它一个在聊天里乱开方向的入口。
-     */
-    private static final String QUEST_TOOL_PREFIX = "selfQuest";
+    // 「哪些工具在什么作用域下不下发」不写在这里：那是**模块自己的事**，
+    // 由 ToolVisibilityRule 的实现声明（如 SelfToolVisibilityRule），本类只负责依次问。
 
     /** 命中任一就认为"这条消息/最近在聊考研"，于是不裁 */
     private static final List<String> EXAM_KEYWORDS = List.of(
@@ -64,11 +59,15 @@ public class ToolSetTrimmer {
     private final boolean enabled;
     /** 最近几轮的用户消息也一起看，避免"刚聊完考研、下一句好"就把工具收走 */
     private final int historyTurnsToScan;
+    /** 模块自己声明的可见性规则（没有实现时为空 = 只有考试那套裁剪） */
+    private final List<ToolVisibilityRule> visibilityRules;
 
     public ToolSetTrimmer(ExamService examService,
+                          List<ToolVisibilityRule> visibilityRules,
                           @Value("${agent.tool-trim.enabled:true}") boolean enabled,
                           @Value("${agent.tool-trim.history-turns:4}") int historyTurnsToScan) {
         this.examService = examService;
+        this.visibilityRules = visibilityRules == null ? List.of() : visibilityRules;
         this.enabled = enabled;
         this.historyTurnsToScan = Math.max(0, Math.min(20, historyTurnsToScan));
     }
@@ -86,16 +85,15 @@ public class ToolSetTrimmer {
         if (!enabled || all == null || all.isEmpty()) {
             return new TrimResult(all, Set.of(), "未启用");
         }
-        // 先按作用域裁（它自己的方向这组只在它自己的时间里出现），再做考研那套裁剪
+        // 先按**模块自己声明**的可见性规则裁（如"它自己的方向那组只在该作用域下发"），再做考研那套裁剪
         Set<String> hidden = new LinkedHashSet<>();
-        List<ToolSpecification> base = withoutQuestTools(all, userId, hidden);
+        List<ToolSpecification> base = applyVisibilityRules(all, userId, hidden);
         if (!hidden.isEmpty() && log.isInfoEnabled()) {
             // 这条日志要独立打：下面几个 early return（正在聊考研 / 已有备考计划）都会直接返回，
-            // 只在最后那行打日志的话，"领域工具被摘掉了"这件事在日志里根本看不见（实测踩到）。
-            log.info("按作用域裁掉它自己的工具 {} 个（机主对话里不下发）：{}",
-                    hidden.size(), String.join("、", hidden));
+            // 只在最后那行打日志的话，"模块工具被摘掉了"这件事在日志里根本看不见（实测踩到）。
+            log.info("按模块声明的规则裁掉 {} 个工具：{}", hidden.size(), String.join("、", hidden));
         }
-        String scopeNote = hidden.isEmpty() ? "" : "，另按作用域裁 " + hidden.size() + " 个它自己的工具";
+        String scopeNote = hidden.isEmpty() ? "" : "，另按模块规则裁 " + hidden.size() + " 个";
         if (userId == null || userId.isBlank()) {
             return new TrimResult(base, hidden, "拿不到用户，保守全给" + scopeNote);
         }
@@ -125,26 +123,42 @@ public class ToolSetTrimmer {
         }
         if (log.isInfoEnabled()) {
             log.info("本轮工具集已裁剪 user={} 保留 {} 个 / 裁掉 {} 个（{}）",
-                    userId, kept.size(), hidden.size(), scopeNote.isEmpty() ? "考试组" : "考试组 + 作用域");
+                    userId, kept.size(), hidden.size(), scopeNote.isEmpty() ? "考试组" : "考试组 + 模块规则");
         }
         return new TrimResult(kept, hidden, "用户没有备考计划且近期没聊考研" + scopeNote);
     }
 
     /**
-     * 把「它自己的方向」那组工具从非该作用域的对话里摘掉。
+     * 依次问所有 {@link ToolVisibilityRule}（模块自己声明的），把要藏的工具摘掉。
+     *
+     * <p>裁剪器**不认识任何业务模块**：模块关掉时它的规则 bean 不存在，这里就少问一条。
+     * 单条规则抛异常只记日志跳过——拔掉一个模块不该让整轮对话下不出去工具。
      *
      * @param hidden 出参：被摘掉的名字（调用方要合并进最终结果）
      */
-    private List<ToolSpecification> withoutQuestTools(List<ToolSpecification> all, String userId,
-                                                      Set<String> hidden) {
-        if (userId != null && SelfService.SELF_SCOPE.equals(userId.trim())) {
+    private List<ToolSpecification> applyVisibilityRules(List<ToolSpecification> all, String userId,
+                                                         Set<String> hidden) {
+        if (visibilityRules == null || visibilityRules.isEmpty()) {
+            return all;
+        }
+        for (ToolVisibilityRule rule : visibilityRules) {
+            Set<String> names;
+            try {
+                names = rule.hiddenFor(userId, all);
+            } catch (RuntimeException exception) {
+                log.warn("工具可见性规则「{}」出错（跳过这条）：{}", rule.name(), exception.getMessage());
+                continue;
+            }
+            if (names != null && !names.isEmpty()) {
+                hidden.addAll(names);
+            }
+        }
+        if (hidden.isEmpty()) {
             return all;
         }
         List<ToolSpecification> base = new ArrayList<>(all.size());
         for (ToolSpecification spec : all) {
-            if (spec.name() != null && spec.name().startsWith(QUEST_TOOL_PREFIX)) {
-                hidden.add(spec.name());
-            } else {
+            if (spec.name() == null || !hidden.contains(spec.name())) {
                 base.add(spec);
             }
         }
