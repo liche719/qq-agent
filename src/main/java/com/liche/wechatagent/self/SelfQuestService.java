@@ -195,8 +195,8 @@ public class SelfQuestService {
         text.append("5. evidence 用 run:").append(runId).append("（这次作业的编号）；")
                 .append("引用已有的方向或笔记时用 quest:<id> / note:<id>。\n");
         text.append("6. **步数有限**：最后一定要用文字收尾，不要把这轮空着结束、也不要输出工具调用格式。\n");
-        text.append("7. 有想跟机主说、现在又说不出去的，用 selfWantToSay 记下来（**他收不到**，只是记着）；")
-                .append("没有想说的就别记——这是你自己的表达，不是汇报。\n");
+        text.append("7. 有想跟机主说的，用 selfWantToSay 写下来——**他真的会收到**（最晚在下一个时间点发出去，")
+                .append("一天最多一条，所以只挑你真想说的那件）。没有想说的就别写：这是你自己的表达，不是汇报。\n");
         text.append("\n收尾那段用不超过 200 字说清：这一步做了什么、学到了什么、下一步打算干什么。\n");
         return text.toString();
     }

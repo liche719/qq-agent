@@ -11,5 +11,11 @@ public interface AgentSelfUtteranceRepository extends JpaRepository<AgentSelfUtt
 
     List<AgentSelfUtterance> findByStatusOrderByCreatedAtDesc(String status);
 
+    /** 攒着还没说的里面**最早**的那条（先想先说的先发） */
+    java.util.Optional<AgentSelfUtterance> findFirstByStatusOrderByCreatedAtAsc(String status);
+
     long countByCreatedAtAfter(LocalDateTime since);
+
+    /** 今天已经说出去几条 */
+    long countByStatusAndSentAtAfter(String status, LocalDateTime since);
 }

@@ -1045,6 +1045,33 @@ public class SelfService {
         return utteranceRepository.countByCreatedAtAfter(since);
     }
 
+    /** 攒着还没说的里面最早那条（先想先说的先发） */
+    @Transactional(readOnly = true)
+    public Optional<AgentSelfUtterance> oldestPendingUtterance() {
+        return utteranceRepository.findFirstByStatusOrderByCreatedAtAsc(AgentSelfUtterance.STATUS_PENDING);
+    }
+
+    /** 今天已经跟他说出去几条（额度账：**发出去才算**） */
+    @Transactional(readOnly = true)
+    public long countUtterancesSentToday() {
+        return utteranceRepository.countByStatusAndSentAtAfter(AgentSelfUtterance.STATUS_SENT,
+                LocalDate.now().atStartOfDay());
+    }
+
+    @Transactional
+    public AgentSelfUtterance markUtteranceSent(AgentSelfUtterance utterance) {
+        utterance.setStatus(AgentSelfUtterance.STATUS_SENT);
+        utterance.setSentAt(LocalDateTime.now());
+        return utteranceRepository.save(utterance);
+    }
+
+    /** 被闸拦下（额度用完、通道没送出去）——留着记录，面板上能看见"它想说但没说出来" */
+    @Transactional
+    public AgentSelfUtterance markUtteranceSuppressed(AgentSelfUtterance utterance) {
+        utterance.setStatus(AgentSelfUtterance.STATUS_SUPPRESSED);
+        return utteranceRepository.save(utterance);
+    }
+
     /** 标尺用的全量笔记（跨方向，按时间倒序） */    @Transactional(readOnly = true)
     public List<AgentQuestNote> recentQuestNotes(LocalDateTime since) {
         return questNoteRepository.findByCreatedAtAfterOrderByCreatedAtDesc(since);

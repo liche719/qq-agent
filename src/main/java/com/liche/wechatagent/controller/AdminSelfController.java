@@ -14,6 +14,7 @@ import com.liche.wechatagent.self.AgentStance;
 import com.liche.wechatagent.self.SelfQuestService;
 import com.liche.wechatagent.self.SelfReflectionService;
 import com.liche.wechatagent.self.SelfService;
+import com.liche.wechatagent.self.SelfSpeakService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -50,13 +51,16 @@ public class AdminSelfController {
     private final SelfService selfService;
     private final SelfReflectionService reflectionService;
     private final SelfQuestService questService;
+    private final SelfSpeakService speakService;
     private final TurnTraceStore turnTraceStore;
 
     public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService,
-                               SelfQuestService questService, TurnTraceStore turnTraceStore) {
+                               SelfQuestService questService, SelfSpeakService speakService,
+                               TurnTraceStore turnTraceStore) {
         this.selfService = selfService;
         this.reflectionService = reflectionService;
         this.questService = questService;
+        this.speakService = speakService;
         this.turnTraceStore = turnTraceStore;
     }
 
@@ -514,6 +518,18 @@ public class AdminSelfController {
             rows.add(row);
         }
         return Map.of("rows", rows);
+    }
+
+    /** 手动把攒着的话发一条出去（排障入口；每日条数与通道额度照常生效，不是绕过）。 */
+    @PostMapping("/speak/flush")
+    public Map<String, Object> speakNow() {
+        SelfSpeakService.Outcome outcome = speakService.flush();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("sent", outcome.sent());
+        result.put("reason", outcome.reason() == null ? "" : outcome.reason());
+        result.put("utteranceId", outcome.utteranceId() == null ? "" : ("#" + outcome.utteranceId()));
+        result.put("text", outcome.text() == null ? "" : outcome.text());
+        return result;
     }
 
     /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */    @PostMapping("/quest/run")

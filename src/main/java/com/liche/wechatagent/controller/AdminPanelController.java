@@ -176,7 +176,9 @@ public class AdminPanelController {
         section.put("actions", List.of(
                 action("立即反思一次", "/api/admin/self/reflect", "现在跑一次反思？会花一次模型调用（预算照常生效）。", null),
                 action("让它动一次自己的事", "/api/admin/self/quest/run",
-                        "现在叫它去做一会儿自己的事？会花一次完整对话级的调用（预算与防抖照常生效）。", null)));
+                        "现在叫它去做一会儿自己的事？会花一次完整对话级的调用（预算与防抖照常生效）。", null),
+                action("把攒着的话发一条", "/api/admin/self/speak/flush",
+                        "现在把它想跟你说的话发一条出去？每日条数照常生效。", null)));
         return section;
     }
 

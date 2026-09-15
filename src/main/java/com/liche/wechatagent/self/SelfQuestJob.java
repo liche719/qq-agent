@@ -26,15 +26,18 @@ public class SelfQuestJob {
     private static final String MODE_DAILY = "daily";
 
     private final SelfQuestService questService;
+    private final SelfSpeakService speakService;
     private final String mode;
 
     public SelfQuestJob(SelfQuestService questService,
+                        SelfSpeakService speakService,
                         @Value("${memory.self-quest-mode:daily}") String mode) {
         this.questService = questService;
+        this.speakService = speakService;
         this.mode = mode == null ? MODE_DAILY : mode.trim().toLowerCase();
     }
 
-    @Scheduled(cron = "${memory.self-quest-cron:0 0 10,16,22 * * *}")
+    @Scheduled(cron = "${memory.self-quest-cron:0 0 7,13,20 * * *}")
     public void tick() {
         if (!MODE_DAILY.equals(mode)) {
             return;
@@ -50,6 +53,19 @@ public class SelfQuestJob {
             }
         } catch (RuntimeException exception) {
             log.warn("它自己的时间异常：{}", exception.getMessage());
+        }
+        // 它刚想完的事，如果它决定要说，就趁这个窗口说出去。
+        // **放在作业之后**：这一步刚想到的能立刻说；作业被跳过（额度用完/它说今天先到这）时，
+        // 之前攒下的也照样发得出去——嘴和作业是两件事。
+        try {
+            SelfSpeakService.Outcome spoken = speakService.flush();
+            if (spoken.sent()) {
+                log.info("它主动跟机主说了一条 #{}", spoken.utteranceId());
+            } else {
+                log.debug("这次没说：{}", spoken.reason());
+            }
+        } catch (RuntimeException exception) {
+            log.warn("它想说话但出错：{}", exception.getMessage());
         }
     }
 }

@@ -328,9 +328,13 @@ memory:
   # cron 给三个时间点：一天三次机会；额度是**上限不是任务**，它可以用 selfQuestRest 说"今天先到这"。
   # 预算含跳过/失败（否则失败重试能把预算吃穿）。
   self-quest-mode: ${MEMORY_SELF_QUEST_MODE:daily}
-  self-quest-cron: ${MEMORY_SELF_QUEST_CRON:0 0 10,16,22 * * *}
+  self-quest-cron: ${MEMORY_SELF_QUEST_CRON:0 0 7,13,20 * * *}
   self-quest-daily-call-limit: ${MEMORY_SELF_QUEST_DAILY_CALL_LIMIT:2}
   self-quest-min-interval-minutes: ${MEMORY_SELF_QUEST_MIN_INTERVAL_MINUTES:180}
+  # 它的「嘴」：它在自己的时间里想说的话，在这几个窗口真的发给机主（一天最多 N 条，**发出去才算**；
+  # 拦住的不丢，标 SUPPRESSED 留在库里让面板能看见"它想说但没说出来"）。
+  self-speak-enabled: ${MEMORY_SELF_SPEAK_ENABLED:true}
+  self-speak-daily-limit: ${MEMORY_SELF_SPEAK_DAILY_LIMIT:1}
   # 同时开着的方向数（§9 说 1–2 个：稀缺才有取舍）
   self-max-active-quests: ${MEMORY_SELF_MAX_ACTIVE_QUESTS:2}
   # "不等机主说话也会想"：它自己事件的兴趣累积过阈值就触发反思（Generative Agents 的判据）+ 闲置超时。
