@@ -989,6 +989,30 @@ public class SelfService {
     }
 
     /**
+     * 自上次"它自己的时间"以来，它自己事件的兴趣累积。
+     *
+     * <p>这是**触发下一次作业**的判据（不是"到点了"）：它自己的事在推进（新笔记、新一步、新判断），
+     * 攒够了就说明"这里还有东西可弄"。
+     */
+    @Transactional(readOnly = true)
+    public int interestSinceLastQuest() {
+        LocalDateTime since = lastQuestRun().map(AgentQuestRun::getCreatedAt)
+                .orElse(LocalDateTime.now().minusDays(2));
+        return eventsSince(since).stream()
+                .filter(event -> !AgentSelfEvent.KIND_REFLECT.equals(event.getKind()))
+                .mapToInt(event -> event.getImportance() == null ? 0 : event.getImportance())
+                .sum();
+    }
+
+    /** 距上次"它自己的时间"多久了（null = 还从没动过） */
+    @Transactional(readOnly = true)
+    public Duration sinceLastQuest() {
+        return lastQuestRun()
+                .map(run -> Duration.between(run.getCreatedAt(), LocalDateTime.now()))
+                .orElse(null);
+    }
+
+    /**
      * 它今天说了"先到这"吗。
      *
      * <p>时间归它自己的另一半：**额度够不代表它必须动**。一天的额度是上限，不是任务；

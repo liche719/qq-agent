@@ -84,14 +84,18 @@ public class SelfQuestService {
     private final ToolRegistry toolRegistry;
     private final int dailyCallLimit;
     private final int minIntervalMinutes;
+    private final int interestThreshold;
+    private final int idleHours;
 
     public SelfQuestService(SelfService selfService,
                             AgentLoop agentLoop,
                             UserService userService,
                             TurnTraceStore turnTraceStore,
                             ToolRegistry toolRegistry,
-                            @Value("${memory.self-quest-daily-call-limit:1}") int dailyCallLimit,
-                            @Value("${memory.self-quest-min-interval-minutes:180}") int minIntervalMinutes) {
+                            @Value("${memory.self-quest-daily-call-limit:2}") int dailyCallLimit,
+                            @Value("${memory.self-quest-min-interval-minutes:120}") int minIntervalMinutes,
+                            @Value("${memory.self-quest-interest-threshold:8}") int interestThreshold,
+                            @Value("${memory.self-quest-idle-hours:10}") int idleHours) {
         this.selfService = selfService;
         this.agentLoop = agentLoop;
         this.userService = userService;
@@ -99,10 +103,45 @@ public class SelfQuestService {
         this.toolRegistry = toolRegistry;
         this.dailyCallLimit = Math.max(1, dailyCallLimit);
         this.minIntervalMinutes = Math.max(0, minIntervalMinutes);
+        this.interestThreshold = Math.max(1, interestThreshold);
+        this.idleHours = Math.max(1, idleHours);
     }
 
     /**
-     * 跑一次"自己的时间"。手动入口与定时入口共用（预算和防抖都在里面）。
+     * 它现在**想不想动**（2026-09-15 用户定："什么时候想说就什么时候说"）。
+     *
+     * <p><b>不看钟点</b>：不是"到点了就该干活"，而是"手上有事在推进"或"搁太久了还有没结的事"。
+     * 心跳每 10 分钟看一眼，条件够了才真的叫它。额度、防抖、"今天先到这"照旧是硬闸——
+     * 触发式不等于无限量。
+     */
+    public boolean wantsToWork() {
+        if (!selfService.isActive()) {
+            return false;
+        }
+        if (selfService.restedToday()) {
+            return false;
+        }
+        if (selfService.questRunsToday() >= dailyCallLimit) {
+            return false;
+        }
+        Duration since = selfService.sinceLastQuest();
+        if (since == null) {
+            // 还从来没动过：先让它开个头（否则"没有上次"会把它永远锁在门外）
+            return true;
+        }
+        if (since.isNegative() || since.toMinutes() < minIntervalMinutes) {
+            return false;
+        }
+        // ① 它自己的事在推进：自上次作业以来攒下的兴趣够了
+        if (selfService.interestSinceLastQuest() >= interestThreshold) {
+            return true;
+        }
+        // ② 搁太久了，而且手上还有没结的事（§8 的 open loop）
+        return since.toHours() >= idleHours && selfService.hasOpenLoops();
+    }
+
+    /**
+     * 跑一次"自己的时间"。手动入口与触发入口共用（预算和防抖都在里面）。
      *
      * @param trigger 触发者（记进作业行，便于排障：是谁把它叫起来的）
      */
@@ -169,9 +208,9 @@ public class SelfQuestService {
         StringBuilder text = new StringBuilder();
         text.append("【你自己的时间】\n\n");
         text.append("现在没人在跟你说话。这段时间是给你自己的，不是替机主办事。\n\n");
-        text.append("今天的机会：这是第 ").append(usedToday + 1).append(" 次，今天最多 ")
-                .append(dailyCallLimit).append(" 次。**额度是上限、不是任务**——今天不想弄就用 selfQuestRest ")
-                .append("说一声，今天剩下的机会就不会再叫你了。\n\n");
+        text.append("今天已经动过 ").append(usedToday).append(" 次（一天最多 ").append(dailyCallLimit)
+                .append(" 次）。**没人催你**——额度是上限、不是任务，今天不想弄就用 selfQuestRest ")
+                .append("说一声，今天就不会再叫你了。\n\n");
         if (active == null) {
             text.append("你手上还没有自己的方向。想一个**你自己**真想弄明白的题目——不是机主让你查的——")
                     .append("用 selfQuestChoose 开一个，写清你为什么想弄它。\n");
