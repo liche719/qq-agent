@@ -53,15 +53,23 @@ public class AdminSelfController {
     private final SelfQuestService questService;
     private final SelfSpeakService speakService;
     private final TurnTraceStore turnTraceStore;
+    private final double budgetYuan;
+    private final double overrunFactor;
 
     public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService,
                                SelfQuestService questService, SelfSpeakService speakService,
-                               TurnTraceStore turnTraceStore) {
+                               TurnTraceStore turnTraceStore,
+                               @org.springframework.beans.factory.annotation.Value(
+                                       "${memory.self-quest-daily-budget-yuan:0.5}") double budgetYuan,
+                               @org.springframework.beans.factory.annotation.Value(
+                                       "${memory.self-quest-budget-overrun-factor:1.5}") double overrunFactor) {
         this.selfService = selfService;
         this.reflectionService = reflectionService;
         this.questService = questService;
         this.speakService = speakService;
         this.turnTraceStore = turnTraceStore;
+        this.budgetYuan = budgetYuan;
+        this.overrunFactor = overrunFactor;
     }
 
     /**
@@ -486,9 +494,12 @@ public class AdminSelfController {
             });
             row.put("summary", run.getSummary() == null ? (run.getReason() == null ? "—" : run.getReason())
                     : clip(run.getSummary(), 160));
-            row.put("cost", (nz(run.getPromptTokens()) + nz(run.getCompletionTokens())) + " tokens｜"
-                    + nz(run.getDurationMs()) + " ms");
-            row.put("counts", "笔记 " + nz(run.getNoteCount()) + " 条｜撤回 " + nz(run.getRetractCount()) + " 条");
+            row.put("cost", String.format("%.4f 元%s｜%d/%d tokens", 
+                    run.getCostYuan() == null ? 0.0 : run.getCostYuan().doubleValue(),
+                    Boolean.TRUE.equals(run.getExtended()) ? "（续期）" : "",
+                    nz(run.getPromptTokens()), nz(run.getCompletionTokens())));
+            row.put("counts", "笔记 " + nz(run.getNoteCount()) + " 条｜撤回 " + nz(run.getRetractCount())
+                    + " 条｜预算 " + (run.getBudgetYuan() == null ? "0" : run.getBudgetYuan().toPlainString()) + " 元");
             row.put("time", stamp(run.getCreatedAt()));
             rows.add(row);
         }
@@ -541,6 +552,18 @@ public class AdminSelfController {
         result.put("runId", outcome.runId() == null ? "" : ("run:" + outcome.runId()));
         result.put("summary", outcome.summary() == null ? "" : outcome.summary());
         result.put("tokens", outcome.promptTokens() + "/" + outcome.completionTokens());
+        result.put("cost", String.format("%.4f 元%s", outcome.costYuan(), outcome.extended() ? "（含续期）" : ""));
+        result.put("produced", outcome.produced() ? "落了产出" : "没落产出");
+        return result;
+    }
+
+    /** 它今天花了多少钱（预算闸的实时视图）。 */
+    @GetMapping("/budget")
+    public Map<String, Object> budget() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("spentToday", selfService.questCostToday().toPlainString());
+        result.put("dailyBudget", budgetYuan);
+        result.put("dailyCap", String.valueOf(budgetYuan * overrunFactor));
         return result;
     }
 

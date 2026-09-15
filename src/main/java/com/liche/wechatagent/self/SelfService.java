@@ -1274,11 +1274,13 @@ public class SelfService {
      * 否则"第一次开方向"永远没有合法证据可用（坑 64 的死锁原样重演）。
      */
     @Transactional
-    public AgentQuestRun startQuestRun(Long questId) {
+    public AgentQuestRun startQuestRun(Long questId, java.math.BigDecimal budgetYuan, boolean extended) {
         AgentQuestRun run = new AgentQuestRun();
         run.setQuestId(questId);
         run.setStatus(AgentQuestRun.STATUS_RUNNING);
         run.setCreatedAt(LocalDateTime.now());
+        run.setBudgetYuan(budgetYuan == null ? java.math.BigDecimal.ZERO : budgetYuan);
+        run.setExtended(extended);
         // 第一次跑的时候还没有方向，questId 是 null —— findById(null) 会直接抛，不能靠 ifPresent 兜
         if (questId != null) {
             questRepository.findById(questId).ifPresent(quest -> {
@@ -1290,21 +1292,39 @@ public class SelfService {
         return questRunRepository.save(run);
     }
 
+    /** 一次作业的成本账（钱按 cache 命中/未命中分开记，才能和账单对得上） */
+    public record RunCost(int promptTokens, int completionTokens, int durationMs,
+                          java.math.BigDecimal yuan, long cacheHitTokens, long cacheMissTokens) {
+
+        public static final RunCost ZERO = new RunCost(0, 0, 0, java.math.BigDecimal.ZERO, 0, 0);
+    }
+
+    /** 今天在"它自己的时间"上花了多少元——预算闸的判据（**落库算**，重启不丢账） */
+    @Transactional(readOnly = true)
+    public java.math.BigDecimal questCostToday() {
+        java.math.BigDecimal sum = questRunRepository.sumCostSince(LocalDate.now().atStartOfDay());
+        return sum == null ? java.math.BigDecimal.ZERO : sum;
+    }
+
     /**
      * 结算这次作业：状态、它自己写下的东西、以及成本（坑 60：思考 token 也算，别只记正文）。
      */
     @Transactional
     public AgentQuestRun finishQuestRun(AgentQuestRun run, String status, String reason, String summary,
-                                        int promptTokens, int completionTokens, int durationMs) {
+                                        RunCost cost) {
         if (run == null) {
             return null;
         }
+        RunCost settled = cost == null ? RunCost.ZERO : cost;
         run.setStatus(status);
         run.setReason(isBlank(reason) ? null : clip(reason, 500));
         run.setSummary(isBlank(summary) ? null : clip(summary, 2000));
-        run.setPromptTokens(Math.max(0, promptTokens));
-        run.setCompletionTokens(Math.max(0, completionTokens));
-        run.setDurationMs(Math.max(0, durationMs));
+        run.setPromptTokens(Math.max(0, settled.promptTokens()));
+        run.setCompletionTokens(Math.max(0, settled.completionTokens()));
+        run.setDurationMs(Math.max(0, settled.durationMs()));
+        run.setCostYuan(settled.yuan() == null ? java.math.BigDecimal.ZERO : settled.yuan());
+        run.setCacheHitTokens(Math.max(0, settled.cacheHitTokens()));
+        run.setCacheMissTokens(Math.max(0, settled.cacheMissTokens()));
         // 计数在**结算时**重新取：作业开始时那份是"开工前"的，面板上会变成
         // "这一轮写了 0 条笔记"而它其实写了一条（实测踩到）。
         if (run.getQuestId() != null) {

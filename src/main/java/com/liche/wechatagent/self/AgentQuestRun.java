@@ -71,6 +71,24 @@ public class AgentQuestRun {
     @Column(name = "duration_ms", nullable = false)
     private Integer durationMs = 0;
 
+    /** 这次作业实际花了多少元（按 cache 命中/未命中 + 峰谷精算，不是估算） */
+    @Column(name = "cost_yuan", nullable = false)
+    private java.math.BigDecimal costYuan = java.math.BigDecimal.ZERO;
+
+    @Column(name = "cache_hit_tokens", nullable = false)
+    private Long cacheHitTokens = 0L;
+
+    @Column(name = "cache_miss_tokens", nullable = false)
+    private Long cacheMissTokens = 0L;
+
+    /** 是不是"没落产出"之后的那一次续期（预算 ×1.5 那部分） */
+    @Column(nullable = false)
+    private Boolean extended = false;
+
+    /** 这次作业被给的预算（元）——面板上能看出"它是在多少钱里干完的" */
+    @Column(name = "budget_yuan", nullable = false)
+    private java.math.BigDecimal budgetYuan = java.math.BigDecimal.ZERO;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 }

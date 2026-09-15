@@ -13,14 +13,20 @@ import java.util.Set;
  *                    "权限大一些"是让它更能做自己的事，**不是把不可逆的动作也交出去**
  *                    （例如给你的 QQ 发文件、删掉资料库里的东西）。
  * @param maxRounds   允许的工具轮数；0 = 用全局默认
+ * @param budgetYuan  这一轮的**钱**预算（元）；0 = 不限。按钱而不是按轮数熔断，
+ *                    因为每轮 prompt 大小差很多（第 1 轮 9k、第 12 轮 17k），轮数不是钱的代理。
  */
-public record TurnScope(Set<String> providers, Set<String> deniedTools, int maxRounds) {
+public record TurnScope(Set<String> providers, Set<String> deniedTools, int maxRounds, double budgetYuan) {
 
     /** 无作用域：全量工具、全局轮数（普通对话用） */
-    public static final TurnScope ALL = new TurnScope(Set.of(), Set.of(), 0);
+    public static final TurnScope ALL = new TurnScope(Set.of(), Set.of(), 0, 0);
 
     public boolean isScoped() {
         return providers != null && !providers.isEmpty();
+    }
+
+    public boolean hasBudget() {
+        return budgetYuan > 0;
     }
 
     public boolean allowsProvider(String simpleClassName) {

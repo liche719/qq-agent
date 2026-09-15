@@ -64,8 +64,17 @@ spring:
 
 llm:
   base-url: ${LLM_BASE_URL:https://api.deepseek.com/v1}
-  model: ${LLM_MODEL:deepseek-chat}
+  model: ${LLM_MODEL:deepseek-flash}
   api-key: ${LLM_API_KEY:}
+  # 花销单价（元/百万 token）——**按 cache 命中分开**：官方 Flash 的命中价是未命中的 1/50，
+  # 而我们的作业每轮都带同样的系统提示词，命中率很高，只按未命中算会把成本高估好几倍。
+  # 峰谷：官方峰时价是谷时 2 倍（UTC 01–04、06–10，周一至周五；北京时间 09–12、14–18）。
+  # 改价签参考 https://api-docs.deepseek.com/quick_start/pricing
+  price:
+    cache-hit-per-million: ${LLM_PRICE_CACHE_HIT_PER_MILLION:0.02}
+    cache-miss-per-million: ${LLM_PRICE_CACHE_MISS_PER_MILLION:1.0}
+    output-per-million: ${LLM_PRICE_OUTPUT_PER_MILLION:4.0}
+    peak-multiplier: ${LLM_PRICE_PEAK_MULTIPLIER:2.0}
   temperature: ${LLM_TEMPERATURE:0.7}
   timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
   connect-timeout-seconds: ${LLM_CONNECT_TIMEOUT_SECONDS:5}
@@ -326,10 +335,14 @@ memory:
   self-max-lessons-in-prompt: ${MEMORY_SELF_MAX_LESSONS_IN_PROMPT:3}
   # 三期领域②：「它自己的时间」——**不看钟点**（2026-09-15 用户定："什么时候想说就什么时候说"）。
   # 这个心跳每 10 分钟看一眼"它现在想不想动"（手上有事在推进 / 搁太久还有没结的事），条件够了才叫它。
-  # 额度是**上限不是任务**，它可以用 selfQuestRest 说"今天先到这"；预算是硬闸，触发式不等于无限量。
+  # **预算按钱算**（同日用户定）：日 0.5 元、单次先给 60%、**没落产出才续一次**、当天封顶 ×1.5。
+  # 按钱不按轮数：每轮 prompt 大小差一倍，轮数不是钱的代理。花超了面板上看得见。
   self-quest-mode: ${MEMORY_SELF_QUEST_MODE:daily}
   self-quest-check-cron: ${MEMORY_SELF_QUEST_CHECK_CRON:0 */10 * * * *}
-  self-quest-daily-call-limit: ${MEMORY_SELF_QUEST_DAILY_CALL_LIMIT:2}
+  self-quest-daily-budget-yuan: ${MEMORY_SELF_QUEST_DAILY_BUDGET_YUAN:0.5}
+  self-quest-budget-overrun-factor: ${MEMORY_SELF_QUEST_BUDGET_OVERRUN_FACTOR:1.5}
+  self-quest-single-budget-ratio: ${MEMORY_SELF_QUEST_SINGLE_BUDGET_RATIO:0.6}
+  self-quest-max-rounds: ${MEMORY_SELF_QUEST_MAX_ROUNDS:12}
   self-quest-min-interval-minutes: ${MEMORY_SELF_QUEST_MIN_INTERVAL_MINUTES:120}
   # 触发条件：自上次作业以来它自己事件的兴趣累积过阈值 / 闲置这么久且手上还有没结的事
   self-quest-interest-threshold: ${MEMORY_SELF_QUEST_INTEREST_THRESHOLD:8}

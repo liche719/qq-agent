@@ -30,6 +30,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.time.Duration;
@@ -79,6 +80,14 @@ public class AgentLoop {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setTurnTraceStore(TurnTraceStore turnTraceStore) {
         this.turnTraceStore = turnTraceStore;
+    }
+
+    /** 花销账（setter 注入：单元测试直接 new AgentLoop 时为 null，那时按钱熔断自动失效） */
+    private com.liche.wechatagent.config.LlmCostLedger costLedger;
+
+    @Autowired(required = false)
+    public void setCostLedger(com.liche.wechatagent.config.LlmCostLedger costLedger) {
+        this.costLedger = costLedger;
     }
     private final ToolRegistry toolRegistry;
     private final ToolStatusService toolStatusService;
@@ -278,19 +287,28 @@ public class AgentLoop {
         List<ToolSpecification> specifications = trimmedSpecifications(messages, userId, scope);
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();
+        double budgetYuan = scope == null ? 0 : scope.budgetYuan();
+        double spentAtStart = costLedger == null ? 0 : costLedger.totalYuan();
         try {
             for (int round = 0; round < maxRounds; round++) {
+                // 按**钱**熔断（作用域调用专用）：轮数不是钱的代理——每轮 prompt 大小差很多
+                double spent = costLedger == null ? 0 : costLedger.totalYuan() - spentAtStart;
+                boolean budgetOut = budgetYuan > 0 && spent >= budgetYuan;
+                boolean nearBudget = budgetYuan > 0 && !budgetOut && spent >= budgetYuan * 0.8;
                 // 作用域调用（"它自己的时间"）到最后一步**把工具收走**，逼它用文字收尾：
-                // 否则轮数用完会掉进 fallbackReply，作业记录里只剩一句"这次处理没有完成"，
+                // 否则轮数/预算用完会掉进 fallbackReply，作业记录里只剩一句"这次处理没有完成"，
                 // 而它下次读到自己上次的总结时是断的——连续性正是这块要观察的东西。
                 // 只对作用域调用生效：普通对话的轮数行为一个字都不改。
-                boolean lastRound = scoped && round == maxRounds - 1;
+                boolean lastRound = scoped && (round == maxRounds - 1 || budgetOut);
                 if (lastRound) {
                     // 光收走工具不够：模型会把工具调用**当文本吐出来**（实测第二次作业的"总结"
                     // 就是一段 <tool_calls> 文本，等于没总结）。所以要明说一句工具已经没了。
-                    messages.add(UserMessage.from("（这一步没有工具可用了。请直接用文字说清："
-                            + "这一步做了什么、学到了什么、下一步打算干什么。不要输出工具调用格式。）"));
-                } else if (scoped && round == maxRounds - 2) {
+                    messages.add(UserMessage.from(budgetOut
+                            ? "（这次的预算用完了。请把**现在已经弄明白的东西**落成笔记或下一步，"
+                                    + "然后用文字收尾——不要开始新的探索，也不要输出工具调用格式。）"
+                            : "（这一步没有工具可用了。请直接用文字说清："
+                                    + "这一步做了什么、学到了什么、下一步打算干什么。不要输出工具调用格式。）"));
+                } else if (scoped && (round == maxRounds - 2 || nearBudget)) {
                     // 倒数第二步先说一声：**要落盘的东西现在就得落**。实测第三次作业的总结里写着
                     // "selfQuestNote 这轮没调起来，下次得补记"——它想最后再记，而那一步工具已经没了。
                     messages.add(UserMessage.from("（下一步就是最后一步，工具会被收回。"

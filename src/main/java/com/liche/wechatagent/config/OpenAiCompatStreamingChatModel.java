@@ -12,6 +12,7 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.output.TokenUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -21,6 +22,7 @@ import okhttp3.Response;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +45,13 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private final LlmScenarioSettings scenarioSettings;
     /** 指标采集，可为 null（单元测试直接构造时不需要） */
     private final RuntimeMetrics metrics;
+    /** 花销账；setter 注入，单测直接 new 时为 null（那时不计费） */
+    private LlmCostLedger costLedger;
+
+    @Autowired(required = false)
+    public void setCostLedger(LlmCostLedger costLedger) {
+        this.costLedger = costLedger;
+    }
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
                                           double temperature, int timeoutSeconds) {
@@ -84,6 +93,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
         // 所以对话这几档的 token 也能照实记账，面板「按场景」表格不再恒为 0。取最后一个非空 usage。
         int[] tokens = new int[3]; // prompt / completion / reasoning
+        int[] cacheTokens = new int[2]; // cache hit / cache miss（计价用）
         try {
             Request req = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
@@ -140,6 +150,9 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                             tokens[1] = usageNode.path("completion_tokens").asInt(tokens[1]);
                             tokens[2] = usageNode.path("completion_tokens_details").path("reasoning_tokens")
                                     .asInt(tokens[2]);
+                            // 计价要用的两个字段：官方响应里实测有（缓存命中比未命中便宜 50 倍）
+                            cacheTokens[0] = usageNode.path("prompt_cache_hit_tokens").asInt(cacheTokens[0]);
+                            cacheTokens[1] = usageNode.path("prompt_cache_miss_tokens").asInt(cacheTokens[1]);
                         }
                         JsonNode delta = node.path("choices").path(0).path("delta");
                         // 这个模型默认就带思考：思考走 delta.reasoning_content（不推给用户，只用来记账）
@@ -198,6 +211,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                 // 否则只有 metrics 拿得到 token，调用链/诊断视图只能显示 0（2026-09-15）
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage)
                         .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
+                recordCost(cacheTokens, tokens);
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
                         tokens);
             }
@@ -210,6 +224,17 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private double temperatureFor(LlmScenario scenario) {
         Double override = scenarioSettings == null ? null : scenarioSettings.temperatureOverride(scenario);
         return override == null ? temperature : override;
+    }
+
+    private void recordCost(int[] cacheTokens, int[] tokens) {
+        if (costLedger == null) {
+            return;
+        }
+        int hit = Math.max(0, cacheTokens[0]);
+        // 服务端没给缓存字段时（非 DeepSeek 的兼容实现）**按全部未命中算**——
+        // 宁可高估，也不要因为算少了让预算失控。
+        int miss = (hit > 0 || cacheTokens[1] > 0) ? Math.max(0, cacheTokens[1]) : Math.max(0, tokens[0]);
+        costLedger.record(hit, miss, Math.max(0, tokens[1]), Instant.now());
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,

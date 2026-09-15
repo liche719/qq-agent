@@ -4,6 +4,7 @@ import com.liche.wechatagent.agent.AgentLoop;
 import com.liche.wechatagent.agent.ContextTurn;
 import com.liche.wechatagent.agent.TurnScope;
 import com.liche.wechatagent.agent.TurnTraceStore;
+import com.liche.wechatagent.config.LlmCostLedger;
 import com.liche.wechatagent.tool.ToolRegistry;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserService;
@@ -13,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -27,19 +29,17 @@ import java.util.Set;
  * <ol>
  *   <li><b>独立身份</b>：用 {@link SelfService#SELF_SCOPE} 而不是机主的 userId 跑。借机主的 id 跑会
  *       {@code userService.getOrCreate} + 写 {@code conversation_memory} + 调度记忆提取——
- *       等于把它夜里想的事灌进机主的用户档案和长期记忆。第一优先级是"用户长期记忆不丢失"，
- *       污染它就是损坏它。</li>
- *   <li><b>工具是有作用域的</b>：只下发 {@link #ALLOWED_TOOL_PROVIDERS} 这五个类
- *       （它自己的记录 + 搜索 + 读网页 + 时间）。没有提醒、没有定时任务、没有考试、没有发消息——
- *       它在自己的时间里**动不了机主的东西**。</li>
- *   <li><b>预算是硬的</b>：每天 {@code self-quest-daily-call-limit} 次，跳过/失败也占额度
- *       （否则失败重试能把预算吃穿）；再加一道防抖，手动触发与定时不会前后脚跑两次。</li>
- *   <li><b>成本入账</b>：token 写进 {@code agent_quest_run}（坑 60：思考 token 也算进 max_tokens）。</li>
+ *       等于把它夜里想的事灌进机主的用户档案和长期记忆。</li>
+ *   <li><b>工具是有作用域的</b>：只下发 {@link #QUEST_TOOL_PROVIDERS}，再排掉
+ *       {@link #QUEST_DENIED_TOOLS}（会给你发文件的、不可逆删资料的）。</li>
+ *   <li><b>预算是钱，不是次数</b>（2026-09-15 用户定）：日预算默认 0.5 元，按
+ *       **实际花费**熔断——每轮 prompt 大小差一倍，轮数不是钱的代理。单次先给日预算的一部分，
+ *       **没落下产出**（新笔记/新的一步）才允许续一次，当天总封顶 ×1.5。</li>
+ *   <li><b>成本入账</b>：钱按 cache 命中/未命中 + 峰谷精算（命中便宜 50 倍），落进
+ *       {@code agent_quest_run.cost_yuan}——内存计数一重启就等于免费，那种预算拦不住东西。</li>
  * </ol>
  *
  * <p>为什么"选题"要它自己出：§9 筛选规则第 2 条——靠指派就还是执行器。
- * 所以这里**只给元指令**（"把这件事往前推，别重复已经会的"）+ 它自己的状态，题目由它自己定；
- * 它的选择理由会被记下来——偏好是稀缺下的选择模式被记录下来，不是宣称出来的。
  */
 @Service
 public class SelfQuestService {
@@ -47,34 +47,40 @@ public class SelfQuestService {
     private static final Logger log = LoggerFactory.getLogger(SelfQuestService.class);
 
     /**
-     * 「它自己的时间」的作用域：**权限给大一些，但不可逆的动作不给**。
+     * 作业里允许的工具类（简单类名）——"权限给大一些，但不可逆的动作不给"。
      *
      * <p>给到它自己能做的事：写自己那侧、管自己的方向与笔记、搜索、读网页、
      * **深想**（`thinkDeeper`——以前被挡在门外，很讽刺：它脑子里最深的工具它自己用不了）、
      * 下载资料、管自己的资料库。
-     *
-     * <p>排除两样：`sendDownloadedFile`（会把文件推到机主 QQ 上——口先不开）、
-     * `deleteStoredMedia`（不可逆地删资料）。**"权限大一些"不等于把不可逆的动作也交出去**，
-     * 也不等于把机主的东西交给它——它自己的事不需要动机主那边。
-     *
-     * <p>轮数 12（普通对话是 8）：它做自己的事时应该能多走几步。
      */
-    private static final TurnScope QUEST_SCOPE = new TurnScope(
-            Set.of("AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool",
-                    "ThinkingTool", "WebFileTool", "MediaMemoryTool"),
-            Set.of("sendDownloadedFile", "deleteStoredMedia"),
-            12);
+    private static final Set<String> QUEST_TOOL_PROVIDERS = Set.of(
+            "AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool",
+            "ThinkingTool", "WebFileTool", "MediaMemoryTool");
+
+    /**
+     * 即便在上面那些类里也**不许**下发的两样。
+     *
+     * <p>**"权限大一些"不等于把不可逆的动作也交出去**，也不等于把机主的东西交给它——
+     * 它自己的事不需要动机主那边。
+     */
+    private static final Set<String> QUEST_DENIED_TOOLS = Set.of("sendDownloadedFile", "deleteStoredMedia");
 
     /** 一次作业带多少条自己上次的总结当上下文（它自己的"接着上次"）。 */
     private static final int HISTORY_LIMIT = 3;
 
     /** 一次作业的结果（定时任务日志与面板用） */
     public record Outcome(boolean ran, String reason, Long questId, Long runId, String summary,
-                          int promptTokens, int completionTokens, int durationMs) {
+                          int promptTokens, int completionTokens, int durationMs,
+                          double costYuan, boolean extended, boolean produced) {
 
         static Outcome skipped(String reason) {
-            return new Outcome(false, reason, null, null, null, 0, 0, 0);
+            return new Outcome(false, reason, null, null, null, 0, 0, 0, 0, false, false);
         }
+    }
+
+    /** 一次"回合"（可能续期，所以一次调用它自己的时间 = 1~2 个回合） */
+    private record Attempt(Long runId, Long questId, String summary, int promptTokens, int completionTokens,
+                           int durationMs, double costYuan) {
     }
 
     private final SelfService selfService;
@@ -82,7 +88,11 @@ public class SelfQuestService {
     private final UserService userService;
     private final TurnTraceStore turnTraceStore;
     private final ToolRegistry toolRegistry;
-    private final int dailyCallLimit;
+    private final LlmCostLedger costLedger;
+    private final double dailyBudgetYuan;
+    private final double budgetOverrunFactor;
+    private final double singleBudgetRatio;
+    private final int maxRounds;
     private final int minIntervalMinutes;
     private final int interestThreshold;
     private final int idleHours;
@@ -92,7 +102,11 @@ public class SelfQuestService {
                             UserService userService,
                             TurnTraceStore turnTraceStore,
                             ToolRegistry toolRegistry,
-                            @Value("${memory.self-quest-daily-call-limit:2}") int dailyCallLimit,
+                            LlmCostLedger costLedger,
+                            @Value("${memory.self-quest-daily-budget-yuan:0.5}") double dailyBudgetYuan,
+                            @Value("${memory.self-quest-budget-overrun-factor:1.5}") double budgetOverrunFactor,
+                            @Value("${memory.self-quest-single-budget-ratio:0.6}") double singleBudgetRatio,
+                            @Value("${memory.self-quest-max-rounds:12}") int maxRounds,
                             @Value("${memory.self-quest-min-interval-minutes:120}") int minIntervalMinutes,
                             @Value("${memory.self-quest-interest-threshold:8}") int interestThreshold,
                             @Value("${memory.self-quest-idle-hours:10}") int idleHours) {
@@ -101,17 +115,30 @@ public class SelfQuestService {
         this.userService = userService;
         this.turnTraceStore = turnTraceStore;
         this.toolRegistry = toolRegistry;
-        this.dailyCallLimit = Math.max(1, dailyCallLimit);
+        this.costLedger = costLedger;
+        this.dailyBudgetYuan = Math.max(0.01, dailyBudgetYuan);
+        this.budgetOverrunFactor = Math.max(1.0, budgetOverrunFactor);
+        this.singleBudgetRatio = Math.min(1.0, Math.max(0.1, singleBudgetRatio));
+        this.maxRounds = Math.max(1, maxRounds);
         this.minIntervalMinutes = Math.max(0, minIntervalMinutes);
         this.interestThreshold = Math.max(1, interestThreshold);
         this.idleHours = Math.max(1, idleHours);
+    }
+
+    /** 当天总共允许花多少（日预算 ×1.5） */
+    private double dailyCapYuan() {
+        return dailyBudgetYuan * budgetOverrunFactor;
+    }
+
+    private TurnScope questScope(double budgetYuan) {
+        return new TurnScope(QUEST_TOOL_PROVIDERS, QUEST_DENIED_TOOLS, maxRounds, budgetYuan);
     }
 
     /**
      * 它现在**想不想动**（2026-09-15 用户定："什么时候想说就什么时候说"）。
      *
      * <p><b>不看钟点</b>：不是"到点了就该干活"，而是"手上有事在推进"或"搁太久了还有没结的事"。
-     * 心跳每 10 分钟看一眼，条件够了才真的叫它。额度、防抖、"今天先到这"照旧是硬闸——
+     * 心跳每 10 分钟看一眼，条件够了才真的叫它。预算、防抖、"今天先到这"照旧是硬闸——
      * 触发式不等于无限量。
      */
     public boolean wantsToWork() {
@@ -121,7 +148,7 @@ public class SelfQuestService {
         if (selfService.restedToday()) {
             return false;
         }
-        if (selfService.questRunsToday() >= dailyCallLimit) {
+        if (selfService.questCostToday().doubleValue() >= dailyCapYuan()) {
             return false;
         }
         Duration since = selfService.sinceLastQuest();
@@ -141,9 +168,9 @@ public class SelfQuestService {
     }
 
     /**
-     * 跑一次"自己的时间"。手动入口与触发入口共用（预算和防抖都在里面）。
+     * 跑一次"自己的时间"：单次预算 → 没落产出就续一次 → 封顶。
      *
-     * @param trigger 触发者（记进作业行，便于排障：是谁把它叫起来的）
+     * @param trigger 触发者（manul / triggered，记进作业行便于排障）
      */
     public Outcome run(String trigger) {
         if (!selfService.isActive()) {
@@ -156,61 +183,134 @@ public class SelfQuestService {
         if (selfService.restedToday()) {
             return Outcome.skipped("它自己说了今天先到这");
         }
-        if (selfService.questRunsToday() >= dailyCallLimit) {
-            return Outcome.skipped("今天自己的时间已经用完了（" + dailyCallLimit + " 次）");
-        }
-        LocalDateTime now = LocalDateTime.now();
-        Optional<AgentQuestRun> last = selfService.lastQuestRun();
-        if (last.isPresent() && last.get().getCreatedAt() != null && minIntervalMinutes > 0) {
-            long minutes = Duration.between(last.get().getCreatedAt(), now).toMinutes();
-            if (minutes < minIntervalMinutes) {
-                return Outcome.skipped("距上次才 " + Math.max(0, minutes) + " 分钟（防抖间隔 "
-                        + minIntervalMinutes + " 分钟）");
-            }
+        double spentToday = selfService.questCostToday().doubleValue();
+        double cap = dailyCapYuan();
+        if (spentToday >= cap) {
+            return Outcome.skipped(String.format("今天的预算用完了（已花 %.3f 元，封顶 %.2f 元）", spentToday, cap));
         }
 
         Optional<AgentQuest> active = selfService.activeQuest();
-        Long questId = active.map(AgentQuest::getId).orElse(null);
-        long usedToday = selfService.questRunsToday();
-        // 先建作业行：它的 id 是这次作业里所有写入的锚点证据（run:<id>）——
-        // 没有它，"第一次开方向"会因为没有合法证据而永远失败（坑 64 的证据死锁）
-        AgentQuestRun run = selfService.startQuestRun(questId);
+        Long questIdBefore = active.map(AgentQuest::getId).orElse(null);
+        int notesBefore = active.map(q -> nz(q.getNoteCount())).orElse(0);
+        int stepsBefore = active.map(q -> nz(q.getStepCount())).orElse(0);
+        double spentTodayBefore = spentToday;
+        double costAtStart = costLedger == null ? 0 : costLedger.totalYuan();
+
+        // 单次先给日预算的一部分；当天余量不够就只给余量
+        double single = Math.min(dailyBudgetYuan * singleBudgetRatio, cap - spentToday);
+        Attempt first = attempt(owner, questIdBefore, single, trigger, false, spentTodayBefore);
+        if (first == null) {
+            return Outcome.skipped("作业失败（细节见日志）");
+        }
+
+        boolean produced = produced(questIdBefore, notesBefore, stepsBefore);
+        Attempt last = first;
+        boolean extended = false;
+        if (!produced) {
+            double remaining = cap - selfService.questCostToday().doubleValue();
+            if (remaining > 0.02) {
+                // **没落下东西**才续：判据是客观的（有没有新笔记/新的一步），不是它自己说"没做完"
+                log.info("它这次没落下产出，续一次（还能花 {} 元）", String.format("%.3f", remaining));
+                Attempt second = attempt(owner, questIdBefore, remaining, trigger + "+extended", true,
+                        spentTodayBefore);
+                if (second != null) {
+                    last = second;
+                    extended = true;
+                    produced = produced(questIdBefore, notesBefore, stepsBefore);
+                }
+            } else {
+                log.info("它这次没落下产出，但当天预算已经见底（剩 {} 元），不再续",
+                        String.format("%.3f", remaining));
+            }
+        }
+
+        // 报**这次"自己的时间"总共花了多少**（含续期那一回合），不是只报最后一次——
+        // 否则面板上"花 0.09 元"和账上被扣的 0.15 元对不上（实测踩到）。
+        double totalCost = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costAtStart);
+        return new Outcome(true, null, last.questId(), last.runId(), last.summary(),
+                last.promptTokens(), last.completionTokens(), last.durationMs(),
+                totalCost, extended, produced);
+    }
+
+    /** 跑一个回合；失败时把作业行标 FAILED 并返回 null（不抛，别让定时线程炸） */
+    private Attempt attempt(String owner, Long questId, double budgetYuan, String trigger, boolean extended,
+                            double spentTodayBefore) {
+        AgentQuestRun run = selfService.startQuestRun(questId, BigDecimal.valueOf(budgetYuan), extended);
         long started = System.nanoTime();
+        double costBefore = costLedger == null ? 0 : costLedger.totalYuan();
+        long hitBefore = costLedger == null ? 0 : costLedger.cacheHitTokens();
+        long missBefore = costLedger == null ? 0 : costLedger.cacheMissTokens();
         try {
-            // 把"这一轮它到底有什么权限"打成一行日志：权限面是这次特意放宽的，
-            // 不写出来就只能靠读代码判断（而且加工具/改白名单时一眼能看出有没有生效）。
-            List<String> toolNames = toolRegistry.specificationsOf(QUEST_SCOPE).stream()
+            // 把"这一轮它到底有什么权限、多少钱"打成一行：权限面与预算是特意放宽/收紧的，
+            // 不写出来就只能靠读代码判断（而且改白名单/预算时一眼能看出有没有生效）。
+            List<String> toolNames = toolRegistry.specificationsOf(questScope(budgetYuan)).stream()
                     .map(ToolSpecification::name)
                     .toList();
-            log.info("它自己的时间开跑 run={} 方向={} 触发={} 可用工具 {} 个：{}",
-                    run.getId(), questId, trigger, toolNames.size(), String.join("、", toolNames));
+            log.info("它自己的时间开跑 run={} 方向={} 触发={} 预算={} 元 可用工具 {} 个：{}",
+                    run.getId(), questId, trigger, String.format("%.3f", budgetYuan), toolNames.size(),
+                    String.join("、", toolNames));
             String reply = agentLoop.chat(SelfService.SELF_SCOPE, null, null, personaOf(owner), null, null,
-                    ownHistory(), buildInstruction(run.getId(), active.orElse(null), usedToday),
-                    List.of(), List.of(), null, QUEST_SCOPE);
+                    ownHistory(), buildInstruction(run.getId(), selfService.quest(questId).orElse(null),
+                            spentTodayBefore, budgetYuan),
+                    List.of(), List.of(), null, questScope(budgetYuan));
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
             int[] tokens = tokensOf();
+            double yuan = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costBefore);
+            long hit = Math.max(0, (costLedger == null ? 0 : costLedger.cacheHitTokens()) - hitBefore);
+            long miss = Math.max(0, (costLedger == null ? 0 : costLedger.cacheMissTokens()) - missBefore);
             selfService.finishQuestRun(run, AgentQuestRun.STATUS_RAN, trigger, reply,
-                    tokens[0], tokens[1], durationMs);
-            log.info("自己的时间跑完 run={} 方向={} 触发={} tokens={}/{} 用时 {}ms",
-                    run.getId(), questId, trigger, tokens[0], tokens[1], durationMs);
-            return new Outcome(true, null, questId, run.getId(), reply, tokens[0], tokens[1], durationMs);
+                    new SelfService.RunCost(tokens[0], tokens[1], durationMs,
+                            BigDecimal.valueOf(yuan), hit, miss));
+            Long settledQuest = selfService.activeQuest().map(AgentQuest::getId).orElse(questId);
+            log.info("它自己的时间跑完 run={} 花了 {} 元（cache 命中 {}/未命中 {}）用时 {}ms",
+                    run.getId(), String.format("%.4f", yuan), hit, miss, durationMs);
+            return new Attempt(run.getId(), settledQuest, reply, tokens[0], tokens[1], durationMs, yuan);
         } catch (RuntimeException exception) {
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
+            double yuan = Math.max(0, (costLedger == null ? 0 : costLedger.totalYuan()) - costBefore);
             selfService.finishQuestRun(run, AgentQuestRun.STATUS_FAILED,
-                    exception.getClass().getSimpleName() + ": " + exception.getMessage(), null, 0, 0, durationMs);
-            log.warn("自己的时间跑砸了 run={}：{}", run.getId(), exception.getMessage());
-            return Outcome.skipped("作业失败：" + exception.getMessage());
+                    exception.getClass().getSimpleName() + ": " + exception.getMessage(), null,
+                    new SelfService.RunCost(0, 0, durationMs, BigDecimal.valueOf(yuan), 0, 0));
+            log.warn("它自己的时间跑砸了 run={}：{}", run.getId(), exception.getMessage());
+            return null;
         }
     }
 
+    /**
+     * 这次作业有没有**落下来东西**——客观判据，不靠它自己说"我做完了"。
+     *
+     * <p>这是"没完成才续期"的判据：自己说没做完 = 自己给自己发额度，那正是要防的。
+     */
+    private boolean produced(Long questIdBefore, int notesBefore, int stepsBefore) {
+        Optional<AgentQuest> now = selfService.activeQuest();
+        if (now.isEmpty()) {
+            // 作业前有方向、现在没有 = 它把方向**收掉**了。"不做了 / 挖到底了"本身就是一个结论，
+            // 算产出。（实测踩到：它收掉 #1 之后 activeQuest 为空，被判成"没落产出"→ 白续一次、
+            // 多花一倍钱。）
+            return questIdBefore != null;
+        }
+        AgentQuest quest = now.get();
+        if (questIdBefore == null) {
+            return true; // 之前没方向，现在开了一个
+        }
+        if (!quest.getId().equals(questIdBefore)) {
+            return true; // 换了方向，也算落了东西
+        }
+        return nz(quest.getNoteCount()) > notesBefore || nz(quest.getStepCount()) > stepsBefore;
+    }
+
+    private static int nz(Integer value) {
+        return value == null ? 0 : value;
+    }
+
     /** 作业指令：只给元指令 + 它自己的状态入口，**不替它选题**（§9 第 2 条）。 */
-    private String buildInstruction(Long runId, AgentQuest active, long usedToday) {
+    private String buildInstruction(Long runId, AgentQuest active, double spentToday, double budgetYuan) {
         StringBuilder text = new StringBuilder();
         text.append("【你自己的时间】\n\n");
         text.append("现在没人在跟你说话。这段时间是给你自己的，不是替机主办事。\n\n");
-        text.append("今天已经动过 ").append(usedToday).append(" 次（一天最多 ").append(dailyCallLimit)
-                .append(" 次）。**没人催你**——额度是上限、不是任务，今天不想弄就用 selfQuestRest ")
-                .append("说一声，今天就不会再叫你了。\n\n");
+        text.append("今天已经花掉 ").append(String.format("%.3f", spentToday)).append(" 元（这次给你 ")
+                .append(String.format("%.3f", budgetYuan)).append(" 元）。**没人催你**：")
+                .append("不想弄就用 selfQuestRest 说一声，今天就不会再叫你了。\n\n");
         if (active == null) {
             text.append("你手上还没有自己的方向。想一个**你自己**真想弄明白的题目——不是机主让你查的——")
                     .append("用 selfQuestChoose 开一个，写清你为什么想弄它。\n");
@@ -267,10 +367,11 @@ public class SelfQuestService {
     }
 
     /**
-     * 这一轮的 token（成本入账）。
+     * 这一轮的 token（面板展示用）。
      *
      * <p>从调用链上汇总而不是让模型自己报：{@link TurnTraceStore} 是流式模型实测的 usage，
-     * 已经把思考 token 算在里面（坑 60 的教训）。
+     * 已经把思考 token 算在里面（坑 60 的教训）。**钱的账走 {@link LlmCostLedger}**，
+     * 那边还分 cache 命中/未命中。
      */
     private int[] tokensOf() {
         int[] tokens = new int[2];
