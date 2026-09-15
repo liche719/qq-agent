@@ -3,6 +3,7 @@ package com.liche.wechatagent.self;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.liche.wechatagent.config.LlmScenario;
+import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -12,14 +13,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 反思流程（spec §4）：主 agent 不在关键路径上时，由**另一个更便宜的调用**整合状态。
@@ -27,8 +32,8 @@ import java.util.Optional;
  * <p>四条先例给的纪律（照做，别简化掉）：
  * <ol>
  *   <li><b>触发不是"每晚一次"</b>：档位 `off` / `step-count`（攒够 N 轮）/ 手动。
- *       定时器只负责"到点看看攒够没有"，真正的判据是 {@link SelfService#turnsSinceLastReflection()}。</li>
- *   <li><b>进程要窄</b>：这里**没有工具**——它只能读记录、写自己那侧，写还全都走 {@link SelfService} 的校验。</li>
+ *       定时器只负责"到点看看攒够没有"，真正的判据是 {@link #turnsSinceLastReflection()}。</li>
+ *   <li><b>进程要窄</b>：这里**没有工具**——它只能读记录、写自己那侧，写还全都走 {@link SelfCoreService} 的校验。</li>
  *   <li><b>只写可 diff 的状态</b>：结论进 {@code agent_reflection}，块改动走事件（旧值→新值都留痕），
  *       所以一切可回溯。</li>
  *   <li><b>失败丢整条</b>：模型输出解析不出来就**不写半成品**（只记 WARN 与成本），下次再说。</li>
@@ -67,7 +72,11 @@ public class SelfReflectionService {
         }
     }
 
-    private final SelfService selfService;
+    private final SelfCoreService core;
+    private final SelfStanceService selfStances;
+    private final SelfLessonService selfLessons;
+    private final AgentReflectionRepository reflectionRepository;
+    private final ConversationMemoryRepository conversationMemoryRepository;
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final int dailyCallLimit;
@@ -80,7 +89,11 @@ public class SelfReflectionService {
     private final int maxStancesInContent;
     private final StancePromoter.Params params;
 
-    public SelfReflectionService(SelfService selfService,
+    public SelfReflectionService(SelfCoreService core,
+                                 SelfStanceService selfStances,
+                                 SelfLessonService selfLessons,
+                                 AgentReflectionRepository reflectionRepository,
+                                 ConversationMemoryRepository conversationMemoryRepository,
                                  ObjectProvider<ChatModel> chatModelProvider,
                                  ObjectMapper objectMapper,
                                  @Value("${memory.self-reflect-daily-call-limit:4}") int dailyCallLimit,
@@ -97,7 +110,11 @@ public class SelfReflectionService {
                                  @Value("${memory.self-stance-half-life-days:30}") double halfLifeDays,
                                  @Value("${memory.self-fsrs-decay:-0.1542}") double decay,
                                  @Value("${memory.self-review-target:0.8}") double reviewTarget) {
-        this.selfService = selfService;
+        this.core = core;
+        this.selfStances = selfStances;
+        this.selfLessons = selfLessons;
+        this.reflectionRepository = reflectionRepository;
+        this.conversationMemoryRepository = conversationMemoryRepository;
         this.chatModel = chatModelProvider == null ? null : chatModelProvider.getIfAvailable();
         this.objectMapper = objectMapper;
         this.dailyCallLimit = Math.max(1, dailyCallLimit);
@@ -116,8 +133,8 @@ public class SelfReflectionService {
 
     /** 手动/排障入口：不走"攒够轮数"的判据，直接跑一次（预算仍然生效）。 */
     public Outcome reflect(String userId, String trigger) {
-        if (!selfService.isOwner(userId)) {
-            return Outcome.skipped(selfService.inactiveReason(), StanceOutcome.NONE);
+        if (!core.isOwner(userId)) {
+            return Outcome.skipped(core.inactiveReason(), StanceOutcome.NONE);
         }
         LocalDateTime now = LocalDateTime.now();
         // ① 倾向维护是**规则**，不花调用、也不该被模型输出影响，所以放在最前面独立跑
@@ -127,13 +144,13 @@ public class SelfReflectionService {
         int broken = settleOverdueCommitments(now);
 
         // 教训复查同样是**程序驱动**：模型不能给自己点赞（spec §9.1 硬规则 4）
-        int lessonsReviewed = selfService.reviewLessons(now);
+        int lessonsReviewed = selfLessons.reviewLessons(now);
 
         // ③ 合成反思要花钱：先过预算、防抖与重要度三道闸
-        if (selfService.reflectionsToday() >= dailyCallLimit) {
+        if (reflectionsToday() >= dailyCallLimit) {
             return Outcome.skipped("今天的反思预算用完了（" + dailyCallLimit + " 次）", stances);
         }
-        Optional<AgentReflection> last = selfService.lastReflection();
+        Optional<AgentReflection> last = lastReflection();
         if (last.isPresent() && last.get().getCreatedAt() != null && minIntervalMinutes > 0) {
             long minutes = java.time.Duration.between(last.get().getCreatedAt(), now).toMinutes();
             if (minutes < minIntervalMinutes) {
@@ -143,7 +160,7 @@ public class SelfReflectionService {
             }
         }
         LocalDateTime since = last.map(AgentReflection::getCreatedAt).orElse(now.minusDays(2));
-        List<AgentSelfEvent> events = selfService.eventsSince(since).stream()
+        List<AgentSelfEvent> events = core.eventsSince(since).stream()
                 // 不看**自己的结论**（REFLECT）和**自己写下的教训**（LESSON）：
                 // 否则会从自己的记录里再推导一条同类教训 —— 那就是流水账/回音室（spec §9.1 硬规则 1）。
                 // 教训应该从**行为痕迹**（判断/承诺/目标/随手记）里发现，而不是从教训里再长出教训。
@@ -189,21 +206,21 @@ public class SelfReflectionService {
         if (synthesis == null) {
             // spec §4：失败就丢弃本次反思，**不写半成品**
             log.warn("反思输出无法解析，本次丢弃（tokens={}/{}，正文 {} 字）：{}", promptTokens, completionTokens,
-                    response == null ? 0 : response.length(), clip(response, 200));
+                    response == null ? 0 : response.length(), SelfText.clipLine(response, 200));
             return Outcome.skipped("反思输出无法解析，本次丢弃", stances);
         }
 
         Long writtenBack = null;
         if (synthesis.taskBlock() != null && !synthesis.taskBlock().isBlank()) {
             try {
-                AgentSelfBlock block = selfService.setBlockValue(AgentSelfBlock.TYPE_TASK,
+                AgentSelfBlock block = core.setBlockValue(AgentSelfBlock.TYPE_TASK,
                         synthesis.taskBlock(), "event:" + inputIds.get(0));
                 writtenBack = block.getId();
             } catch (RuntimeException exception) {
                 log.warn("反思写回块失败（结论仍然保留）：{}", exception.getMessage());
             }
         }
-        AgentReflection reflection = selfService.recordReflection(1, trigger, inputIds, synthesis.conclusion(),
+        AgentReflection reflection = recordReflection(1, trigger, inputIds, synthesis.conclusion(),
                 synthesis.importance(), writtenBack, 1, prompt.length(),
                 response == null ? 0 : response.length(), promptTokens, completionTokens, durationMs);
         LessonTally tally = applyLessons(synthesis, inputIds);
@@ -220,13 +237,13 @@ public class SelfReflectionService {
         int revised = 0;
         int supported = 0;
         int contradicted = 0;
-        for (String topic : selfService.judgeTopics(judgeScan)) {
+        for (String topic : selfStances.judgeTopics(judgeScan)) {
             try {
-                List<AgentSelfEvent> judges = selfService.judgesFor(topic);
+                List<AgentSelfEvent> judges = selfStances.judgesFor(topic);
                 if (judges.isEmpty()) {
                     continue;
                 }
-                Optional<AgentStance> active = selfService.stanceFor(topic);
+                Optional<AgentStance> active = selfStances.stanceFor(topic);
                 List<StancePromoter.Judge> mapped = judges.stream()
                         .map(event -> new StancePromoter.Judge(event.getId(), event.getStance(),
                                 event.getCreatedAt(), contextKey(event)))
@@ -240,7 +257,7 @@ public class SelfReflectionService {
                         if (content == null) {
                             continue;
                         }
-                        selfService.promoteStance(topic, decision.direction(), content, decision.evidenceIds(),
+                        selfStances.promoteStance(topic, decision.direction(), content, decision.evidenceIds(),
                                 decision.counterIds(), lastEvidence(decision.evidenceIds()));
                         promoted++;
                     }
@@ -249,7 +266,7 @@ public class SelfReflectionService {
                         if (active.isEmpty() || content == null) {
                             continue;
                         }
-                        selfService.reviseStance(active.get().getId(), decision.direction(), content,
+                        selfStances.reviseStance(active.get().getId(), decision.direction(), content,
                                 decision.evidenceIds(), decision.counterIds(), lastEvidence(decision.evidenceIds()));
                         revised++;
                     }
@@ -272,11 +289,11 @@ public class SelfReflectionService {
                                 .filter(id -> !knownCounter.contains(id))
                                 .toList();
                         if (!sameNew.isEmpty()) {
-                            selfService.supportStance(stance.getId(), sameNew, lastEvidence(sameNew));
+                            selfStances.supportStance(stance.getId(), sameNew, lastEvidence(sameNew));
                             supported++;
                         }
                         if (!counterNew.isEmpty()) {
-                            selfService.contradictStance(stance.getId(), counterNew, lastEvidence(counterNew));
+                            selfStances.contradictStance(stance.getId(), counterNew, lastEvidence(counterNew));
                             contradicted++;
                         }
                     }
@@ -286,11 +303,11 @@ public class SelfReflectionService {
                 log.warn("倾向维护跳过 topic={} reason={}", topic, exception.getMessage());
             }
         }
-        int demoted = selfService.demoteStaleStances(staleStanceDays, now);
+        int demoted = selfStances.demoteStaleStances(staleStanceDays, now);
         return new StanceOutcome(promoted, revised, supported, contradicted, demoted);
     }
 
-    /** 把这次反思发现的教训落库（三段齐 + 证据真实，SelfService 会再校验一次） */
+    /** 把这次反思发现的教训落库（三段齐 + 证据真实，SelfLessonService 会再校验一次） */
     private LessonTally applyLessons(Synthesis synthesis, List<Long> inputIds) {
         if (synthesis.lessons() == null || synthesis.lessons().isEmpty()) {
             return new LessonTally(0, 0);
@@ -300,7 +317,7 @@ public class SelfReflectionService {
         int recurred = 0;
         for (LessonCandidate candidate : synthesis.lessons()) {
             try {
-                SelfService.LessonOutcome outcome = selfService.addLesson(candidate.category(), candidate.trigger(),
+                SelfLessonService.LessonOutcome outcome = selfLessons.addLesson(candidate.category(), candidate.trigger(),
                         candidate.whatIDid(), candidate.expected(), candidate.whatHappened(),
                         candidate.correction(), evidence);
                 if (outcome.recurred()) {
@@ -319,14 +336,14 @@ public class SelfReflectionService {
 
     private int settleOverdueCommitments(LocalDateTime now) {
         int broken = 0;
-        for (AgentCommitment commitment : selfService.dueOpenCommitments(now)) {
+        for (AgentCommitment commitment : core.dueOpenCommitments(now)) {
             String evidence = usableEvidence(commitment.getEvidence());
             if (evidence == null) {
                 log.warn("承诺 #{} 到期但找不到可用证据，跳过判欠", commitment.getId());
                 continue;
             }
             try {
-                selfService.resolveCommitment(commitment.getId(), AgentCommitment.STATUS_BROKEN, evidence);
+                core.resolveCommitment(commitment.getId(), AgentCommitment.STATUS_BROKEN, evidence);
                 broken++;
             } catch (RuntimeException exception) {
                 log.warn("承诺 #{} 判欠失败：{}", commitment.getId(), exception.getMessage());
@@ -342,8 +359,8 @@ public class SelfReflectionService {
         }
         for (String token : evidence.split("[,，;；\\s]+")) {
             String trimmed = token.trim();
-            if (trimmed.startsWith(SelfService.EVIDENCE_CONVERSATION)
-                    || trimmed.startsWith(SelfService.EVIDENCE_EVENT)) {
+            if (trimmed.startsWith(SelfCoreService.EVIDENCE_CONVERSATION)
+                    || trimmed.startsWith(SelfCoreService.EVIDENCE_EVENT)) {
                 return trimmed;
             }
         }
@@ -485,32 +502,32 @@ public class SelfReflectionService {
                     .append(nullToDash(event.getTopic())).append(" | ")
                     .append(nullToDash(event.getStance())).append(" | ")
                     .append(event.getImportance() == null ? 0 : event.getImportance()).append(" | ")
-                    .append(clip(event.getContent(), 160)).append('\n');
+                    .append(SelfText.clipLine(event.getContent(), 160)).append('\n');
             if (prompt.length() > maxPromptChars) {
                 prompt.append("…（已截断）\n");
                 break;
             }
         }
-        List<AgentSelfBlock> blocks = selfService.blocks();
+        List<AgentSelfBlock> blocks = core.blocks();
         if (!blocks.isEmpty()) {
             prompt.append("\n【我现在的状态块】\n");
             for (AgentSelfBlock block : blocks) {
                 prompt.append(block.getBlockType()).append("：")
-                        .append(clip(block.getValue(), 200)).append('\n');
+                        .append(SelfText.clipLine(block.getValue(), 200)).append('\n');
             }
         }
-        List<AgentStance> stances = selfService.activeStances();
+        List<AgentStance> stances = selfStances.activeStances();
         if (!stances.isEmpty()) {
             prompt.append("\n【我已经形成的倾向】\n");
             for (AgentStance stance : stances) {
-                prompt.append("· ").append(clip(stance.getContent(), 200)).append('\n');
+                prompt.append("· ").append(SelfText.clipLine(stance.getContent(), 200)).append('\n');
             }
         }
-        List<AgentCommitment> open = selfService.openCommitments();
+        List<AgentCommitment> open = core.openCommitments();
         if (!open.isEmpty()) {
             prompt.append("\n【我还欠着的】\n");
             for (AgentCommitment commitment : open) {
-                prompt.append("· ").append(clip(commitment.getContent(), 120))
+                prompt.append("· ").append(SelfText.clipLine(commitment.getContent(), 120))
                         .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
                         .append('\n');
             }
@@ -532,11 +549,85 @@ public class SelfReflectionService {
         return text == null || text.isBlank() ? "-" : text;
     }
 
-    private String clip(String text, int max) {
-        if (text == null) {
-            return "";
+    // ---------------------------------------------------------------- 反思记录（这一侧的账）
+
+    @Transactional(readOnly = true)
+    public Optional<AgentReflection> lastReflection() {
+        return reflectionRepository.findTop1ByOrderByIdDesc();
+    }
+
+    @Transactional(readOnly = true)
+    public List<AgentReflection> recentReflections(int limit) {
+        return reflectionRepository.findTop50ByOrderByIdDesc().stream().limit(Math.max(1, limit)).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public long reflectionsToday() {
+        return reflectionRepository.countByCreatedAtAfter(LocalDate.now().atStartOfDay());
+    }
+
+    /** 距上次反思以来机主说了多少轮（"攒够 N 轮"的判据）。 */
+    @Transactional(readOnly = true)
+    public long turnsSinceLastReflection() {
+        if (!core.isActive()) {
+            return 0;
         }
-        String trimmed = text.trim().replace('\n', ' ');
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
+        LocalDateTime since = lastReflection().map(AgentReflection::getCreatedAt).orElse(null);
+        return conversationMemoryRepository
+                .findByUserIdAndRoleInOrderByCreatedAtDesc(core.owner(), List.of("user"), PageRequest.of(0, 200))
+                .stream()
+                .filter(row -> since == null || (row.getCreatedAt() != null && row.getCreatedAt().isAfter(since)))
+                .count();
+    }
+
+    /**
+     * 兴趣累积：自上次反思以来**它自己**产生的事件按重要度之和。
+     *
+     * <p>这是"不等机主说话也会想"的判据（Generative Agents 用的就是 importance 累加过阈值，
+     * 不是"机主说了多少句"）。用机主的消息量当触发，它的思考就变成机主对话量的影子——
+     * 而这个模块要的是**它自己的事占大头**。
+     */
+    @Transactional(readOnly = true)
+    public int interestSinceLastReflection() {
+        LocalDateTime since = lastReflection().map(AgentReflection::getCreatedAt)
+                .orElse(LocalDateTime.now().minusDays(2));
+        return core.eventsSince(since).stream()
+                .filter(event -> !AgentSelfEvent.KIND_REFLECT.equals(event.getKind()))
+                .mapToInt(event -> event.getImportance() == null ? 0 : event.getImportance())
+                .sum();
+    }
+
+    /**
+     * 反思落库。**必须带证据链**（读了哪几条事件），否则整条拒绝——
+     * 对应 spec §4 的"合成失败就丢弃，不写半成品"。
+     */
+    @Transactional
+    public AgentReflection recordReflection(int level, String trigger, List<Long> inputEventIds, String conclusion,
+                                            int importance, Long writtenBack, int calls, int promptChars,
+                                            int responseChars, int promptTokens, int completionTokens,
+                                            int durationMs) {
+        if (inputEventIds == null || inputEventIds.isEmpty()) {
+            throw new IllegalArgumentException("反思必须带证据链（inputEventIds 不能为空）");
+        }
+        String evidence = inputEventIds.stream().map(id -> "event:" + id).collect(Collectors.joining(","));
+        core.requireEvidence(evidence);
+        AgentReflection reflection = new AgentReflection();
+        reflection.setLevel(Math.max(1, level));
+        reflection.setTriggerType(SelfText.clip(trigger, 16));
+        reflection.setInputEventIds(SelfText.clip(evidence, 500));
+        reflection.setConclusion(SelfText.clip(conclusion, 1000));
+        reflection.setImportance(importance);
+        reflection.setWrittenBack(writtenBack);
+        reflection.setCalls(Math.max(1, calls));
+        reflection.setPromptChars(Math.max(0, promptChars));
+        reflection.setResponseChars(Math.max(0, responseChars));
+        reflection.setPromptTokens(Math.max(0, promptTokens));
+        reflection.setCompletionTokens(Math.max(0, completionTokens));
+        reflection.setDurationMs(Math.max(0, durationMs));
+        reflection.setCreatedAt(LocalDateTime.now());
+        AgentReflection saved = reflectionRepository.save(reflection);
+        core.appendEvent(AgentSelfEvent.KIND_REFLECT, saved.getConclusion(), "event:" + inputEventIds.get(0),
+                null, null, importance);
+        return saved;
     }
 }

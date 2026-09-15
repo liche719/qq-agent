@@ -12,7 +12,7 @@ import java.util.Set;
 /**
  * 「它自己的方向」那组工具**只在该作用域里下发**（2026-09-15 从 {@code ToolSetTrimmer} 搬过来）。
  *
- * <p>原来这条规则硬编码在宿主的工具裁剪器里，裁剪器还得 `import SelfService` 才知道
+ * <p>原来这条规则硬编码在宿主的工具裁剪器里，裁剪器还得 `import SelfCoreService` 才知道
  * "现在是不是它自己的作用域"——工具层依赖业务模块，方向是反的。现在由模块自己声明：
  * 裁剪器只问一句"有哪些要藏"，不用认识自主模块。
  *
@@ -43,7 +43,7 @@ public class SelfToolVisibilityRule implements ToolVisibilityRule {
             return Set.of();
         }
         // 它自己的时间里要能调这组工具
-        if (userId != null && SelfService.SELF_SCOPE.equals(userId.trim())) {
+        if (userId != null && SelfCoreService.SELF_SCOPE.equals(userId.trim())) {
             return Set.of();
         }
         Set<String> hidden = new LinkedHashSet<>();

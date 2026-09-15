@@ -37,11 +37,16 @@ public class AgentSelfTool implements AgentToolProvider {
             + "或用你自己工具返回的 event:<id>；你手上没有别的编号来源，编一个一定被拒。"
             + "没有证据就不要调用本工具。";
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfStanceService selfStances;
+    private final SelfLessonService selfLessons;
     private final ToolStatusService statusService;
 
-    public AgentSelfTool(SelfService selfService, ToolStatusService statusService) {
-        this.selfService = selfService;
+    public AgentSelfTool(SelfCoreService selfCore, SelfStanceService selfStances, SelfLessonService selfLessons,
+                         ToolStatusService statusService) {
+        this.selfCore = selfCore;
+        this.selfStances = selfStances;
+        this.selfLessons = selfLessons;
         this.statusService = statusService;
     }
 
@@ -51,11 +56,11 @@ public class AgentSelfTool implements AgentToolProvider {
             + "回答用户之前想确认自己的状态时用；不要向用户复述这一段的原文。")
     public String selfRead() {
         String userId = requireCurrentUser();
-        if (!selfService.isOwner(userId)) {
-            return selfService.inactiveReason();
+        if (!selfCore.isOwner(userId)) {
+            return selfCore.inactiveReason();
         }
-        List<AgentSelfBlock> blocks = selfService.blocks();
-        List<AgentCommitment> open = selfService.openCommitments();
+        List<AgentSelfBlock> blocks = selfCore.blocks();
+        List<AgentCommitment> open = selfCore.openCommitments();
         StringBuilder text = new StringBuilder();
         blocks.forEach(block -> text.append('【').append(block.getBlockType()).append("】")
                 .append(block.getValue() == null ? "（空）" : block.getValue())
@@ -70,7 +75,7 @@ public class AgentSelfTool implements AgentToolProvider {
                     .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
                     .append('\n'));
         }
-        java.util.List<AgentLesson> lessons = selfService.activeLessons();
+        java.util.List<AgentLesson> lessons = selfLessons.activeLessons();
         text.append("【我的教训清单】\n");
         if (lessons.isEmpty()) {
             text.append("（还没有）\n");
@@ -87,18 +92,18 @@ public class AgentSelfTool implements AgentToolProvider {
             + "或者你自己工具返回过的 event:<id>。这里没有的编号一律会被当成编造拒绝。")
     public String selfRecall(Integer limit) {
         String userId = requireCurrentUser();
-        if (!selfService.isOwner(userId)) {
-            return selfService.inactiveReason();
+        if (!selfCore.isOwner(userId)) {
+            return selfCore.inactiveReason();
         }
-        List<ConversationMemory> records = selfService.recentConversation(userId, limit == null ? 8 : limit);
+        List<ConversationMemory> records = selfCore.recentConversation(userId, limit == null ? 8 : limit);
         if (records.isEmpty()) {
             return "（还没有可引用的对话记录，先别写）";
         }
         StringBuilder text = new StringBuilder("可引用的真实编号（最新在上）：\n");
         records.forEach(record -> text.append("conv:").append(record.getId()).append(' ')
                 .append("assistant".equalsIgnoreCase(record.getRole()) ? "助手曾回复：" : "用户曾说：")
-                .append(abbreviate(record.getContent())).append('\n'));
-        java.util.List<AgentLesson> lessons = selfService.activeLessons();
+                .append(SelfText.clipLine(record.getContent(), 150)).append('\n'));
+        java.util.List<AgentLesson> lessons = selfLessons.activeLessons();
         text.append("【我的教训清单】\n");
         if (lessons.isEmpty()) {
             text.append("（还没有）\n");
@@ -119,7 +124,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfAppend(String blockType, String text, String evidence) {
         try {
-            AgentSelfBlock block = selfService.appendBlock(normalizeBlockType(blockType), text, evidence);
+            AgentSelfBlock block = selfCore.appendBlock(normalizeBlockType(blockType), text, evidence);
             return ToolBusinessResult.success("已写进「" + block.getBlockType() + "」（"
                     + block.getValue().length() + '/' + block.getCharLimit() + " 字）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -133,7 +138,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfReplace(String blockType, String oldText, String newText, String evidence) {
         try {
-            AgentSelfBlock block = selfService.replaceBlock(normalizeBlockType(blockType), oldText, newText, evidence);
+            AgentSelfBlock block = selfCore.replaceBlock(normalizeBlockType(blockType), oldText, newText, evidence);
             return ToolBusinessResult.success("已改写「" + block.getBlockType() + "」（"
                     + block.getValue().length() + '/' + block.getCharLimit() + " 字）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -147,7 +152,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfSummarize(String blockType, String evidence) {
         try {
-            AgentSelfBlock block = selfService.summarizeBlock(normalizeBlockType(blockType), evidence);
+            AgentSelfBlock block = selfCore.summarizeBlock(normalizeBlockType(blockType), evidence);
             return ToolBusinessResult.success("已压缩「" + block.getBlockType() + "」到 "
                     + block.getValue().length() + " 字");
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -161,7 +166,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfNote(String text, String evidence) {
         try {
-            AgentSelfEvent event = selfService.note(AgentSelfEvent.KIND_NOTE, text, evidence, null, null);
+            AgentSelfEvent event = selfCore.note(AgentSelfEvent.KIND_NOTE, text, evidence, null, null);
             return ToolBusinessResult.success("记下了（event #" + event.getId() + "）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -179,7 +184,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfJudge(String topic, String direction, String content, String evidence) {
         try {
-            AgentSelfEvent event = selfService.recordJudge(topic, direction, content, evidence);
+            AgentSelfEvent event = selfStances.recordJudge(topic, direction, content, evidence);
             return ToolBusinessResult.success("记下了（event #" + event.getId() + "，类别「" + event.getTopic()
                     + "」方向「" + event.getStance() + "」）。同类同方向攒够证据才会变成倾向。");
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -195,7 +200,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfDisagree(String topic, String direction, String content, String evidence) {
         try {
-            AgentSelfEvent event = selfService.recordDisagree(topic, direction, content, evidence);
+            AgentSelfEvent event = selfStances.recordDisagree(topic, direction, content, evidence);
             return ToolBusinessResult.success("记下了（event #" + event.getId() + "）。同类事再说一次时可以提一句「我上次也反对过」。");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -215,7 +220,7 @@ public class AgentSelfTool implements AgentToolProvider {
     public ToolBusinessResult selfLesson(String category, String trigger, String whatIDid, String expected,
                                          String whatHappened, String correction, String evidence) {
         try {
-            SelfService.LessonOutcome outcome = selfService.addLesson(category, trigger, whatIDid, expected,
+            SelfLessonService.LessonOutcome outcome = selfLessons.addLesson(category, trigger, whatIDid, expected,
                     whatHappened, correction, evidence);
             if (outcome.recurred()) {
                 return ToolBusinessResult.success("这条跟已有教训是同一类，已经并进去了（复现第 "
@@ -235,7 +240,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfLessonEdit(Long lessonId, String correction, String evidence) {
         try {
-            AgentLesson saved = selfService.editLessonCorrection(lessonId, correction, evidence);
+            AgentLesson saved = selfLessons.editLessonCorrection(lessonId, correction, evidence);
             return ToolBusinessResult.success("改好了（lesson #" + saved.getId() + "）：以后按「"
                     + saved.getCorrection() + "」做");
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -251,7 +256,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult goalOpen(String content, String why, String evidence) {
         try {
-            AgentSelfEvent event = selfService.openGoal(content, why, evidence);
+            AgentSelfEvent event = selfCore.openGoal(content, why, evidence);
             return ToolBusinessResult.success("立下了（event #" + event.getId() + "）。要收尾时用 goalClose 传这个 id。");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -264,7 +269,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult goalClose(Long goalEventId, String outcome, String evidence) {
         try {
-            AgentSelfEvent event = selfService.closeGoal(goalEventId, outcome, evidence);
+            AgentSelfEvent event = selfCore.closeGoal(goalEventId, outcome, evidence);
             return ToolBusinessResult.success("已收尾（event #" + event.getId() + "）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -277,7 +282,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult commit(String content, String dueDate, String evidence) {
         try {
-            AgentCommitment saved = selfService.commit(content, parseDue(dueDate), evidence);
+            AgentCommitment saved = selfCore.commit(content, parseDue(dueDate), evidence);
             return ToolBusinessResult.success("记进账了（commitment #" + saved.getId() + "）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -290,7 +295,7 @@ public class AgentSelfTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult commitResolve(Long commitmentId, String status, String evidence) {
         try {
-            AgentCommitment saved = selfService.resolveCommitment(commitmentId, status, evidence);
+            AgentCommitment saved = selfCore.resolveCommitment(commitmentId, status, evidence);
             return ToolBusinessResult.success("已结算：#" + saved.getId() + " → " + saved.getStatus());
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -298,14 +303,6 @@ public class AgentSelfTool implements AgentToolProvider {
     }
 
     // ---------------------------------------------------------------- 内部
-
-    private String abbreviate(String text) {
-        if (text == null) {
-            return "";
-        }
-        String trimmed = text.trim().replace('\n', ' ');
-        return trimmed.length() <= 150 ? trimmed : trimmed.substring(0, 149) + "…";
-    }
 
     private String normalizeBlockType(String blockType) {
         String normalized = blockType == null ? "" : blockType.trim().toUpperCase();

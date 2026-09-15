@@ -9,7 +9,7 @@ import java.util.Set;
  * 「按用户作用域决定哪些工具不下发」的规则（2026-09-15 加）。
  *
  * <p><b>为什么要有这个接口</b>：工具集裁剪器原来**硬编码了自主模块的知识**——
- * 认 `selfQuest*` 前缀、还要 {@code import com.liche.wechatagent.self.SelfService}
+ * 认 `selfQuest*` 前缀、还要 {@code import com.liche.wechatagent.self.SelfCoreService}
  * 来判断"现在是不是它自己的作用域"。于是**工具层反过来依赖业务模块**，方向是错的：
  * 拔掉模块，工具层还留着一处编译依赖；加第二个模块还得再改一次裁剪器。
  *

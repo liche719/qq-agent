@@ -30,11 +30,13 @@ public class AgentQuestTool implements AgentToolProvider {
             + "run:<本次作业id>（系统在这次的指令里给你）、quest:<方向id> 或 note:<笔记id>（selfQuest 里看到的）；"
             + "编一个一定被拒。";
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfQuestStore selfQuests;
     private final ToolStatusService statusService;
 
-    public AgentQuestTool(SelfService selfService, ToolStatusService statusService) {
-        this.selfService = selfService;
+    public AgentQuestTool(SelfCoreService selfCore, SelfQuestStore selfQuests, ToolStatusService statusService) {
+        this.selfCore = selfCore;
+        this.selfQuests = selfQuests;
         this.statusService = statusService;
     }
 
@@ -42,10 +44,10 @@ public class AgentQuestTool implements AgentToolProvider {
             + "「带来源的更新有多少条、被我自己撤回了几条」。动手之前先看它。")
     public String selfQuest() {
         String userId = requireCurrentUser();
-        if (!selfService.isOwner(userId)) {
-            return selfService.inactiveReason();
+        if (!selfCore.isOwner(userId)) {
+            return selfCore.inactiveReason();
         }
-        List<AgentQuest> all = selfService.quests();
+        List<AgentQuest> all = selfQuests.quests();
         if (all.isEmpty()) {
             return "（我还没有自己的方向。想做什么就自己开一个：selfQuestChoose）";
         }
@@ -61,13 +63,13 @@ public class AgentQuestTool implements AgentToolProvider {
             if (quest.getNextStep() != null && !quest.getNextStep().isBlank()) {
                 text.append("我自己写的下一步：").append(quest.getNextStep()).append('\n');
             }
-            List<AgentQuestNote> notes = selfService.questNotes(quest.getId(), 5);
+            List<AgentQuestNote> notes = selfQuests.questNotes(quest.getId(), 5);
             if (!notes.isEmpty()) {
                 text.append("最近的笔记：\n");
                 for (AgentQuestNote note : notes) {
                     text.append("· note:").append(note.getId())
                             .append(note.isRetracted() ? "（已撤回：" + note.getRetractReason() + "）" : "")
-                            .append(' ').append(abbreviate(note.getContent()))
+                            .append(' ').append(SelfText.clipLine(note.getContent(), 150))
                             .append(note.getSourceUrl() == null ? "（没写来源）" : "（来源 " + note.getSourceUrl() + "）")
                             .append('\n');
                 }
@@ -82,7 +84,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfQuestChoose(String title, String why, String nextStep, String evidence) {
         try {
-            AgentQuest quest = selfService.openQuest(title, why, nextStep, evidence);
+            AgentQuest quest = selfQuests.openQuest(title, why, nextStep, evidence);
             return ToolBusinessResult.success("开了自己的方向 #" + quest.getId() + "「" + quest.getTitle() + "」");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -94,7 +96,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfQuestStep(Long questId, String nextStep, String evidence) {
         try {
-            AgentQuest quest = selfService.updateQuestStep(questId, nextStep, evidence);
+            AgentQuest quest = selfQuests.updateQuestStep(questId, nextStep, evidence);
             return ToolBusinessResult.success("「" + quest.getTitle() + "」下一步已改成：" + quest.getNextStep());
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -108,7 +110,7 @@ public class AgentQuestTool implements AgentToolProvider {
     public ToolBusinessResult selfQuestNote(Long questId, String content, String sourceUrl, String sourceTitle,
                                             String evidence) {
         try {
-            AgentQuestNote note = selfService.addQuestNote(questId, content, sourceUrl, sourceTitle, evidence);
+            AgentQuestNote note = selfQuests.addQuestNote(questId, content, sourceUrl, sourceTitle, evidence);
             return ToolBusinessResult.success("记下了 note:" + note.getId()
                     + (note.getSourceUrl() == null ? "（没写来源）" : "（来源 " + note.getSourceUrl() + "）"));
         } catch (IllegalArgumentException | IllegalStateException exception) {
@@ -122,7 +124,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfQuestRetract(Long noteId, String reason, String evidence) {
         try {
-            AgentQuestNote note = selfService.retractQuestNote(noteId, reason, evidence);
+            AgentQuestNote note = selfQuests.retractQuestNote(noteId, reason, evidence);
             return ToolBusinessResult.success("撤回了 note:" + note.getId() + "（" + note.getRetractReason() + "）");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -134,7 +136,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfQuestClose(Long questId, String reason, String evidence) {
         try {
-            AgentQuest quest = selfService.closeQuest(questId, reason, evidence);
+            AgentQuest quest = selfQuests.closeQuest(questId, reason, evidence);
             return ToolBusinessResult.success("收掉了「" + quest.getTitle() + "」");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -147,7 +149,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfQuestRest(String reason, String evidence) {
         try {
-            selfService.restForToday(reason, evidence);
+            selfQuests.restForToday(reason, evidence);
             return ToolBusinessResult.success("行，今天先到这。");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -161,7 +163,7 @@ public class AgentQuestTool implements AgentToolProvider {
     @NonIdempotentTool
     public ToolBusinessResult selfWantToSay(String content, String why, Long questId, String evidence) {
         try {
-            AgentSelfUtterance utterance = selfService.wantToSay(content, why, questId, evidence);
+            AgentSelfUtterance utterance = selfQuests.wantToSay(content, why, questId, evidence);
             return ToolBusinessResult.success("记下了（#" + utterance.getId() + "），他收不到——只是你自己知道。");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
@@ -169,14 +171,6 @@ public class AgentQuestTool implements AgentToolProvider {
     }
 
     // ---------------------------------------------------------------- 内部
-
-    private String abbreviate(String text) {
-        if (text == null) {
-            return "";
-        }
-        String trimmed = text.trim().replace('\n', ' ');
-        return trimmed.length() <= 150 ? trimmed : trimmed.substring(0, 149) + "…";
-    }
 
     private String requireCurrentUser() {
         String userId = statusService.currentUserId();

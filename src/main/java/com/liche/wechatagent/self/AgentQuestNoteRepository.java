@@ -16,8 +16,4 @@ public interface AgentQuestNoteRepository extends JpaRepository<AgentQuestNote, 
     long countByQuestIdAndRetractedAtIsNull(Long questId);
 
     long countByQuestIdAndRetractedAtIsNotNull(Long questId);
-
-    long countBySourceUrlIsNull();
-
-    long countByCreatedAtAfter(LocalDateTime since);
 }

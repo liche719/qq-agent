@@ -37,18 +37,27 @@ public class SelfLoader implements PromptSectionProvider {
      */
     private static final String FRAMING = "（这是我自己的状态，不是用户的事实；用它可以，但不要向对方复述这一段的原文。）\n";
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfStanceService selfStances;
+    private final SelfLessonService selfLessons;
+    private final SelfQuestStore selfQuests;
     private final int maxChars;
     private final int maxCommitmentsInPrompt;
     private final int maxStancesInPrompt;
     private final int maxLessonsInPrompt;
 
-    public SelfLoader(SelfService selfService,
+    public SelfLoader(SelfCoreService selfCore,
+                      SelfStanceService selfStances,
+                      SelfLessonService selfLessons,
+                      SelfQuestStore selfQuests,
                       @Value("${memory.self-max-chars:800}") int maxChars,
                       @Value("${memory.self-max-commitments-in-prompt:5}") int maxCommitmentsInPrompt,
                       @Value("${memory.self-max-stances-in-prompt:5}") int maxStancesInPrompt,
                       @Value("${memory.self-max-lessons-in-prompt:3}") int maxLessonsInPrompt) {
-        this.selfService = selfService;
+        this.selfCore = selfCore;
+        this.selfStances = selfStances;
+        this.selfLessons = selfLessons;
+        this.selfQuests = selfQuests;
         this.maxChars = Math.max(120, maxChars);
         this.maxCommitmentsInPrompt = Math.max(1, maxCommitmentsInPrompt);
         this.maxStancesInPrompt = Math.max(1, maxStancesInPrompt);
@@ -66,15 +75,15 @@ public class SelfLoader implements PromptSectionProvider {
     }
 
     private PromptSection build(String userId, String userMessage) {
-        if (!selfService.isOwner(userId)) {
+        if (!selfCore.isOwner(userId)) {
             return null;
         }
-        List<AgentSelfBlock> blocks = selfService.blocks();
-        List<AgentCommitment> open = selfService.openCommitments();
-        List<AgentStance> stances = selfService.activeStances();
-        Optional<AgentQuest> quest = selfService.activeQuest();
+        List<AgentSelfBlock> blocks = selfCore.blocks();
+        List<AgentCommitment> open = selfCore.openCommitments();
+        List<AgentStance> stances = selfStances.activeStances();
+        Optional<AgentQuest> quest = selfQuests.activeQuest();
         List<AgentLesson> lessons = userMessage == null || userMessage.isBlank()
-                ? java.util.List.of() : selfService.lessonsInPlay(userMessage, maxLessonsInPrompt);
+                ? java.util.List.of() : selfLessons.lessonsInPlay(userMessage, maxLessonsInPrompt);
         if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()) {
             return null;
         }
@@ -112,16 +121,11 @@ public class SelfLoader implements PromptSectionProvider {
         if (quest == null || quest.getTitle() == null || quest.getTitle().isBlank()) {
             return;
         }
-        body.append("我自己的方向：").append(clip(quest.getTitle(), 60));
+        body.append("我自己的方向：").append(SelfText.clipLine(quest.getTitle(), 60));
         if (quest.getNextStep() != null && !quest.getNextStep().isBlank()) {
-            body.append("（下一步：").append(clip(quest.getNextStep(), 80)).append('）');
+            body.append("（下一步：").append(SelfText.clipLine(quest.getNextStep(), 80)).append('）');
         }
         body.append('\n');
-    }
-
-    private String clip(String text, int max) {
-        String trimmed = text == null ? "" : text.trim().replace('\n', ' ');
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     private void appendBlockLine(StringBuilder body, AgentSelfBlock block, String label) {
@@ -148,7 +152,7 @@ public class SelfLoader implements PromptSectionProvider {
         if (stances.isEmpty()) {
             return;
         }
-        Set<Long> due = selfService.dueStances(LocalDateTime.now()).stream()
+        Set<Long> due = selfStances.dueStances(LocalDateTime.now()).stream()
                 .map(AgentStance::getId)
                 .collect(Collectors.toSet());
         body.append("我一贯的样子：\n");
@@ -183,11 +187,11 @@ public class SelfLoader implements PromptSectionProvider {
 
     /** 时间感：距上次多久 + 上次停在哪（成本≈0，但这是"连续存在"的体感来源）。 */
     private void appendTimeSense(StringBuilder body) {
-        Optional<AgentSelfEvent> latest = selfService.latestEvent();
+        Optional<AgentSelfEvent> latest = selfCore.latestEvent();
         if (latest.isEmpty()) {
             return;
         }
-        Duration since = selfService.sinceLastEvent();
+        Duration since = selfCore.sinceLastEvent();
         if (since != null && !since.isNegative()) {
             body.append("上次动自己这边是：").append(humanize(since)).append("前\n");
         }

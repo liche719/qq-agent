@@ -12,9 +12,13 @@ import com.liche.wechatagent.self.AgentSelfEvent;
 import com.liche.wechatagent.self.AgentSelfUtterance;
 import com.liche.wechatagent.self.AgentStance;
 import com.liche.wechatagent.self.SelfQuestService;
+import com.liche.wechatagent.self.SelfQuestStore;
 import com.liche.wechatagent.self.SelfReflectionService;
-import com.liche.wechatagent.self.SelfService;
+import com.liche.wechatagent.self.SelfCoreService;
+import com.liche.wechatagent.self.SelfLessonService;
 import com.liche.wechatagent.self.SelfSpeakService;
+import com.liche.wechatagent.self.SelfStanceService;
+import com.liche.wechatagent.self.SelfText;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,7 +52,10 @@ public class AdminSelfController {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfStanceService selfStances;
+    private final SelfLessonService selfLessons;
+    private final SelfQuestStore selfQuests;
     private final SelfReflectionService reflectionService;
     private final SelfQuestService questService;
     private final SelfSpeakService speakService;
@@ -56,14 +63,18 @@ public class AdminSelfController {
     private final double budgetYuan;
     private final double overrunFactor;
 
-    public AdminSelfController(SelfService selfService, SelfReflectionService reflectionService,
+    public AdminSelfController(SelfCoreService selfCore, SelfStanceService selfStances, SelfLessonService selfLessons,
+                               SelfQuestStore selfQuests, SelfReflectionService reflectionService,
                                SelfQuestService questService, SelfSpeakService speakService,
                                TurnTraceStore turnTraceStore,
                                @org.springframework.beans.factory.annotation.Value(
                                        "${memory.self-quest-daily-budget-yuan:0.5}") double budgetYuan,
                                @org.springframework.beans.factory.annotation.Value(
                                        "${memory.self-quest-budget-overrun-factor:1.5}") double overrunFactor) {
-        this.selfService = selfService;
+        this.selfCore = selfCore;
+        this.selfStances = selfStances;
+        this.selfLessons = selfLessons;
+        this.selfQuests = selfQuests;
         this.reflectionService = reflectionService;
         this.questService = questService;
         this.speakService = speakService;
@@ -120,7 +131,7 @@ public class AdminSelfController {
 
     /** 机主只有一个：优先用配了归属人的那个用户查；没有再退回最近一轮 */
     private Optional<TurnTraceStore.Turn> traceTurn() {
-        String owner = selfService.owner();
+        String owner = selfCore.owner();
         Optional<TurnTraceStore.Turn> byOwner = turnTraceStore.lastTurn(owner);
         return byOwner.isPresent() ? byOwner : turnTraceStore.latest();
     }
@@ -131,9 +142,9 @@ public class AdminSelfController {
      */
     @PostMapping("/reflect")
     public Map<String, Object> reflectNow() {
-        String owner = selfService.owner();
+        String owner = selfCore.owner();
         if (owner == null) {
-            return Map.of("message", "自主模块未工作（" + selfService.inactiveReason() + "）");
+            return Map.of("message", "自主模块未工作（" + selfCore.inactiveReason() + "）");
         }
         SelfReflectionService.Outcome outcome = reflectionService.reflect(owner, "manual");
         if (outcome.ran()) {
@@ -150,31 +161,31 @@ public class AdminSelfController {
     public Map<String, Object> overview() {
         LocalDateTime now = LocalDateTime.now();
         List<Map<String, Object>> rows = new ArrayList<>();
-        rows.add(row("模块状态", selfService.isActive() ? "工作中" : "未工作（" + selfService.inactiveReason() + "）"));
-        List<AgentSelfBlock> blocks = selfService.blocks();
+        rows.add(row("模块状态", selfCore.isActive() ? "工作中" : "未工作（" + selfCore.inactiveReason() + "）"));
+        List<AgentSelfBlock> blocks = selfCore.blocks();
         rows.add(row("自己的块", blocks.isEmpty() ? "（空）" : blocks.size() + " 个"));
-        long activeStances = selfService.countActiveStances();
-        int dueStances = selfService.dueStances(now).size();
+        long activeStances = selfStances.countActiveStances();
+        int dueStances = selfStances.dueStances(now).size();
         rows.add(row("活跃倾向", activeStances + " 条"
                 + (dueStances == 0 ? "" : "（" + dueStances + " 条该复查了）")));
-        rows.add(row("未结承诺", String.valueOf(selfService.openCommitments().size())));
-        List<AgentReflection> today = selfService.recentReflections(50).stream()
+        rows.add(row("未结承诺", String.valueOf(selfCore.openCommitments().size())));
+        List<AgentReflection> today = reflectionService.recentReflections(50).stream()
                 .filter(reflection -> reflection.getCreatedAt() != null
                         && !reflection.getCreatedAt().isBefore(LocalDate.now().atStartOfDay()))
                 .toList();
         rows.add(row("今天反思", today.isEmpty() ? "还没跑" : today.size() + " 次 / "
                 + today.stream().mapToInt(this::tokensOf).sum() + " tokens"));
         rows.add(row("分歧（近 7 天）", disagreements(now).size() + " 次"));
-        List<AgentLesson> activeLessons = selfService.activeLessons();
+        List<AgentLesson> activeLessons = selfLessons.activeLessons();
         long dueLessons = activeLessons.stream().filter(lesson -> lesson.isDue(now)).count();
         rows.add(row("教训清单", activeLessons.isEmpty() ? "（空）" : activeLessons.size() + " 条"
                 + (dueLessons == 0 ? "" : "（" + dueLessons + " 条该复查了）")));
-        selfService.lastReflection().ifPresent(reflection ->
+        reflectionService.lastReflection().ifPresent(reflection ->
                 rows.add(row("上次反思", (reflection.getCreatedAt() == null ? "—"
                         : humanize(Duration.between(reflection.getCreatedAt(), now)) + "：")
                         + clip(reflection.getConclusion(), 80))));
-        rows.add(row("最近事件", selfService.recentEvents(20).size() + " 条（面板最多显示 200）"));
-        Duration since = selfService.sinceLastEvent();
+        rows.add(row("最近事件", selfCore.recentEvents(20).size() + " 条（面板最多显示 200）"));
+        Duration since = selfCore.sinceLastEvent();
         rows.add(row("距上次动自己这边", since == null ? "还没有记录" : humanize(since)));
         return Map.of("rows", rows);
     }
@@ -183,7 +194,7 @@ public class AdminSelfController {
     @GetMapping("/blocks")
     public Map<String, Object> blocks() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentSelfBlock block : selfService.blocks()) {
+        for (AgentSelfBlock block : selfCore.blocks()) {
             int used = block.getValue() == null ? 0 : block.getValue().length();
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("type", block.getBlockType());
@@ -200,7 +211,7 @@ public class AdminSelfController {
     @GetMapping("/events")
     public Map<String, Object> events(@RequestParam(defaultValue = "50") int limit) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentSelfEvent event : selfService.recentEvents(limit)) {
+        for (AgentSelfEvent event : selfCore.recentEvents(limit)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + event.getId());
             row.put("kind", event.getKind());
@@ -216,7 +227,7 @@ public class AdminSelfController {
     @GetMapping("/commitments")
     public Map<String, Object> commitments() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentCommitment commitment : selfService.openCommitments()) {
+        for (AgentCommitment commitment : selfCore.openCommitments()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + commitment.getId());
             row.put("content", commitment.getContent());
@@ -231,9 +242,9 @@ public class AdminSelfController {
     @GetMapping("/stances")
     public Map<String, Object> stances() {
         LocalDateTime now = LocalDateTime.now();
-        Set<Long> due = selfService.dueStances(now).stream().map(AgentStance::getId).collect(Collectors.toSet());
+        Set<Long> due = selfStances.dueStances(now).stream().map(AgentStance::getId).collect(Collectors.toSet());
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentStance stance : selfService.activeStances()) {
+        for (AgentStance stance : selfStances.activeStances()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("content", stance.getContent());
             row.put("topic", stance.getTopic() + " / " + stance.getDirection());
@@ -255,7 +266,7 @@ public class AdminSelfController {
     @GetMapping("/reflections")
     public Map<String, Object> reflections(@RequestParam(defaultValue = "20") int limit) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentReflection reflection : selfService.recentReflections(limit)) {
+        for (AgentReflection reflection : reflectionService.recentReflections(limit)) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + reflection.getId());
             row.put("trigger", reflection.getTriggerType() == null ? "—" : reflection.getTriggerType());
@@ -278,7 +289,7 @@ public class AdminSelfController {
     public Map<String, Object> lessons() {
         LocalDateTime now = LocalDateTime.now();
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentLesson lesson : selfService.activeLessons()) {
+        for (AgentLesson lesson : selfLessons.activeLessons()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + lesson.getId());
             row.put("category", lesson.getCategory() + "｜" + lesson.getTriggerType());
@@ -306,7 +317,7 @@ public class AdminSelfController {
             perWeek.put(thisWeek.minusWeeks(index), 0);
         }
         LocalDateTime since = thisWeek.minusWeeks(window - 1L).atStartOfDay();
-        for (AgentSelfEvent event : selfService.eventsSince(since)) {
+        for (AgentSelfEvent event : selfCore.eventsSince(since)) {
             if (!AgentSelfEvent.KIND_LESSON.equals(event.getKind()) || event.getCreatedAt() == null) {
                 continue;
             }
@@ -326,7 +337,7 @@ public class AdminSelfController {
     @GetMapping("/disagreements")
     public Map<String, Object> disagreements() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        List<AgentSelfEvent> recent = selfService.recentEvents(200).stream()
+        List<AgentSelfEvent> recent = selfCore.recentEvents(200).stream()
                 .filter(event -> AgentSelfEvent.KIND_DISAGREE.equals(event.getKind()))
                 .limit(20)
                 .toList();
@@ -352,7 +363,7 @@ public class AdminSelfController {
         for (int index = 0; index < window; index++) {
             perDay.put(LocalDate.now().minusDays(index), 0);
         }
-        for (AgentSelfEvent event : selfService.eventsSince(since)) {
+        for (AgentSelfEvent event : selfCore.eventsSince(since)) {
             if (event.getCreatedAt() == null || AgentSelfEvent.KIND_REFLECT.equals(event.getKind())) {
                 continue;
             }
@@ -373,7 +384,7 @@ public class AdminSelfController {
         for (int index = 0; index < window; index++) {
             perDay.put(LocalDate.now().minusDays(index), 0);
         }
-        for (AgentReflection reflection : selfService.recentReflections(50)) {
+        for (AgentReflection reflection : reflectionService.recentReflections(50)) {
             if (reflection.getCreatedAt() == null) {
                 continue;
             }
@@ -384,7 +395,7 @@ public class AdminSelfController {
             perDay.merge(day, tokensOf(reflection), Integer::sum);
         }
         // 领域②「它自己的时间」也是它自己的开销，必须算进来（不然这块成本看不见）
-        for (AgentQuestRun run : selfService.recentQuestRuns(100)) {
+        for (AgentQuestRun run : selfQuests.recentQuestRuns(100)) {
             if (run.getCreatedAt() == null) {
                 continue;
             }
@@ -410,7 +421,7 @@ public class AdminSelfController {
     @GetMapping("/quests")
     public Map<String, Object> quests() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentQuest quest : selfService.quests()) {
+        for (AgentQuest quest : selfQuests.quests()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + quest.getId());
             row.put("title", quest.getTitle());
@@ -432,8 +443,8 @@ public class AdminSelfController {
     public Map<String, Object> questNotes(@RequestParam(defaultValue = "30") int limit) {
         int window = Math.min(200, Math.max(1, limit));
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentQuest quest : selfService.quests()) {
-            for (AgentQuestNote note : selfService.questNotes(quest.getId(), window)) {
+        for (AgentQuest quest : selfQuests.quests()) {
+            for (AgentQuestNote note : selfQuests.questNotes(quest.getId(), window)) {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("id", "note:" + note.getId());
                 row.put("quest", quest.getTitle());
@@ -463,7 +474,7 @@ public class AdminSelfController {
             perWeek.put(thisWeek.minusWeeks(index), 0);
         }
         LocalDateTime since = thisWeek.minusWeeks(window - 1L).atStartOfDay();
-        for (AgentQuestNote note : selfService.recentQuestNotes(since)) {
+        for (AgentQuestNote note : selfQuests.recentQuestNotes(since)) {
             if (note.getCreatedAt() == null) {
                 continue;
             }
@@ -483,7 +494,7 @@ public class AdminSelfController {
     @GetMapping("/quest-runs")
     public Map<String, Object> questRuns(@RequestParam(defaultValue = "20") int limit) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentQuestRun run : selfService.recentQuestRuns(Math.min(100, Math.max(1, limit)))) {
+        for (AgentQuestRun run : selfQuests.recentQuestRuns(Math.min(100, Math.max(1, limit)))) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + run.getId());
             row.put("status", switch (run.getStatus()) {
@@ -515,7 +526,7 @@ public class AdminSelfController {
     @GetMapping("/utterances")
     public Map<String, Object> utterances(@RequestParam(defaultValue = "30") int limit) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentSelfUtterance utterance : selfService.recentUtterances(Math.min(100, Math.max(1, limit)))) {
+        for (AgentSelfUtterance utterance : selfQuests.recentUtterances(Math.min(100, Math.max(1, limit)))) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", "#" + utterance.getId());
             row.put("content", utterance.getContent());
@@ -543,7 +554,8 @@ public class AdminSelfController {
         return result;
     }
 
-    /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */    @PostMapping("/quest/run")
+    /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */
+    @PostMapping("/quest/run")
     public Map<String, Object> runQuestNow() {
         SelfQuestService.Outcome outcome = questService.run("manual");
         Map<String, Object> result = new LinkedHashMap<>();
@@ -561,7 +573,7 @@ public class AdminSelfController {
     @GetMapping("/budget")
     public Map<String, Object> budget() {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("spentToday", selfService.questCostToday().toPlainString());
+        result.put("spentToday", selfQuests.questCostToday().toPlainString());
         result.put("dailyBudget", budgetYuan);
         result.put("dailyCap", String.valueOf(budgetYuan * overrunFactor));
         return result;
@@ -572,7 +584,7 @@ public class AdminSelfController {
     /** 近 7 天的分歧（overview 用它报次数） */
     private List<AgentSelfEvent> disagreements(LocalDateTime now) {
         LocalDateTime weekAgo = now.minusDays(7);
-        return selfService.recentEvents(200).stream()
+        return selfCore.recentEvents(200).stream()
                 .filter(event -> AgentSelfEvent.KIND_DISAGREE.equals(event.getKind()))
                 .filter(event -> event.getCreatedAt() != null && event.getCreatedAt().isAfter(weekAgo))
                 .toList();
@@ -586,14 +598,14 @@ public class AdminSelfController {
         if (disagree.getTopic() == null || disagree.getCreatedAt() == null) {
             return false;
         }
-        return selfService.judgesFor(disagree.getTopic()).stream()
+        return selfStances.judgesFor(disagree.getTopic()).stream()
                 .filter(judge -> judge.getCreatedAt() != null && judge.getCreatedAt().isAfter(disagree.getCreatedAt()))
                 .anyMatch(judge -> judge.getStance() != null && disagree.getStance() != null
                         && !judge.getStance().equalsIgnoreCase(disagree.getStance()));
     }
 
     private int nz(Integer value) {
-        return value == null ? 0 : value;
+        return SelfText.nz(value);
     }
 
     private int tokensOf(AgentReflection reflection) {
@@ -624,12 +636,9 @@ public class AdminSelfController {
         return Math.round(value * 10) / 10.0;
     }
 
+    /** 面板约定：空值显示「—」，其余交给 {@link SelfText} 截断 */
     private String clip(String text, int max) {
-        if (text == null) {
-            return "—";
-        }
-        String trimmed = text.trim().replace('\n', ' ');
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(0, max - 1)) + "…";
+        return text == null ? "—" : SelfText.clipLine(text, max);
     }
 
     private Map<String, Object> item(String label, int value) {

@@ -27,7 +27,7 @@ import java.util.Optional;
  * 所以 QQ 那边的主动消息日额度账本照样生效——**它想说，也不等于能把你的额度吃穿**。
  *
  * <p><b>刻意不加 {@code @ConditionalOnProperty}</b>：面板（{@code AdminSelfController}）注入了它，
- * 给它加条件会让"关掉模块"变成"整个应用起不来"。模块开关由 {@link SelfService#isActive()} 兜底
+ * 给它加条件会让"关掉模块"变成"整个应用起不来"。模块开关由 {@link SelfCoreService#isActive()} 兜底
  * （没开/没配归属人就一律不发）——这正是坑 64/65 里"行为层带条件、数据层不带"的同一件事。
  */
 @Service
@@ -43,18 +43,21 @@ public class SelfSpeakService {
         }
     }
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfQuestStore selfQuests;
     private final UserService userService;
     private final List<WeChatChannel> channels;
     private final boolean enabled;
     private final int dailyLimit;
 
-    public SelfSpeakService(SelfService selfService,
+    public SelfSpeakService(SelfCoreService selfCore,
+                            SelfQuestStore selfQuests,
                             UserService userService,
                             List<WeChatChannel> channels,
                             @Value("${memory.self-speak-enabled:true}") boolean enabled,
                             @Value("${memory.self-speak-daily-limit:1}") int dailyLimit) {
-        this.selfService = selfService;
+        this.selfCore = selfCore;
+        this.selfQuests = selfQuests;
         this.userService = userService;
         this.channels = channels;
         this.enabled = enabled;
@@ -70,18 +73,18 @@ public class SelfSpeakService {
         if (!enabled) {
             return Outcome.skipped("主动开口关着（memory.self-speak-enabled=false）");
         }
-        if (!selfService.isActive()) {
-            return Outcome.skipped(selfService.inactiveReason());
+        if (!selfCore.isActive()) {
+            return Outcome.skipped(selfCore.inactiveReason());
         }
-        String owner = selfService.owner();
+        String owner = selfCore.owner();
         if (owner == null) {
             return Outcome.skipped("未配置归属人");
         }
-        long sentToday = selfService.countUtterancesSentToday();
+        long sentToday = selfQuests.countUtterancesSentToday();
         if (sentToday >= dailyLimit) {
             return Outcome.skipped("今天已经跟他说过 " + sentToday + " 条了（上限 " + dailyLimit + "）");
         }
-        Optional<AgentSelfUtterance> pending = selfService.oldestPendingUtterance();
+        Optional<AgentSelfUtterance> pending = selfQuests.oldestPendingUtterance();
         if (pending.isEmpty()) {
             return Outcome.skipped("没有想说的话");
         }
@@ -91,16 +94,13 @@ public class SelfSpeakService {
         boolean delivered = ProactiveDelivery.send(channels, profile, owner, text);
         if (!delivered) {
             // 通道没送出去：**标 SUPPRESSED 但留着**——"它想说但没说出来"本身就是要观察的东西
-            selfService.markUtteranceSuppressed(utterance);
-            log.warn("它想说的话没送出去 #{}（通道不可用或额度不够）：{}", utterance.getId(), clip(text));
+            selfQuests.markUtteranceSuppressed(utterance);
+            log.warn("它想说的话没送出去 #{}（通道不可用或额度不够）：{}", utterance.getId(),
+                    SelfText.clipLine(text, 120));
             return Outcome.skipped("通道没送出去");
         }
-        selfService.markUtteranceSent(utterance);
-        log.info("它主动说了一条 #{}：{}", utterance.getId(), clip(text));
+        selfQuests.markUtteranceSent(utterance);
+        log.info("它主动说了一条 #{}：{}", utterance.getId(), SelfText.clipLine(text, 120));
         return new Outcome(true, null, utterance.getId(), text);
-    }
-
-    private String clip(String text) {
-        return text == null ? "" : (text.length() <= 120 ? text : text.substring(0, 119) + "…");
     }
 }

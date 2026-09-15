@@ -27,7 +27,7 @@ import java.util.Set;
  *
  * <p><b>这不是给机主办事的一轮，是它自己的一轮。</b>四条纪律：
  * <ol>
- *   <li><b>独立身份</b>：用 {@link SelfService#SELF_SCOPE} 而不是机主的 userId 跑。借机主的 id 跑会
+ *   <li><b>独立身份</b>：用 {@link SelfCoreService#SELF_SCOPE} 而不是机主的 userId 跑。借机主的 id 跑会
  *       {@code userService.getOrCreate} + 写 {@code conversation_memory} + 调度记忆提取——
  *       等于把它夜里想的事灌进机主的用户档案和长期记忆。</li>
  *   <li><b>工具是有作用域的</b>：只下发 {@link #QUEST_TOOL_PROVIDERS}，再排掉
@@ -83,7 +83,8 @@ public class SelfQuestService {
                            int durationMs, double costYuan) {
     }
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfQuestStore selfQuests;
     private final AgentLoop agentLoop;
     private final UserService userService;
     private final TurnTraceStore turnTraceStore;
@@ -97,7 +98,8 @@ public class SelfQuestService {
     private final int interestThreshold;
     private final int idleHours;
 
-    public SelfQuestService(SelfService selfService,
+    public SelfQuestService(SelfCoreService selfCore,
+                            SelfQuestStore selfQuests,
                             AgentLoop agentLoop,
                             UserService userService,
                             TurnTraceStore turnTraceStore,
@@ -110,7 +112,8 @@ public class SelfQuestService {
                             @Value("${memory.self-quest-min-interval-minutes:120}") int minIntervalMinutes,
                             @Value("${memory.self-quest-interest-threshold:8}") int interestThreshold,
                             @Value("${memory.self-quest-idle-hours:10}") int idleHours) {
-        this.selfService = selfService;
+        this.selfCore = selfCore;
+        this.selfQuests = selfQuests;
         this.agentLoop = agentLoop;
         this.userService = userService;
         this.turnTraceStore = turnTraceStore;
@@ -142,16 +145,16 @@ public class SelfQuestService {
      * 触发式不等于无限量。
      */
     public boolean wantsToWork() {
-        if (!selfService.isActive()) {
+        if (!selfCore.isActive()) {
             return false;
         }
-        if (selfService.restedToday()) {
+        if (selfQuests.restedToday()) {
             return false;
         }
-        if (selfService.questCostToday().doubleValue() >= dailyCapYuan()) {
+        if (selfQuests.questCostToday().doubleValue() >= dailyCapYuan()) {
             return false;
         }
-        Duration since = selfService.sinceLastQuest();
+        Duration since = selfQuests.sinceLastQuest();
         if (since == null) {
             // 还从来没动过：先让它开个头（否则"没有上次"会把它永远锁在门外）
             return true;
@@ -160,11 +163,11 @@ public class SelfQuestService {
             return false;
         }
         // ① 它自己的事在推进：自上次作业以来攒下的兴趣够了
-        if (selfService.interestSinceLastQuest() >= interestThreshold) {
+        if (selfQuests.interestSinceLastQuest() >= interestThreshold) {
             return true;
         }
         // ② 搁太久了，而且手上还有没结的事（§8 的 open loop）
-        return since.toHours() >= idleHours && selfService.hasOpenLoops();
+        return since.toHours() >= idleHours && selfQuests.hasOpenLoops();
     }
 
     /**
@@ -173,23 +176,23 @@ public class SelfQuestService {
      * @param trigger 触发者（manul / triggered，记进作业行便于排障）
      */
     public Outcome run(String trigger) {
-        if (!selfService.isActive()) {
-            return Outcome.skipped(selfService.inactiveReason());
+        if (!selfCore.isActive()) {
+            return Outcome.skipped(selfCore.inactiveReason());
         }
-        String owner = selfService.owner();
+        String owner = selfCore.owner();
         if (owner == null) {
             return Outcome.skipped("未配置归属人");
         }
-        if (selfService.restedToday()) {
+        if (selfQuests.restedToday()) {
             return Outcome.skipped("它自己说了今天先到这");
         }
-        double spentToday = selfService.questCostToday().doubleValue();
+        double spentToday = selfQuests.questCostToday().doubleValue();
         double cap = dailyCapYuan();
         if (spentToday >= cap) {
             return Outcome.skipped(String.format("今天的预算用完了（已花 %.3f 元，封顶 %.2f 元）", spentToday, cap));
         }
 
-        Optional<AgentQuest> active = selfService.activeQuest();
+        Optional<AgentQuest> active = selfQuests.activeQuest();
         Long questIdBefore = active.map(AgentQuest::getId).orElse(null);
         int notesBefore = active.map(q -> nz(q.getNoteCount())).orElse(0);
         int stepsBefore = active.map(q -> nz(q.getStepCount())).orElse(0);
@@ -207,7 +210,7 @@ public class SelfQuestService {
         Attempt last = first;
         boolean extended = false;
         if (!produced) {
-            double remaining = cap - selfService.questCostToday().doubleValue();
+            double remaining = cap - selfQuests.questCostToday().doubleValue();
             if (remaining > 0.02) {
                 // **没落下东西**才续：判据是客观的（有没有新笔记/新的一步），不是它自己说"没做完"
                 log.info("它这次没落下产出，续一次（还能花 {} 元）", String.format("%.3f", remaining));
@@ -235,7 +238,7 @@ public class SelfQuestService {
     /** 跑一个回合；失败时把作业行标 FAILED 并返回 null（不抛，别让定时线程炸） */
     private Attempt attempt(String owner, Long questId, double budgetYuan, String trigger, boolean extended,
                             double spentTodayBefore) {
-        AgentQuestRun run = selfService.startQuestRun(questId, BigDecimal.valueOf(budgetYuan), extended);
+        AgentQuestRun run = selfQuests.startQuestRun(questId, BigDecimal.valueOf(budgetYuan), extended);
         long started = System.nanoTime();
         double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
         long hitBefore = spendMeter == null ? 0 : spendMeter.cacheHitTokens();
@@ -249,8 +252,8 @@ public class SelfQuestService {
             log.info("它自己的时间开跑 run={} 方向={} 触发={} 预算={} 元 可用工具 {} 个：{}",
                     run.getId(), questId, trigger, String.format("%.3f", budgetYuan), toolNames.size(),
                     String.join("、", toolNames));
-            String reply = agentLoop.chat(SelfService.SELF_SCOPE, null, null, personaOf(owner), null, null,
-                    ownHistory(), buildInstruction(run.getId(), selfService.quest(questId).orElse(null),
+            String reply = agentLoop.chat(SelfCoreService.SELF_SCOPE, null, null, personaOf(owner), null, null,
+                    ownHistory(), buildInstruction(run.getId(), selfQuests.quest(questId).orElse(null),
                             spentTodayBefore, budgetYuan),
                     List.of(), List.of(), null, questScope(budgetYuan));
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
@@ -258,19 +261,19 @@ public class SelfQuestService {
             double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
             long hit = Math.max(0, (spendMeter == null ? 0 : spendMeter.cacheHitTokens()) - hitBefore);
             long miss = Math.max(0, (spendMeter == null ? 0 : spendMeter.cacheMissTokens()) - missBefore);
-            selfService.finishQuestRun(run, AgentQuestRun.STATUS_RAN, trigger, reply,
-                    new SelfService.RunCost(tokens[0], tokens[1], durationMs,
+            selfQuests.finishQuestRun(run, AgentQuestRun.STATUS_RAN, trigger, reply,
+                    new SelfQuestStore.RunCost(tokens[0], tokens[1], durationMs,
                             BigDecimal.valueOf(yuan), hit, miss));
-            Long settledQuest = selfService.activeQuest().map(AgentQuest::getId).orElse(questId);
+            Long settledQuest = selfQuests.activeQuest().map(AgentQuest::getId).orElse(questId);
             log.info("它自己的时间跑完 run={} 花了 {} 元（cache 命中 {}/未命中 {}）用时 {}ms",
                     run.getId(), String.format("%.4f", yuan), hit, miss, durationMs);
             return new Attempt(run.getId(), settledQuest, reply, tokens[0], tokens[1], durationMs, yuan);
         } catch (RuntimeException exception) {
             int durationMs = (int) Math.max(0, (System.nanoTime() - started) / 1_000_000L);
             double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
-            selfService.finishQuestRun(run, AgentQuestRun.STATUS_FAILED,
+            selfQuests.finishQuestRun(run, AgentQuestRun.STATUS_FAILED,
                     exception.getClass().getSimpleName() + ": " + exception.getMessage(), null,
-                    new SelfService.RunCost(0, 0, durationMs, BigDecimal.valueOf(yuan), 0, 0));
+                    new SelfQuestStore.RunCost(0, 0, durationMs, BigDecimal.valueOf(yuan), 0, 0));
             log.warn("它自己的时间跑砸了 run={}：{}", run.getId(), exception.getMessage());
             return null;
         }
@@ -282,7 +285,7 @@ public class SelfQuestService {
      * <p>这是"没完成才续期"的判据：自己说没做完 = 自己给自己发额度，那正是要防的。
      */
     private boolean produced(Long questIdBefore, int notesBefore, int stepsBefore) {
-        Optional<AgentQuest> now = selfService.activeQuest();
+        Optional<AgentQuest> now = selfQuests.activeQuest();
         if (now.isEmpty()) {
             // 作业前有方向、现在没有 = 它把方向**收掉**了。"不做了 / 挖到底了"本身就是一个结论，
             // 算产出。（实测踩到：它收掉 #1 之后 activeQuest 为空，被判成"没落产出"→ 白续一次、
@@ -300,7 +303,7 @@ public class SelfQuestService {
     }
 
     private static int nz(Integer value) {
-        return value == null ? 0 : value;
+        return SelfText.nz(value);
     }
 
     /** 作业指令：只给元指令 + 它自己的状态入口，**不替它选题**（§9 第 2 条）。 */
@@ -342,7 +345,7 @@ public class SelfQuestService {
 
     /** 它自己的上次：把最近几轮的总结当历史给它，这样它接得上自己（§8 的"上次停在哪儿"）。 */
     private List<ContextTurn> ownHistory() {
-        List<AgentQuestRun> runs = selfService.recentQuestRuns(HISTORY_LIMIT + 1);
+        List<AgentQuestRun> runs = selfQuests.recentQuestRuns(HISTORY_LIMIT + 1);
         List<ContextTurn> history = new ArrayList<>();
         for (int index = runs.size() - 1; index >= 0; index--) {
             AgentQuestRun run = runs.get(index);
@@ -375,7 +378,7 @@ public class SelfQuestService {
      */
     private int[] tokensOf() {
         int[] tokens = new int[2];
-        turnTraceStore.lastTurn(SelfService.SELF_SCOPE).ifPresent(turn -> turn.steps().stream()
+        turnTraceStore.lastTurn(SelfCoreService.SELF_SCOPE).ifPresent(turn -> turn.steps().stream()
                 .filter(step -> "LLM".equals(step.kind()))
                 .forEach(step -> {
                     tokens[0] += step.promptTokens();

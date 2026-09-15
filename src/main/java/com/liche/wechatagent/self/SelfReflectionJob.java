@@ -37,7 +37,8 @@ public class SelfReflectionJob {
     private static final String TRIGGER_INTEREST = "interest";
     private static final String TRIGGER_IDLE = "idle";
 
-    private final SelfService selfService;
+    private final SelfCoreService selfCore;
+    private final SelfQuestStore selfQuests;
     private final SelfReflectionService reflectionService;
     private final String mode;
     private final int turnThreshold;
@@ -46,7 +47,8 @@ public class SelfReflectionJob {
     private final boolean onIdle;
     private final int idleHours;
 
-    public SelfReflectionJob(SelfService selfService,
+    public SelfReflectionJob(SelfCoreService selfCore,
+                             SelfQuestStore selfQuests,
                              SelfReflectionService reflectionService,
                              @Value("${memory.self-reflect-mode:step-count}") String mode,
                              @Value("${memory.self-reflect-turns:12}") int turnThreshold,
@@ -54,7 +56,8 @@ public class SelfReflectionJob {
                              @Value("${memory.self-reflect-interest-threshold:150}") int interestThreshold,
                              @Value("${memory.self-reflect-on-idle:true}") boolean onIdle,
                              @Value("${memory.self-reflect-idle-hours:20}") int idleHours) {
-        this.selfService = selfService;
+        this.selfCore = selfCore;
+        this.selfQuests = selfQuests;
         this.reflectionService = reflectionService;
         this.mode = mode == null ? MODE_STEP_COUNT : mode.trim().toLowerCase();
         this.turnThreshold = Math.max(1, turnThreshold);
@@ -69,10 +72,10 @@ public class SelfReflectionJob {
         if (MODE_OFF.equals(mode)) {
             return;
         }
-        if (!selfService.isActive()) {
+        if (!selfCore.isActive()) {
             return;
         }
-        String owner = selfService.owner();
+        String owner = selfCore.owner();
         if (owner == null) {
             return;
         }
@@ -101,20 +104,20 @@ public class SelfReflectionJob {
 
     /** 这次该用哪条触发源；都不满足就返回 null（不反思）。 */
     private String pickTrigger() {
-        if (MODE_STEP_COUNT.equals(mode) && selfService.turnsSinceLastReflection() >= turnThreshold) {
+        if (MODE_STEP_COUNT.equals(mode) && reflectionService.turnsSinceLastReflection() >= turnThreshold) {
             return TRIGGER_STEP_COUNT;
         }
-        if (onInterest && selfService.interestSinceLastReflection() >= interestThreshold) {
+        if (onInterest && reflectionService.interestSinceLastReflection() >= interestThreshold) {
             return TRIGGER_INTEREST;
         }
-        if (onIdle && idleEnough() && selfService.hasOpenLoops()) {
+        if (onIdle && idleEnough() && selfQuests.hasOpenLoops()) {
             return TRIGGER_IDLE;
         }
         return null;
     }
 
     private boolean idleEnough() {
-        Duration since = selfService.sinceLastEvent();
+        Duration since = selfCore.sinceLastEvent();
         return since != null && !since.isNegative() && since.toHours() >= idleHours;
     }
 }
