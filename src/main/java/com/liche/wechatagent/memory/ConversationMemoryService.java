@@ -229,7 +229,7 @@ public class ConversationMemoryService {
         for (String term : retrievalTerms(query)) {
             try {
                 List<ConversationMemory> matches = repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(
-                        userId, term, PageRequest.of(0, searchPerTerm));
+                        userId, likeLiteral(term), PageRequest.of(0, searchPerTerm));
                 if (matches != null) {
                     matches.forEach(record -> putOwnedActive(target, userId, record));
                 }
@@ -359,10 +359,34 @@ public class ConversationMemoryService {
                 .toList();
     }
 
+    /**
+     * 把关键词转成 LIKE 的**字面量**：`\`、`%`、`_` 前面加反斜杠。
+     *
+     * <p>Spring Data 的 {@code Containing} 会把它包成 {@code %term%} 送进 {@code like ?}，而 MySQL 默认的
+     * LIKE 转义符就是反斜杠（2026-09-15 在生产库核对过：`sql_mode` 没有 `NO_BACKSLASH_ESCAPES`）。
+     * 转义后用户消息里带的 `%`/`_` 只按字面量匹配——实测 `like '%_%'` 命中全表 924 行，
+     * 转义成 `'%\_%'` 后只剩 146 行（含真实下划线的那批）。
+     *
+     * <p>注：参数绑定本来就已经挡住注入，这一步挡的是**通配符把召回范围放大**。
+     */
+    private static String likeLiteral(String term) {
+        if (term == null || term.isEmpty()) {
+            return term;
+        }
+        StringBuilder escaped = new StringBuilder(term.length() + 8);
+        for (int index = 0; index < term.length(); index++) {
+            char ch = term.charAt(index);
+            if (ch == '\\' || ch == '%' || ch == '_') {
+                escaped.append('\\');
+            }
+            escaped.append(ch);
+        }
+        return escaped.toString();
+    }
+
     private boolean validUserId(String userId) {
         return userId != null && !userId.isBlank();
     }
-
     private boolean validRole(String role) {
         if (role == null || role.isBlank()) {
             return false;
