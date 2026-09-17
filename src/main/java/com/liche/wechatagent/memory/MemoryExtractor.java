@@ -949,20 +949,24 @@ public class MemoryExtractor {
             prompt.append("（无）\n");
         } else {
             for (UserCoreMemory memory : cores) {
+                // 格式压紧（2026-09-18 瘦身）：29 条核心记忆原来每行都写「；importance=；keywords=」，
+                // 光标签就占 700 多字符。改成「（重要度｜关键词）」，模型照样读得懂。
                 prompt.append("- ").append(memory.getContent())
-                        .append("；importance=").append(memory.getImportance())
-                        .append("；keywords=").append(memory.getKeywords()).append("\n");
+                        .append('（').append(memory.getImportance())
+                        .append('｜').append(memory.getKeywords() == null ? "" : memory.getKeywords())
+                        .append("）\n");
             }
         }
-        prompt.append("\n已存在的中期记忆（id: 内容；有效期）：\n");
+        prompt.append("\n已存在的中期记忆（id: 内容（重要度｜截止｜关键词））：\n");
         if (existing.isEmpty()) {
             prompt.append("（无）\n");
         } else {
             for (UserWorkMemory memory : existing) {
                 prompt.append(memory.getId()).append(": ").append(memory.getContent())
-                        .append("；validUntil=").append(memory.getValidUntil() == null ? "" : memory.getValidUntil())
-                        .append("；importance=").append(memory.getImportance())
-                        .append("；keywords=").append(memory.getKeywords()).append("\n");
+                        .append('（').append(memory.getImportance())
+                        .append('｜').append(memory.getValidUntil() == null ? "" : memory.getValidUntil())
+                        .append('｜').append(memory.getKeywords() == null ? "" : memory.getKeywords())
+                        .append("）\n");
             }
         }
         prompt.append("\n最近对话：\n");
@@ -981,27 +985,20 @@ public class MemoryExtractor {
                     .append(String.join(",", turn.sourceMessageIds()))
                     .append("]: <USER_CONTENT>").append(turn.text()).append("</USER_CONTENT>\n");
         }
-        prompt.append("\n只输出 JSON，不要解释：\n")
-                .append("{\"episodes\":[{\"title\":\"...\",\"summary\":\"...\",\"episodeType\":\"EXPERIENCE\",\"occurredAt\":\"\",\"importance\":3,\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"newWorkItems\":[{\"content\":\"...\",\"priority\":").append(defaultPriority)
-                .append(",\"importance\":").append(defaultWorkImportance).append(",\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"validUntil\":\"\",\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"coreCandidates\":[{\"content\":\"...\",\"importance\":").append(defaultCoreImportance)
-                .append(",\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"coreUpdates\":[{\"oldContent\":\"...\",\"newContent\":\"...\",\"importance\":").append(defaultCoreImportance)
-                .append(",\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"workConflicts\":[{\"existingId\":1,\"existingContent\":\"...\",\"proposedContent\":\"...\",\"importance\":").append(defaultWorkImportance)
-                .append(",\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"validUntil\":\"\",\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"completedWorkItems\":[{\"existingId\":1,\"reason\":\"...\",\"confidence\":")
-                .append(defaultConfidence).append(",\"sourceMessageIds\":[\"...\"]}],")
+        // JSON 样例：默认值只在规则里写一次（原来每个字段都重复一遍 importance/confidence，白占 200 字符）
+        prompt.append("\n只输出 JSON，不要解释（importance 默认 ").append(defaultCoreImportance)
+                .append("、confidence 默认 ").append(defaultConfidence).append("，可以不写）：\n")
+                .append("{\"episodes\":[{\"title\":\"\",\"summary\":\"\",\"episodeType\":\"EXPERIENCE\",\"occurredAt\":\"\",\"importance\":0,\"confidence\":0,\"keywords\":[],\"sourceMessageIds\":[]}],")
+                .append("\"newWorkItems\":[{\"content\":\"\",\"priority\":").append(defaultPriority)
+                .append(",\"validUntil\":\"\"}],")
+                .append("\"coreCandidates\":[{\"content\":\"\"}],")
+                .append("\"coreUpdates\":[{\"oldContent\":\"\",\"newContent\":\"\"}],")
+                .append("\"workConflicts\":[{\"existingId\":0,\"existingContent\":\"\",\"proposedContent\":\"\",\"validUntil\":\"\"}],")
+                .append("\"completedWorkItems\":[{\"existingId\":0,\"reason\":\"\"}],")
                 .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
-                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"confidence\":")
-                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
-                .append("\"duplicates\":[\"...\"]}");
+                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\"}],")
+                .append("\"duplicates\":[]}\n")
+                .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []）");
         return prompt.toString();
     }
 
