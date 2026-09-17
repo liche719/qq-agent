@@ -66,6 +66,13 @@ public class MemoryExtractor {
     private final int defaultWorkImportance;
     private final double dedupThreshold;
     private final ZoneId zone;
+    /** 提取审计（2026-09-17）：每跑一次留一行；可为 null（单测直接构造） */
+    private MemoryExtractionAudit audit;
+
+    @Autowired(required = false)
+    public void setAudit(MemoryExtractionAudit audit) {
+        this.audit = audit;
+    }
 
     @Autowired
     public MemoryExtractor(ChatModel chatModel,
@@ -181,8 +188,14 @@ public class MemoryExtractor {
         }
         BooleanSupplier currentCheck = stillCurrent == null ? () -> true : stillCurrent;
         MDC.put("userScope", UserScope.forUser(userId));
+        MemoryExtractionAudit.Span span = audit == null ? null : audit.begin();
+        // [0]=verdict（模型判定计数） [1]=reason（跳过原因）——用数组是为了能在下面的 lambda 里赋值
+        String[] trail = new String[]{null, null};
+        int windowTurns = 0;
+        int windowChars = 0;
         try {
             if (!currentCheck.getAsBoolean()) {
+                trail[1] = "STALE";
                 return true;
             }
             List<ContextTurn> recent = conversationMemoryService == null
@@ -191,13 +204,17 @@ public class MemoryExtractor {
                 recent = contextStore.getRecent(userId, recentTurns);
             }
             if (recent.isEmpty()) {
+                trail[1] = "WINDOW_EMPTY";
                 return true;
             }
+            windowTurns = recent.size();
+            windowChars = charsOf(recent);
             // 【2026-09-14】触发门槛：纯寒暄/应答的窗口不值得花一次（带思考的）LLM 调用。
             // 实测日志里大量 completionTokens=40（模型返回全空）就是这种空跑。跳过不是"漏记"——提取窗口是最近
             // N 轮，用户下一句有实质内容时会把这些短句一起带进去。
             if (!worthExtracting(recent)) {
                 log.info("记忆提取跳过：窗口内没有值得记的内容 user={} turns={}", userId, recent.size());
+                trail[1] = "PRECHECK";
                 return true;
             }
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
@@ -206,17 +223,20 @@ public class MemoryExtractor {
             List<ContextTurn> promptRecent = recent;
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
                     () -> chatModel.chat(buildPrompt(promptRecent, existing, cores))));
+            trail[0] = verdictOf(result);
             log.info("记忆提取完成 user={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
                     result.episodes().size(), result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
                     result.conflicts().size(), result.completedWork().size(), result.duplicates().size());
             if (!currentCheck.getAsBoolean()) {
                 log.info("记忆提取结果已过期，放弃写回 user={}", userId);
+                trail[1] = "STALE";
                 return true;
             }
             List<ContextTurn> extractionRecent = recent;
             mutationLock.runExclusive(userId, () -> {
                 if (!currentCheck.getAsBoolean()) {
                     log.info("记忆提取结果已过期，放弃写回 user={}", userId);
+                    trail[1] = "STALE";
                     return;
                 }
                 apply(userId, result, extractionRecent);
@@ -224,10 +244,35 @@ public class MemoryExtractor {
             return true;
         } catch (Exception e) {
             log.warn("记忆提取失败 user={}", userId, e);
+            trail[1] = "FAILED";
             return false;
         } finally {
+            if (audit != null) {
+                audit.finish(userId, MemoryExtractionRun.TRIGGER_AUTO, span, windowTurns, windowChars,
+                        trail[0], null, trail[1]);
+            }
             MDC.remove("userScope");
         }
+    }
+
+    /** 审计用：这一趟模型判了多少条 */
+    private String verdictOf(ExtractionResult result) {
+        if (result == null) {
+            return null;
+        }
+        return "core=" + result.coreCandidates().size() + " work=" + result.newWork().size()
+                + " episode=" + result.episodes().size() + " updates=" + result.coreUpdates().size()
+                + " completed=" + result.completedWork().size() + " duplicates=" + result.duplicates().size();
+    }
+
+    private int charsOf(List<ContextTurn> turns) {
+        int chars = 0;
+        for (ContextTurn turn : turns) {
+            if (turn != null && turn.text() != null) {
+                chars += turn.text().length();
+            }
+        }
+        return chars;
     }
 
     public record NewWork(String content, int priority, String validUntil, List<String> sourceMessageIds,

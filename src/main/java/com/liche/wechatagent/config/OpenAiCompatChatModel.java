@@ -33,6 +33,13 @@ public class OpenAiCompatChatModel implements ChatModel {
     private final LlmScenarioSettings scenarioSettings;
     /** 指标采集，可为 null（单元测试直接构造时不需要） */
     private final RuntimeMetrics metrics;
+    /** 用量接收端（记账/审计/熔断）；Spring 注入，单测直接构造时为空 */
+    private List<LlmUsageSink> usageSinks = List.of();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setUsageSinks(List<LlmUsageSink> usageSinks) {
+        this.usageSinks = usageSinks == null ? List.of() : usageSinks;
+    }
 
     public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature, int timeoutSeconds) {
         this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS, null);
@@ -103,6 +110,7 @@ public class OpenAiCompatChatModel implements ChatModel {
                     usage.reasoning());
         }
         if (ok) {
+            publishUsage(usage);
             log.info("LLM 调用 scenario={} ms={} temperature={} maxTokens={} promptTokens={} "
                             + "completionTokens={} reasoningTokens={}",
                     scenario.label(), millis, effectiveTemperature, maxTokens,
@@ -113,8 +121,8 @@ public class OpenAiCompatChatModel implements ChatModel {
     }
 
     /** usage 里的 token 数：reasoning 已经含在 completion 里，单独记只是为了看清"思考花了多少" */
-    private record Usage(int prompt, int completion, int reasoning) {
-        private static final Usage EMPTY = new Usage(0, 0, 0);
+    private record Usage(int prompt, int completion, int reasoning, int cached) {
+        private static final Usage EMPTY = new Usage(0, 0, 0, 0);
     }
 
     private Usage usageOf(JsonNode root) {
@@ -122,9 +130,38 @@ public class OpenAiCompatChatModel implements ChatModel {
         if (!usage.isObject() || usage.isEmpty()) {
             return Usage.EMPTY;
         }
+        // 缓存命中：标准字段优先、厂商字段回退（与流式模型同一套规则）
+        int cached = usage.path("prompt_tokens_details").path("cached_tokens").asInt(-1);
+        if (cached < 0) {
+            cached = usage.path("prompt_cache_hit_tokens").asInt(0);
+        }
         return new Usage(usage.path("prompt_tokens").asInt(0),
                 usage.path("completion_tokens").asInt(0),
-                usage.path("completion_tokens_details").path("reasoning_tokens").asInt(0));
+                usage.path("completion_tokens_details").path("reasoning_tokens").asInt(0),
+                Math.max(0, cached));
+    }
+
+    /**
+     * 把这一跳的用量广播给接收端（记账、熔断、审计）。
+     *
+     * <p>**2026-09-17 补**：原先只有流式模型会广播，非流式这条（提取/反思/提醒解析/排程解析/归档）
+     * 的用量**根本没进账本**——所以"今天花了多少"一直少算这几类。现在两边一致。
+     * 字段名映射只在这里做，谁拿它做什么由 {@link LlmUsageSink} 的实现决定。
+     */
+    private void publishUsage(Usage usage) {
+        if (usageSinks.isEmpty() || usage == null) {
+            return;
+        }
+        LlmUsage payload = new LlmUsage(Math.max(0, usage.prompt()), Math.max(0, usage.completion()),
+                Math.max(0, usage.reasoning()), Math.max(0, usage.cached()));
+        for (LlmUsageSink sink : usageSinks) {
+            try {
+                sink.accept(payload);
+            } catch (RuntimeException exception) {
+                // 记账失败不能把模型调用带崩（约定见 LlmUsageSink）
+                log.warn("用量接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
     }
 
     private ChatResponse parseResponse(JsonNode root) {

@@ -47,6 +47,7 @@ public class AdminPanelController {
         tabs.add(core("scheduled", "定时任务"));
         tabs.add(examTab());
         tabs.add(selfTab());
+        tabs.add(memoryTab());
         tabs.add(core("users", "用户与记忆"));
         tabs.add(core("logs", "日志"));
         Map<String, Object> result = new LinkedHashMap<>();
@@ -183,9 +184,39 @@ public class AdminPanelController {
         return section;
     }
 
-    /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */
-    private Map<String, Object> examTab() {
+    /**
+     * 「记忆」页签（2026-09-17）：把"到底提没提取成功"从猜变成可查。
+     *
+     * <p>只读——改记忆一律走工具/对话，写入路径共用同一道质量闸（见 docs/memory-hybrid-plan.md）。
+     */
+    private Map<String, Object> memoryTab() {
         Map<String, Object> tab = new LinkedHashMap<>();
+        tab.put("key", "memory");
+        tab.put("label", "记忆");
+        tab.put("kind", "descriptor");
+        tab.put("sections", List.of(
+                section("info", "提取账（今天）", "/api/admin/memory/overview", null),
+                table("提取记录（每次为什么写 / 为什么空）", "/api/admin/memory/runs?limit=50", List.of(
+                        column("time", "时间", false),
+                        column("trigger", "触发", false),
+                        column("window", "窗口", false),
+                        column("verdict", "模型判定", true),
+                        column("reason", "为什么空", false),
+                        column("tokens", "输入/输出", false),
+                        column("cost", "花费", false),
+                        column("duration", "用时", false)), List.of()),
+                table("最近写入的记忆（留痕，可核对）", "/api/admin/memory/writes?limit=50", List.of(
+                        column("time", "时间", false),
+                        column("action", "动作", false),
+                        column("layer", "层", false),
+                        column("content", "内容（旧 → 新）", true),
+                        column("operator", "谁写的", false),
+                        column("reason", "原因", false)), List.of())));
+        return tab;
+    }
+
+    /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */
+    private Map<String, Object> examTab() {        Map<String, Object> tab = new LinkedHashMap<>();
         tab.put("key", "exam");
         tab.put("label", "考研");
         tab.put("kind", "descriptor");
