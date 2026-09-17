@@ -57,7 +57,7 @@ spring:
       org.quartz.scheduler.instanceName: WechatAgentScheduler
       org.quartz.scheduler.instanceId: AUTO
       org.quartz.jobStore.class: org.springframework.scheduling.quartz.LocalDataSourceJobStore
-      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
+      org.quartz.jobStore.driverDelegateClass: ${QUARTZ_DELEGATE:org.quartz.impl.jdbcjobstore.StdJDBCDelegate}
       org.quartz.jobStore.tablePrefix: QRTZ_
       org.quartz.jobStore.isClustered: false
       org.quartz.threadPool.threadCount: ${QUARTZ_THREAD_COUNT:4}
