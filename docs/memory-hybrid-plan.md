@@ -234,9 +234,24 @@ CREATE TABLE memory_extraction_run (
 1. **非流式调用根本没进账本**：`OpenAiCompatChatModel`（记忆提取/反思/提醒解析/排程解析/归档都走它）**没有用量接收端**，只有流式模型有 → "今天花了多少"一直少算这几类。已补 `setUsageSinks` + `publishUsage`，两边口径一致。
 2. **Hibernate 对 `BigDecimal` 的默认列类型是 `DECIMAL(38,2)`**：本地 `ddl-auto: update` 建出来的列是 `decimal(38,2)`，于是 `0.0026 元`被四舍五入成 `0.00`；更要命的是生产 `validate` 会拿它跟迁移脚本的 `DECIMAL(10,4)` 比 → **类型不一致会让容器起不来**。实体必须显式写 `precision = 10, scale = 4`（已在 `MemoryExtractionRun.costYuan` 上标注）。
 
-### 11.3 步 2 的进度
+### 11.3 步 2 已完成并上线（2026-09-17）
 
-- ✅ 已上线（只改服务器 `.env` + 重建 38.6 秒）：`LLM_MAX_TOKENS_STRUCTURED=4096 → 8192`，堵住"思考吃满 4096、正文为空"的白烧。
-- ⏳ 待做：**事务型窄跳过**（按"上一次提取之后的新轮次"判定，需要给提取加一个水位线）+ 窗口 45→180 / 150→300 + `extraction-min-interval-seconds=180`（这三个键 compose 没透传，要动仓库 compose）。
-- 小尾巴：`memory_change_log` 的 `COMPLETE` 动作在面板上还没翻中文（现在显示英文原文）。
+- ✅ `LLM_MAX_TOKENS_STRUCTURED=4096 → 8192`（服务器 `.env` + 重建）：堵住"思考吃满 4096、正文为空"的白烧。
+- ✅ **事务型窄跳过**：`MemoryExtractionScheduler` 记住"这一轮静默窗口里用户说了什么"（`burstTexts`），
+  提取时按**新消息**判定（不是按最近 20 轮整窗），命中规则就跳过、**一次模型调用都不发**。
+  回退开关 `MEMORY_EXTRACTION_PREFILTER=off`（退回旧门槛）。
+- ✅ 窗口 `45→180` / 最长 `150→300` + 新增 `extraction-min-interval-seconds=180`（四个键都进了 compose 透传）。
+- ✅ 本地端到端实测（窗口临时调成 8 秒）：
+  - 事务型消息「今天几号」→ 审计 `skip_reason=TRANSACTIONAL，tokens=0/0，cost=0`（**一次调用都没发**）
+  - 实质消息「记住：我每天早上六点起床跑步」→ 审计 `verdict=core=1`，`tokens 1111/226`，`cost 0.0020 元`
+- ✅ 生产验证：镜像 `d6e83312…`、`Started ... in 42.9s`、零 ERROR，容器 env 四个键 + `LLM_MAX_TOKENS_STRUCTURED=8192` 都在。
+- 规则表按实测收紧了两处（见 §4.3.1 末尾那两条）。
+- 小尾巴（下次带上）：`memory_change_log` 的 `COMPLETE` 动作已翻中文；仍待做的是"按触发源跳过定时任务带来的提取"。
+
+### 11.4 这一轮踩到的第三个坑：`-DskipTests` 不重编测试类
+
+给 `MemoryExtractionScheduler` 加构造参数后，本地 `mvn -DskipTests package` 过了（增量编译跳过了没改动的
+`MemoryExtractionSchedulerTest`），**CI 全新检出时 testCompile 报错、构建红**。推之前跑一次 `mvn test-compile`
+（已记进 AGENTS.md 坑 45）。
+
 
