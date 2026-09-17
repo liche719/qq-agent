@@ -243,6 +243,34 @@ services:
     # 有口令才加 --requirepass（空值时不加，避免把空口令当成"无密码"又当成"有密码"的歧义）
     command: ["sh", "-c", "exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass \"$$REDIS_PASSWORD\"}"]
 
+  postgres:
+    # 2026-09-17 加：迁 pg 的并行环境（先只建库、迁数据、冒烟；切换=把 agent 的 DB_URL 指过来）。
+    # 钉 digest（同 mysql/redis 的纪律）：pgvector 版，记忆事实层将来要用向量列。
+    image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+    container_name: wechat-agent-postgres
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      # 口令只在服务器 .env；这里只透传（同坑 36：不透传就"改了不生效"）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_USER: ${POSTGRES_USER:-wechat}
+      POSTGRES_DB: ${POSTGRES_DB:-wechat_agent}
+      TZ: Asia/Shanghai
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    # 这台机器只有 1.8G 内存，pg 按小内存调：默认 shared_buffers 会按比例吃掉不少
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "work_mem=4MB",
+              "-c", "maintenance_work_mem=64MB", "-c", "max_connections=50"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-wechat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   searxng:
     # 钉 digest 而不是 :latest —— 线上版本必须可复现，不能让上游的一次回归在下次重建时静默生效。
     # 换版本的正确做法：`docker pull searxng/searxng:latest` 后
@@ -270,3 +298,4 @@ volumes:
   mysql-data:
   redis-data:
   searxng-data:
+  postgres-data:
