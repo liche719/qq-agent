@@ -187,7 +187,8 @@ public class AdminPanelController {
     /**
      * 「记忆」页签（2026-09-17）：把"到底提没提取成功"从猜变成可查。
      *
-     * <p>只读——改记忆一律走工具/对话，写入路径共用同一道质量闸（见 docs/memory-hybrid-plan.md）。
+     * <p>除了「立刻提取一次」这个动作（2026-09-18 加，走调度器同一条路），其余都是只读——
+     * 改记忆一律走工具/对话，写入路径共用同一道质量闸（见 docs/memory-hybrid-plan.md）。
      */
     private Map<String, Object> memoryTab() {
         Map<String, Object> tab = new LinkedHashMap<>();
@@ -195,7 +196,15 @@ public class AdminPanelController {
         tab.put("label", "记忆");
         tab.put("kind", "descriptor");
         tab.put("sections", List.of(
+                memoryActions(),
                 section("info", "提取账（今天）", "/api/admin/memory/overview", null),
+                table("事实卡片（会变的信息，按「这件事」聚合）", "/api/admin/memory/facts?limit=80", List.of(
+                        column("subject", "这件事", false),
+                        column("values", "当前值（括号里是图片原值）", true),
+                        column("sources", "来源", false),
+                        column("count", "几条", false),
+                        column("vector", "向量", false),
+                        column("updated", "更新时间", false)), List.of()),
                 table("提取记录（每次为什么写 / 为什么空）", "/api/admin/memory/runs?limit=50", List.of(
                         column("time", "时间", false),
                         column("trigger", "触发", false),
@@ -205,14 +214,6 @@ public class AdminPanelController {
                         column("tokens", "输入/输出", false),
                         column("cost", "花费", false),
                         column("duration", "用时", false)), List.of()),
-                table("事实层（会变的信息：课表/教室/时间…，一条一句）", "/api/admin/memory/facts?limit=80", List.of(
-                        column("subject", "这件事", false),
-                        column("predicate", "属性", false),
-                        column("object", "当前值", true),
-                        column("source", "来源", false),
-                        column("status", "状态", false),
-                        column("vector", "向量", false),
-                        column("updated", "更新时间", false)), List.of()),
                 table("最近写入的记忆（留痕，可核对）", "/api/admin/memory/writes?limit=50", List.of(
                         column("time", "时间", false),
                         column("action", "动作", false),
@@ -221,6 +222,17 @@ public class AdminPanelController {
                         column("operator", "谁写的", false),
                         column("reason", "原因", false)), List.of())));
         return tab;
+    }
+
+    /** 「记忆」页的操作：让用户在面板上主动整理一次（其余仍是只读） */
+    private Map<String, Object> memoryActions() {
+        Map<String, Object> section = new LinkedHashMap<>();
+        section.put("kind", "actions");
+        section.put("title", "手动整理");
+        section.put("actions", List.of(
+                action("立刻提取一次", "/api/admin/memory/extract",
+                        "现在整理一次记忆？会花一次模型调用（约 0.02 元），10~40 秒跑完。", null)));
+        return section;
     }
 
     /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */

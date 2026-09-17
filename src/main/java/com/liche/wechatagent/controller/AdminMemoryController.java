@@ -5,11 +5,11 @@ import com.liche.wechatagent.memory.MemoryChangeLog;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.MemoryExtractionRun;
 import com.liche.wechatagent.memory.MemoryExtractionRunRepository;
-import com.liche.wechatagent.memory.MemoryFact;
-import com.liche.wechatagent.memory.MemoryFactRepository;
+import com.liche.wechatagent.memory.MemoryExtractionScheduler;
 import com.liche.wechatagent.memory.MemoryFactService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -29,7 +29,8 @@ import java.util.Map;
  * <p>回答两个以前只能靠翻日志猜的问题：**① 提取到底跑没跑成功、为什么什么都没写**（{@code memory_extraction_run} 审计），
  * **② 最近到底写了哪些记忆**（{@code memory_change_log} 留痕）。
  *
- * <p>只读：编辑记忆一律走工具/对话（见 docs/memory-hybrid-plan.md，写入路径要共用同一道质量闸）。
+ * <p>2026-09-18 加了「立刻提取一次」（`POST /extract`，走调度器同一条路）与按 subject 聚合的**事实卡片**。
+ * 其余仍然只读：编辑记忆一律走工具/对话（见 docs/memory-hybrid-plan.md，写入路径要共用同一道质量闸）。
  */
 @RestController
 @RequestMapping("/api/admin/memory")
@@ -39,19 +40,19 @@ public class AdminMemoryController {
 
     private final MemoryExtractionRunRepository runs;
     private final MemoryChangeLogRepository changeLogs;
-    private final MemoryFactRepository facts;
     private final MemoryFactService factService;
+    private final MemoryExtractionScheduler extractionScheduler;
     private final AlertProperties alertProperties;
 
     public AdminMemoryController(MemoryExtractionRunRepository runs,
                                  MemoryChangeLogRepository changeLogs,
-                                 MemoryFactRepository facts,
                                  MemoryFactService factService,
+                                 MemoryExtractionScheduler extractionScheduler,
                                  AlertProperties alertProperties) {
         this.runs = runs;
         this.changeLogs = changeLogs;
-        this.facts = facts;
         this.factService = factService;
+        this.extractionScheduler = extractionScheduler;
         this.alertProperties = alertProperties;
     }
 
@@ -145,31 +146,42 @@ public class AdminMemoryController {
     // ---------------------------------------------------------------- 内部
 
     /**
-     * 事实层（v2，2026-09-18）：会变的信息一条一句地躺在这里，取代关系用状态列表示。
-     * 基线（DOC=从图片/文件看出来的）与补丁（USER=用户说的）分开显示——"图上写 303、他后来补充 305"要看得见。
+     * 事实卡片（v2，2026-09-18）：**按"这件事"聚合**成一行，一眼看出它现在以为的课表/安排是什么。
+     * 同一个属性有图片基线又有用户补丁时，行里会写成 `教室 506（图上写的是 303）`。
      */
     @GetMapping("/facts")
     public Map<String, Object> facts(@RequestParam(defaultValue = "80") int limit) {
         String userId = ownerUserId();
         List<Map<String, Object>> rows = new ArrayList<>();
         if (!userId.isBlank()) {
-            java.util.Set<Long> embedded = factService.embeddedIds(userId);
-            for (MemoryFact fact : facts.findByUserIdOrderByUpdatedAtDesc(userId,
-                    PageRequest.of(0, Math.max(1, Math.min(200, limit))))) {
+            for (MemoryFactService.FactCard card : factService.cards(userId, Math.max(1, Math.min(200, limit)))) {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("subject", clip(fact.getSubject(), 40));
-                item.put("predicate", fact.getPredicate() == null ? "-" : fact.getPredicate());
-                item.put("object", clip(fact.getObject(), 80));
-                item.put("source", source(fact.getSource()));
-                item.put("status", status(fact.getStatus()));
-                item.put("vector", embedded.contains(fact.getId()) ? "有" : "无");
-                item.put("updated", fact.getUpdatedAt() == null ? "-" : fact.getUpdatedAt().format(STAMP));
+                item.put("subject", clip(card.subject(), 40));
+                item.put("values", clip(card.valuesText(), 200));
+                item.put("sources", card.sourcesText());
+                item.put("count", card.factCount() + " 条");
+                item.put("vector", card.hasVector() ? "有" : "无");
+                item.put("updated", card.updatedAt() == null ? "-" : card.updatedAt().format(STAMP));
                 rows.add(item);
             }
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("rows", rows);
         return result;
+    }
+
+    /** 面板按钮：立刻整理一次记忆（不等"满 15 条"或"拖过 6 小时"） */
+    @PostMapping("/extract")
+    public Map<String, Object> extractNow() {
+        String userId = ownerUserId();
+        if (userId.isBlank()) {
+            return Map.of("accepted", false, "message", "没配「归属人 openid」，不知道该整理谁的记忆。");
+        }
+        boolean queued = extractionScheduler.runNow(userId);
+        if (!queued) {
+            return Map.of("accepted", false, "message", "没能排队：要么这个用户的记忆被关了，要么上一次提取还在跑。");
+        }
+        return Map.of("message", "已排队，通常 10~40 秒跑完（带思考）。结果会出现在下面的「提取记录」和「事实卡片」里。");
     }
 
     /** 缺向量的事实条数（用户是先有事实、后填的 api-key，所以这个数要能看见并会自己回落到 0） */

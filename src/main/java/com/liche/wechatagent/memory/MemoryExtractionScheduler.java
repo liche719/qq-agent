@@ -158,6 +158,28 @@ public class MemoryExtractionScheduler {
     }
 
     /**
+     * 面板「立刻提取一次」：**不看轮次/时间**，直接排一次（用户在面板上明确要求现在整理）。
+     * 走的还是同一条路（合并窗口 → 最小间隔 → 失败重试 → 跑完清计数），所以不会跟自动触发打架。
+     *
+     * @return false = 记忆被关掉了、或这一趟已经在跑（调用方照实回话）
+     */
+    public boolean runNow(String userId) {
+        if (userId == null || userId.isBlank() || !userService.isMemoryEnabled(userId)) {
+            return false;
+        }
+        if (runningUsers.contains(userId)) {
+            return false;
+        }
+        long generation = generationSequence.incrementAndGet();
+        generations.put(userId, generation);
+        cancelFuture(userId);
+        // 只等 1 秒：面板上刚点完就去下面「提取记录」看，别让人以为没反应
+        scheduleAttempt(userId, generation, 0, 1000L, System.currentTimeMillis());
+        log.info("记忆提取已排队 user={} 原因=MANUAL", userId);
+        return true;
+    }
+
+    /**
      * 一轮对话结束后调用：先把"这一轮说了什么"记下来并给 Redis 计数 +1，再看够不够触发。
      *
      * @param userText 这一轮用户说的话（可为空）；同一个窗口里多次调用会累积起来，供"事务型窄跳过"判定

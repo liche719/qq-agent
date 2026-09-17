@@ -206,7 +206,9 @@ public class MemoryFactService {
     }
 
     private boolean sameObject(String left, String right) {
-        return (left == null ? "" : left.trim()).equalsIgnoreCase(right == null ? "" : right.trim());
+        String a = left == null ? "" : left.trim();
+        String b = right == null ? "" : right.trim();
+        return a.equalsIgnoreCase(b);
     }
 
     /** 这条新事实该挂到哪张卡上：优先 SUPERSEDES（同一属性被改写），其次 SUPPLEMENT（补充同一件事） */
@@ -434,6 +436,106 @@ public class MemoryFactService {
     /** 已经有向量的事实 id（面板显示"向量 有/无"用；embedding 列没映射进实体，只能这么问） */
     public Set<Long> embeddedIds(String userId) {
         return vectorStore.idsWithEmbedding(userId);
+    }
+
+    /**
+     * 一张"卡片"= 一件事（一个 subject）的当前值。面板和召回工具共用同一份渲染，避免两处口径不一样。
+     *
+     * @param valuesText  形如 `教室 506（图上写的是 303）；教师 王老师`
+     * @param sourcesText 形如 `用户说的` / `图片基线 + 用户补丁`
+     */
+    public record FactCard(String subject, String valuesText, String sourcesText, LocalDateTime updatedAt,
+                           boolean hasVector, int factCount) {
+    }
+
+    /** 按 subject 聚合出卡片（面板「记忆」页用：一眼看出它以为的课表/安排是什么） */
+    public List<FactCard> cards(String userId, int limit) {
+        List<MemoryFact> facts = activeFacts(userId, 500);
+        if (facts.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> embedded = embeddedIds(userId);
+        Map<String, List<MemoryFact>> bySubject = new LinkedHashMap<>();
+        for (MemoryFact fact : facts) {
+            bySubject.computeIfAbsent(fact.getSubject() == null ? "（未命名）" : fact.getSubject(),
+                    key -> new ArrayList<>()).add(fact);
+        }
+        List<FactCard> cards = new ArrayList<>();
+        for (Map.Entry<String, List<MemoryFact>> entry : bySubject.entrySet()) {
+            if (cards.size() >= limit) {
+                break;
+            }
+            List<MemoryFact> group = entry.getValue();
+            LocalDateTime updated = null;
+            boolean vector = false;
+            boolean doc = false;
+            boolean user = false;
+            for (MemoryFact fact : group) {
+                if (fact.getUpdatedAt() != null && (updated == null || fact.getUpdatedAt().isAfter(updated))) {
+                    updated = fact.getUpdatedAt();
+                }
+                vector = vector || embedded.contains(fact.getId());
+                doc = doc || MemoryFact.SOURCE_DOC.equals(fact.getSource());
+                user = user || !MemoryFact.SOURCE_DOC.equals(fact.getSource());
+            }
+            String sources = doc && user ? "图片基线 + 用户补丁" : doc ? "图片/文件（基线）" : "用户说的（补丁）";
+            cards.add(new FactCard(entry.getKey(), renderSubjectValues(group), sources, updated, vector, group.size()));
+        }
+        return cards;
+    }
+
+    /** 把一组事实渲染成"属性 值"的一行（召回工具与面板共用） */
+    public String renderSubjectValues(List<MemoryFact> facts) {
+        // 同一个属性槽可能有多条：用户说的（USER/AUTO）压过图上看到的（DOC），DOC 原值放括号里
+        Map<String, MemoryFact> primary = new LinkedHashMap<>();
+        Map<String, MemoryFact> baseline = new LinkedHashMap<>();
+        for (MemoryFact fact : facts) {
+            String key = (fact.getPredicate() == null || fact.getPredicate().isBlank() ? "备注" : fact.getPredicate())
+                    .toLowerCase();
+            MemoryFact current = primary.get(key);
+            if (MemoryFact.SOURCE_DOC.equals(fact.getSource())) {
+                if (current == null) {
+                    primary.put(key, fact);
+                } else if (!sameObject(current.getObject(), fact.getObject())) {
+                    baseline.put(key, fact);
+                }
+                continue;
+            }
+            if (current == null || MemoryFact.SOURCE_DOC.equals(current.getSource())) {
+                primary.put(key, fact);
+            }
+        }
+        StringBuilder line = new StringBuilder();
+        for (Map.Entry<String, MemoryFact> entry : primary.entrySet()) {
+            if (line.length() > 0) {
+                line.append("；");
+            }
+            line.append(entry.getKey()).append(' ').append(entry.getValue().getObject());
+            MemoryFact base = baseline.get(entry.getKey());
+            if (base != null) {
+                line.append("（图上写的是 ").append(base.getObject()).append("）");
+            }
+        }
+        return line.length() == 0 ? "（没有有效值）" : line.toString();
+    }
+
+    /** 按 subject 聚合成多行文本（召回工具用） */
+    public String renderCards(List<MemoryFact> facts, int charLimit) {
+        Map<String, List<MemoryFact>> bySubject = new LinkedHashMap<>();
+        for (MemoryFact fact : facts) {
+            bySubject.computeIfAbsent(fact.getSubject() == null ? "（未命名）" : fact.getSubject(),
+                    key -> new ArrayList<>()).add(fact);
+        }
+        StringBuilder text = new StringBuilder();
+        for (Map.Entry<String, List<MemoryFact>> entry : bySubject.entrySet()) {
+            text.append("· ").append(entry.getKey()).append('：')
+                    .append(renderSubjectValues(entry.getValue())).append('\n');
+            if (text.length() > charLimit) {
+                text.append("…（还有没列完的，需要更具体的可以再查）\n");
+                break;
+            }
+        }
+        return text.toString().trim();
     }
 
     private MemoryFact findOwned(String userId, Long id) {
