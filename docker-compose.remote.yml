@@ -70,9 +70,9 @@ services:
       # 注意：这里是**非空默认值**，它会整体覆盖代码里的默认集合——加新场景必须两处一起改
       # ⚠️ 这个非空默认值会**整体覆盖**代码里的默认集合（坑 61）：加了新场景必须同时改这里
       LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reflect,reminder_parse,schedule_parse,archive}
-      # 思考档位（2026-09-18 用户要求：对话 low、提取 high、提醒解析 low）。格式「场景=档位」逗号分隔；
-      # 没列的场景不传该字段。实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s。
-      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,dialog_deep=low,extract=high,reminder_parse=low}
+      # 思考档位（2026-09-18 用户要求：只有记忆提取 high，其余都 low）。格式「场景=档位」逗号分隔；
+      # 没列的场景不传该字段、用上游默认。实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s。
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,dialog_deep=low,extract=high,reminder_parse=low,schedule_parse=low,reflect=low}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，
       # 4096 会把正文挤没 → JSON 解析失败、这一趟白跑（上限不计费，放宽没有额外成本）
@@ -196,6 +196,12 @@ services:
       MEMORY_EXTRACTION_RECENT_TURNS: ${MEMORY_EXTRACTION_RECENT_TURNS:-40}
       MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:-180}
       # 前置过滤已删除（2026-09-18 用户要求）：该不该记全交给模型判断，不再用正则跳过整窗
+      # 归档（把没期限的活跃中期记忆压成摘要）：2026-09-18 用户认为不再需要。
+      # ⚠️ 这个键原来**没透传**（坑 36）：想在 .env 里关掉归档，必须先有这一行。
+      # 关掉的方式 = 阈值设得很大（例如 100000），这样 compressIfNeeded 直接 return，不动代码。
+      MEMORY_WORK_ARCHIVE_THRESHOLD: ${MEMORY_WORK_ARCHIVE_THRESHOLD:-20}
+      MEMORY_WORK_ARCHIVE_BATCH: ${MEMORY_WORK_ARCHIVE_BATCH:-10}
+      MEMORY_ARCHIVE_SWEEP_INTERVAL_MS: ${MEMORY_ARCHIVE_SWEEP_INTERVAL_MS:-600000}
       # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
       MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}

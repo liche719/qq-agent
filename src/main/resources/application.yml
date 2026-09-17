@@ -91,11 +91,10 @@ llm:
   # （extract,reflect,reminder_parse,schedule_parse,archive）
   zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse,archive}
   # 每个场景的**思考档位**（请求体的 reasoning_effort，取值 low/medium/high；没配的场景不传、用上游默认）。
-  # 2026-09-18 用户要求：对话 low、提取 high、提醒解析也 low。实测（同一道题各 4 次采样）：
-  #   low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。
-  # 提醒解析走 low 是因为"用户在等确认回复"；但**不能关光思考**——当年 `thinking:disabled` 实测让
-  # "每天早七点半提醒我看英语"3/3 解析失败，low 是保留思考但缩短，和那个开关不是一回事。
-  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=high,reminder_parse=low}
+  # 2026-09-18 用户要求：对话 / 提醒解析 / 定时任务解析 / 反思 都 low，只有**记忆提取 high**（质量优先、后台跑）。
+  # 实测：low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。
+  # 注意 low 只是"少想一点"，不是硬上限（"每三天提醒我浇花"这种要算日期的，low 下仍会想 3300 token）。
+  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=high,reminder_parse=low,schedule_parse=low,reflect=low}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。
