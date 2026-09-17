@@ -346,3 +346,33 @@ LLM 流式调用 scenario=dialog_fast ms=677 temperature=0.7 thinking=off maxTok
 真正影响的是之后几轮，用户感觉不到）。
 
 参数都在 `application.yml` 的 `memory.extraction-*` 下，想更省就调大 window，想更快看到记忆就调小。
+## 16. 思考档位 reasoning_effort（2026-09-18，按用户要求恢复"按场景分档"）
+
+用户要求：**对话 low、提取 high**。这次用的不是当年那个 `thinking:{"type":"disabled"}` 开关，而是
+上游认的**档位参数** `reasoning_effort`（low / medium / high；不传 = 上游默认）。
+
+实测（同一道"把这句话拆成事实条目"的题，各 4 次采样，deepseek-flash）：
+
+| 档位 | 思考 token 均值 | completion 均值 | 耗时均值 |
+|---|---|---|---|
+| 不传（默认） | 3004 | 3077 | 13 988 ms |
+| **low** | **984** | 1059 | **4 784 ms** |
+| **high** | 2368 | 2461 | 11 165 ms |
+
+→ low 的思考只有默认的 **1/3**、耗时的 **1/3**；high 与默认接近（默认略高于 high）。
+（第一次只采 1 次时 low 反而比 high 高，是波动——**单样本会骗人，这种参数必须多采几次**。）
+
+配置（两处默认值一致，compose 也透传）：
+
+```
+LLM_REASONING_EFFORT=dialog=low,dialog_deep=low,extract=high
+```
+
+格式「场景=档位」逗号分隔；**没列的场景不传这个字段**（保持上游默认，比如反射/提醒解析这些精度敏感的）。
+认不出的档位会被忽略（宁可不传，也不传一个上游不认的值）。
+
+实现：`LlmScenarioSettings.reasoningEffortFor(scenario)` → `OpenAiRequestFactory.buildPayload(..., reasoningEffort)`
+→ 两个自研 ChatModel（非流式 / 流式）在调用时按当前场景取值。日志里能看到
+`reasoningEffort=low` / `=high` / `=(默认)`，方便核对是不是真的传下去了。
+
+上线后实测：对话往返 **3.8 秒**（思考 39 token），提取那次 `reasoningEffort=high`。

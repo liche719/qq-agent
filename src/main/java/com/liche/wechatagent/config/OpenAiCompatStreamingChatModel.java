@@ -88,6 +88,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
+        String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);
         int reasoningChars = 0;
         // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
         // 所以对话这几档的 token 也能照实记账，面板「按场景」表格不再恒为 0。取最后一个非空 usage。
@@ -100,7 +101,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(
                             OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true,
-                                    maxTokens).toString(),
+                                    maxTokens, reasoningEffort).toString(),
                             MediaType.parse("application/json; charset=utf-8")))
                     .build();
             try (Response response = client.newCall(req).execute()) {
@@ -118,7 +119,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     }
                     log.warn("LLM 流式请求被拒 HTTP {} body={}", response.code(), detail);
                     record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0,
-                            tokens);
+                            tokens, reasoningEffort);
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
                     return;
                 }
@@ -218,10 +219,11 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                         .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
                 publishUsage(cachedTokens, tokens);
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
-                        tokens);
+                        tokens, reasoningEffort);
             }
         } catch (Exception e) {
-            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0, tokens);
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0, tokens,
+                    reasoningEffort);
             handler.onError(e);
         }
     }
@@ -256,16 +258,17 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
                         double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars,
-                        int[] tokens) {
+                        int[] tokens, String reasoningEffort) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
             // usage 直接来自流式响应（见 chat 里的实测说明）；拿不到时是 0，日志里另有字符数兜底
             metrics.recordLlm(true, ok, millis, error, scenario.label(), tokens[0], tokens[1], tokens[2]);
         }
         if (ok) {
-            log.info("LLM 流式调用 scenario={} ms={} temperature={} maxTokens={} 正文={}字 思考={}字"
-                            + " promptTokens={} completionTokens={} reasoningTokens={}",
+            log.info("LLM 流式调用 scenario={} ms={} temperature={} maxTokens={} reasoningEffort={}"
+                            + " 正文={}字 思考={}字 promptTokens={} completionTokens={} reasoningTokens={}",
                     scenario.label(), millis, effectiveTemperature, maxTokens,
+                    reasoningEffort == null ? "(默认)" : reasoningEffort,
                     contentChars, reasoningChars, tokens[0], tokens[1], tokens[2]);
         } else {
             log.warn("LLM 流式调用失败 scenario={} ms={} error={}", scenario.label(), millis, error);

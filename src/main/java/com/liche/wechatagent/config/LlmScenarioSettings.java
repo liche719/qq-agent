@@ -26,20 +26,60 @@ public class LlmScenarioSettings {
     private final int reflectMaxTokens;
     private final int dialogMaxTokens;
     private final int dialogDeepMaxTokens;
+    /**
+     * 每个场景的"思考档位"（请求体的 {@code reasoning_effort}）：2026-09-18 用户要求「对话 low、提取 high」。
+     * 实测（同一道题各 4 次采样）：low 思考 984 token / 4.8s，不传 3004 / 14.0s，high 2368 / 11.2s——差别是真的。
+     * 没配的场景**不传**这个字段（保持上游默认）。配置形如 {@code dialog=low,extract=high}。
+     */
+    private final java.util.Map<LlmScenario, String> reasoningEffort;
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
                                int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens) {
-        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, 16384);
+        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, 16384, null);
     }
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
                                int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
                                int reflectMaxTokens) {
+        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, reflectMaxTokens,
+                null);
+    }
+
+    public LlmScenarioSettings(String zeroTemperatureScenarios,
+                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
+                               int reflectMaxTokens, String reasoningEffortScenarios) {
         this.structuredMaxTokens = Math.max(0, structuredMaxTokens);
         this.reflectMaxTokens = Math.max(0, reflectMaxTokens);
         this.dialogMaxTokens = Math.max(0, dialogMaxTokens);
         this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
         this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_ZERO_TEMPERATURE);
+        this.reasoningEffort = parseReasoningEffort(reasoningEffortScenarios);
+    }
+
+    /** 这个场景的思考档位；null = 不传（用上游默认） */
+    public String reasoningEffortFor(LlmScenario scenario) {
+        return reasoningEffort.get(scenario);
+    }
+
+    /** 解析 {@code dialog=low,extract=high}；认不出的档位忽略（宁可不传，也不传一个上游不认的值） */
+    private static java.util.Map<LlmScenario, String> parseReasoningEffort(String csv) {
+        java.util.Map<LlmScenario, String> parsed = new java.util.EnumMap<>(LlmScenario.class);
+        if (csv == null || csv.isBlank()) {
+            return parsed;
+        }
+        for (String part : csv.split(",")) {
+            String item = part.trim();
+            int eq = item.indexOf('=');
+            if (eq <= 0 || eq == item.length() - 1) {
+                continue;
+            }
+            String effort = item.substring(eq + 1).trim().toLowerCase();
+            if (!"low".equals(effort) && !"medium".equals(effort) && !"high".equals(effort)) {
+                continue;
+            }
+            parsed.put(LlmScenario.of(item.substring(0, eq).trim()), effort);
+        }
+        return parsed;
     }
 
     /**

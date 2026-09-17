@@ -79,20 +79,22 @@ public class OpenAiCompatChatModel implements ChatModel {
         LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
         double effectiveTemperature = temperatureFor(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
+        String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);
         try {
             String resp = restClient.post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false,
-                            maxTokens).toString())
+                            maxTokens, reasoningEffort).toString())
                     .retrieve()
                     .body(String.class);
             JsonNode root = objectMapper.readTree(resp);
             ChatResponse response = parseResponse(root);
-            record(true, started, null, scenario, effectiveTemperature, maxTokens, usageOf(root));
+            record(true, started, null, scenario, effectiveTemperature, maxTokens, usageOf(root), reasoningEffort);
             return response;
         } catch (Exception e) {
-            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, Usage.EMPTY);
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, Usage.EMPTY,
+                    reasoningEffort);
             throw new RuntimeException("调用 LLM 接口失败: " + e.getMessage(), e);
         }
     }
@@ -103,7 +105,7 @@ public class OpenAiCompatChatModel implements ChatModel {
     }
 
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
-                        double effectiveTemperature, int maxTokens, Usage usage) {
+                        double effectiveTemperature, int maxTokens, Usage usage, String reasoningEffort) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
             metrics.recordLlm(false, ok, millis, error, scenario.label(), usage.prompt(), usage.completion(),
@@ -111,9 +113,10 @@ public class OpenAiCompatChatModel implements ChatModel {
         }
         if (ok) {
             publishUsage(usage);
-            log.info("LLM 调用 scenario={} ms={} temperature={} maxTokens={} promptTokens={} "
+            log.info("LLM 调用 scenario={} ms={} temperature={} maxTokens={} reasoningEffort={} promptTokens={} "
                             + "completionTokens={} reasoningTokens={}",
                     scenario.label(), millis, effectiveTemperature, maxTokens,
+                    reasoningEffort == null ? "(默认)" : reasoningEffort,
                     usage.prompt(), usage.completion(), usage.reasoning());
         } else {
             log.warn("LLM 调用失败 scenario={} ms={} error={}", scenario.label(), millis, error);

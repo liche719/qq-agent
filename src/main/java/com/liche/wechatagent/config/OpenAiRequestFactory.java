@@ -40,12 +40,25 @@ final class OpenAiRequestFactory {
     /** @param maxTokens 0 = 不设上限（保持上游默认） */
     static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream,
                                    int maxTokens) {
+        return buildPayload(model, temperature, request, stream, maxTokens, null);
+    }
+
+    /**
+     * @param maxTokens       0 = 不设上限（保持上游默认）
+     * @param reasoningEffort 思考档位（low/medium/high）；null 或空 = 不传，用上游默认
+     *                        （2026-09-18 加：实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s）
+     */
+    static ObjectNode buildPayload(String model, double temperature, ChatRequest request, boolean stream,
+                                   int maxTokens, String reasoningEffort) {
         ObjectNode payload = OBJECT_MAPPER.createObjectNode();
         payload.put("model", model);
         payload.put("temperature", temperature);
         payload.put("stream", stream);
         if (maxTokens > 0) {
             payload.put("max_tokens", maxTokens);
+        }
+        if (reasoningEffort != null && !reasoningEffort.isBlank()) {
+            payload.put("reasoning_effort", reasoningEffort.trim().toLowerCase());
         }
 
         ArrayNode messages = payload.putArray("messages");

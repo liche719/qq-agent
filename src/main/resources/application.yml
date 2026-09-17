@@ -90,6 +90,10 @@ llm:
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
   # （extract,reflect,reminder_parse,schedule_parse,archive）
   zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse,archive}
+  # 每个场景的**思考档位**（请求体的 reasoning_effort，取值 low/medium/high；没配的场景不传、用上游默认）。
+  # 2026-09-18 用户要求：对话 low、提取 high。实测（同一道题各 4 次采样）：
+  #   low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。对话这条最影响体感，先降它。
+  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=high}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。
