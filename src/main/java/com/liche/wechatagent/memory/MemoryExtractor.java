@@ -20,11 +20,13 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;import java.util.ArrayList;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 
 @Component
 public class MemoryExtractor {
@@ -35,6 +37,34 @@ public class MemoryExtractor {
 
     /** 窗口内用户消息至少要有这么多"实字"才值得跑一次提取（见 worthExtracting） */
     private static final int MIN_SUBSTANCE_CHARS = 5;
+
+    /**
+     * 前置过滤的两组规则（2026-09-17 定稿，回放数据见 docs/memory-hybrid-plan.md §4.3.1）。
+     *
+     * <p>{@link #MUST_KEEP} **任一命中就一定要跑**——长期身份/偏好/目标/底线，以及"修正某条已有事实"的表达。
+     * 其余五个是"事务型"小类：整窗新消息全部命中它们时跳过。
+     */
+    private static final Pattern MUST_KEEP = Pattern.compile(
+            "记住|记一下|记着|别忘了|以后|我习惯|我喜欢|我不喜欢|我是|我的|我打算|想先|备考|专硕|学硕|考研"
+                    + "|目标|计划|生日|电话|地址|过敏|室友|女朋友|男朋友|改成|纠正|说错|不是.{0,8}是"
+                    + "|不要推送|别推送|不要做|底线|原则|保证|承诺");
+    /** 课表/教室/时间（按规则 12 本来就不进记忆，改的是资料内容）。
+     *  **不要放裸「时间」**：`我想重新规划一下每天的时间` 会被误判成事务型（实测踩到）。 */
+    private static final Pattern TRANSACTIONAL_CLASSROOM = Pattern.compile(
+            "教室|课表|什么课|有课|上课|第.周|几点上|几点下|几号|星期|周几|几点|哪个教室|现在.*(时间|几点)|今天.*(几号|星期|周几)");
+    /** 元问题：问它自己干了什么 */
+    private static final Pattern TRANSACTIONAL_META = Pattern.compile(
+            "刚刚.{0,6}(记录|工具|说)|什么工具|什么功能|你想做什么|自己的想法|记录了什么|留的线索");
+    /** 提醒操作（提醒已经落 reminder_task 表，不需要再进记忆） */
+    private static final Pattern TRANSACTIONAL_REMINDER = Pattern.compile("提醒|分钟后|小时后");
+    /** 资料操作：看/发它存过的文件 */
+    private static final Pattern TRANSACTIONAL_MEDIA = Pattern.compile("文件|资料|图片|截图|发我|保存好的");
+    /** 纯噪声：只有标点、语气词、纯应答。**不要按长度一刀切**——
+     * `考公`（2 字）、`不吃了`（3 字）这种短句可能正是要记的（实测踩到）。 */
+    private static final Pattern TRANSACTIONAL_NOISE = Pattern.compile(
+            "^[\\s?？。！!~～、,，.]+$"
+                    + "|^(呜呜+|哭+|草|嗯+|哦+|啊+|哈+|呵+)$"
+                    + "|^(好|行|好的|行吧|收到|谢谢|谢了|ok|OK|Ok|不客气|没事)$");
 
     /**
      * 新核心事实与已有核心记忆的相似度超过它 → 判定为"同一个事实的新版本"，走替换（旧条目 SUPERSEDED）而不是新增。
@@ -72,6 +102,14 @@ public class MemoryExtractor {
     @Autowired(required = false)
     public void setAudit(MemoryExtractionAudit audit) {
         this.audit = audit;
+    }
+
+    /** 前置过滤档位：{@code transactional-only}（默认，事务型窄跳过）/ {@code off}（退回旧门槛） */
+    private String prefilter = "transactional-only";
+
+    @Value("${memory.extraction-prefilter:transactional-only}")
+    public void setPrefilter(String prefilter) {
+        this.prefilter = prefilter == null || prefilter.isBlank() ? "transactional-only" : prefilter.trim();
     }
 
     @Autowired
@@ -183,6 +221,14 @@ public class MemoryExtractor {
      * 但在持久化前再次核验即可避免旧会话覆盖新事实。
      */
     public boolean extract(String userId, BooleanSupplier stillCurrent) {
+        return extract(userId, List.of(), stillCurrent);
+    }
+
+    /**
+     * @param burstTexts 这一轮静默窗口里**用户说过的话**（判"事务型窗口"用，规则见
+     *                   docs/memory-hybrid-plan.md §4.3.1）；空列表时退回"整窗判定"（保守：判不了就不挡）
+     */
+    public boolean extract(String userId, List<String> burstTexts, BooleanSupplier stillCurrent) {
         if (userId == null || userId.isBlank()) {
             return true;
         }
@@ -209,12 +255,11 @@ public class MemoryExtractor {
             }
             windowTurns = recent.size();
             windowChars = charsOf(recent);
-            // 【2026-09-14】触发门槛：纯寒暄/应答的窗口不值得花一次（带思考的）LLM 调用。
-            // 实测日志里大量 completionTokens=40（模型返回全空）就是这种空跑。跳过不是"漏记"——提取窗口是最近
-            // N 轮，用户下一句有实质内容时会把这些短句一起带进去。
-            if (!worthExtracting(recent)) {
-                log.info("记忆提取跳过：窗口内没有值得记的内容 user={} turns={}", userId, recent.size());
-                trail[1] = "PRECHECK";
+            String skipped = prefilterSkip(recent, burstTexts);
+            if (skipped != null) {
+                log.info("记忆提取跳过：{} user={} turns={} burst={}", skipped, userId, recent.size(),
+                        burstTexts == null ? 0 : burstTexts.size());
+                trail[1] = skipped;
                 return true;
             }
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
@@ -716,11 +761,59 @@ public class MemoryExtractor {
     }
 
     /**
+     * 提取前的**零成本前置过滤**（2026-09-17）。
+     *
+     * <p>默认 {@code transactional-only}：**不再按"长度/数字/我"判**（那道旧门槛会漏掉「考公」这种短而重要的句子），
+     * 改成"默认就跑，只在**这一轮新消息全是事务型**时跳过"。事务型 = 问课表/教室/时间、问它存过的资料、
+     * 元问题（"刚刚记录了什么"）、设/改提醒、纯噪声（≤4 字或语气词）。
+     *
+     * <p>规则表与回放数据见 docs/memory-hybrid-plan.md §4.3.1（最近 3 天 41 个窗口里可跳过 19 个，46%）。
+     * **任一命中"长期信号"就跑**；判不了（没有新消息文本）也跑——宁可多花一分钱，不冒丢记忆的险。
+     *
+     * @return null = 正常跑；否则是要记进审计的跳过原因
+     */
+    private String prefilterSkip(List<ContextTurn> recent, List<String> burstTexts) {
+        if ("off".equalsIgnoreCase(prefilter)) {
+            // 回退开关：退回 2026-09-14 那道旧门槛
+            return worthExtracting(recent) ? null : "PRECHECK";
+        }
+        if (burstTexts == null || burstTexts.isEmpty()) {
+            return null;
+        }
+        for (String text : burstTexts) {
+            if (text != null && MUST_KEEP.matcher(text).find()) {
+                return null;
+            }
+        }
+        for (String text : burstTexts) {
+            if (!isTransactional(text)) {
+                return null;
+            }
+        }
+        return "TRANSACTIONAL";
+    }
+
+    /** 事务型消息：不值得为它花一次带思考的调用（判定宽松——拿不准就算"不是事务型"，照跑） */
+    private boolean isTransactional(String text) {
+        if (text == null || text.isBlank()) {
+            return true;
+        }
+        String trimmed = text.trim();
+        return TRANSACTIONAL_CLASSROOM.matcher(trimmed).find()
+                || TRANSACTIONAL_META.matcher(trimmed).find()
+                || TRANSACTIONAL_REMINDER.matcher(trimmed).find()
+                || TRANSACTIONAL_MEDIA.matcher(trimmed).find()
+                || TRANSACTIONAL_NOISE.matcher(trimmed).find();
+    }
+
+    /**
      * 窗口里有没有"值得记"的内容：只要有一条**用户消息**算实质内容就返回 true。
      *
      * <p>判定故意宽松（宁可多跑一次提取，也不要漏记）：去掉标点后 ≥ {@value #MIN_SUBSTANCE_CHARS} 个字、
      * 或含数字（日期/分数/时长往往就靠这个）、或含「我/咱」（第一人称陈述）。所以
      * 「好」「在吗」「嗯嗯」「谢谢」会被跳过，而「我不喝咖啡」「考试推迟了」不会。
+     *
+     * <p>**2026-09-17 起只在 {@code memory.extraction-prefilter=off} 时才用**（默认走事务型窄跳过）。
      */
     private boolean worthExtracting(List<ContextTurn> recent) {
         for (ContextTurn turn : recent) {

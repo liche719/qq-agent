@@ -276,8 +276,14 @@ memory:
   # 记忆提取的触发节奏：**静默 45 秒**才跑一次（用户连续发消息时一直往后推，最多推 150 秒），
   # 这样一场 20 条的对话只提取几次，而不是每发一条就调一次模型（2026-09-14 用户提"太耗资源"后调的；
   # 参数含义：window = 静默多久算一轮聊完，max-delay = 一直被推时最多拖多久就必须跑一次）
-  extraction-window-seconds: ${MEMORY_EXTRACTION_WINDOW_SECONDS:45}
-  extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:150}
+  extraction-window-seconds: ${MEMORY_EXTRACTION_WINDOW_SECONDS:180}
+  extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:300}
+  # 最小间隔：同一个用户两次提取至少隔这么久（高频短对话里防止"每两三分钟就跑一次"）；
+  # 触发不会丢，只是往后挪。见 docs/memory-hybrid-plan.md §4.3
+  extraction-min-interval-seconds: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:180}
+  # 提取前的前置过滤：transactional-only = 只在"这一轮新消息全是事务型"时跳过（默认）；
+  # off = 退回 2026-09-14 那道"长度/数字/我"的旧门槛（一键回退用）
+  extraction-prefilter: ${MEMORY_EXTRACTION_PREFILTER:transactional-only}
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
   # 2026-09-14 曾短暂上线过"每天一次记忆归纳（consolidation）"，实测不合格（模型把两条原文用「；」拼起来当归纳、

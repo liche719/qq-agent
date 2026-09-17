@@ -186,6 +186,7 @@ public class AdminMemoryController {
             case "ADD" -> "新增";
             case "UPDATE" -> "改写";
             case "SUPERSEDE" -> "替换（留旧行）";
+            case "COMPLETE" -> "标记完成";
             case "ARCHIVE" -> "归档";
             case "ARCHIVE_CREATE" -> "生成归档";
             case "CONFIRM_REJECT" -> "确认被拒";

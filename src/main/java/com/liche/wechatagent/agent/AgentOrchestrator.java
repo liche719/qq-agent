@@ -433,7 +433,8 @@ public class AgentOrchestrator {
                     reply, batch.messageIds(), null);
         }
         if (!Boolean.FALSE.equals(profile.getMemoryEnabled())) {
-            extractionScheduler.schedule(userId);
+            // 把"这一轮用户说了什么"一起交给调度器：提取前的"事务型窄跳过"要按新消息判定
+            extractionScheduler.schedule(userId, batch.historyContent());
         }
     }
 
