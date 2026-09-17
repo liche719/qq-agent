@@ -215,3 +215,23 @@ CREATE TABLE memory_extraction_run (
 **收益**：可见（回执 + 审计 + 页签）、可控（能改能撤）、更省（空转腰斩）、且**不牺牲"不丢记忆"**。
 **代价**：多一条写入路径（靠共用质量闸与 `confirm` 兜住）；多一张表与一个页签（描述式面板可后端解决，不动前端）。
 **最大不确定性**：事务型窄名单会不会误伤——所以第 2 步先把 `MEMORY_EXTRACTION_PREFILTER=off` 做成一键回退，并且**先离线回放**（把最近 3 天窗口跑一遍规则、列出"会被跳过的窗口"给你过目）再上线。
+
+## 11. 实现记录（边做边记，都是实测踩到的）
+
+### 11.1 步 1 已上线（2026-09-17，tag/镜像见提交 `audit what memory extraction actually did`）
+
+- 表 `memory_extraction_run`（V10）**先在生产建好再部署**（`validate` 模式），部署后 `Started ... in 42.7s`、零 ERROR。
+- 面板新增 **descriptor 页签「记忆」**（`/api/admin/panels` 里 `key=memory`）：提取账 / 提取记录 / 最近写入的记忆——**前端一行没改**。
+- 本地实测一条真实提取：`window=2轮/124字 verdict=core=1 work=1 tokens=1071/1522 cache_miss=1071 cost=0.0072元`。
+
+### 11.2 顺手挖出并修掉的两个真问题
+
+1. **非流式调用根本没进账本**：`OpenAiCompatChatModel`（记忆提取/反思/提醒解析/排程解析/归档都走它）**没有用量接收端**，只有流式模型有 → "今天花了多少"一直少算这几类。已补 `setUsageSinks` + `publishUsage`，两边口径一致。
+2. **Hibernate 对 `BigDecimal` 的默认列类型是 `DECIMAL(38,2)`**：本地 `ddl-auto: update` 建出来的列是 `decimal(38,2)`，于是 `0.0026 元`被四舍五入成 `0.00`；更要命的是生产 `validate` 会拿它跟迁移脚本的 `DECIMAL(10,4)` 比 → **类型不一致会让容器起不来**。实体必须显式写 `precision = 10, scale = 4`（已在 `MemoryExtractionRun.costYuan` 上标注）。
+
+### 11.3 步 2 的进度
+
+- ✅ 已上线（只改服务器 `.env` + 重建 38.6 秒）：`LLM_MAX_TOKENS_STRUCTURED=4096 → 8192`，堵住"思考吃满 4096、正文为空"的白烧。
+- ⏳ 待做：**事务型窄跳过**（按"上一次提取之后的新轮次"判定，需要给提取加一个水位线）+ 窗口 45→180 / 150→300 + `extraction-min-interval-seconds=180`（这三个键 compose 没透传，要动仓库 compose）。
+- 小尾巴：`memory_change_log` 的 `COMPLETE` 动作在面板上还没翻中文（现在显示英文原文）。
+
