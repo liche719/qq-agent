@@ -239,6 +239,8 @@ public class AdminMemoryController {
         return switch (raw) {
             case "WINDOW_EMPTY" -> "没有可读轮次";
             case "PRECHECK" -> "前置门槛（无实质内容）";
+            case "TRANSACTIONAL" -> "全是事务型（问课表/设提醒这类）";
+            case "PARSE_FAILED" -> "模型输出没解析出来（多半是思考把额度吃满）";
             case "STALE" -> "结果过期未写回";
             case "FAILED" -> "调用/解析失败";
             default -> raw;

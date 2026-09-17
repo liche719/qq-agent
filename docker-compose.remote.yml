@@ -71,7 +71,9 @@ services:
       # ⚠️ 这个非空默认值会**整体覆盖**代码里的默认集合（坑 61）：加了新场景必须同时改这里
       LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reflect,reminder_parse,schedule_parse,archive}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
-      LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-8192}
+      # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，
+      # 4096 会把正文挤没 → JSON 解析失败、这一趟白跑（上限不计费，放宽没有额外成本）
+      LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-16384}
       # 反思单独一档：输出只有一句话、思考很重（4096 会被思考吃满 → 整条反思作废）
       LLM_MAX_TOKENS_REFLECT: ${LLM_MAX_TOKENS_REFLECT:-16384}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
@@ -179,6 +181,7 @@ services:
       # 记忆提取的触发与窗口（2026-09-18 改成轮次驱动；见 docs/memory-vector-plan.md §15）
       # rounds = 攒够多少条机主消息提取一次；max-idle-hours = 待提取最老那条放了多久必须提取；
       # coalesce = 到点后再等几秒合并同一串消息；overlap-turns = 窗口里最老几条只作背景
+      # （轮次计数放 Redis：memory:pending:<user>，提取跑完就删；键丢了会自动回退查库）
       MEMORY_EXTRACTION_ROUNDS: ${MEMORY_EXTRACTION_ROUNDS:-15}
       MEMORY_EXTRACTION_MAX_IDLE_HOURS: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:-6}
       MEMORY_EXTRACTION_COALESCE_SECONDS: ${MEMORY_EXTRACTION_COALESCE_SECONDS:-10}

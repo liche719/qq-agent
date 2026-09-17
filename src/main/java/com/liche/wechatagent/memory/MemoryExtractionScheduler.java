@@ -3,11 +3,13 @@ package com.liche.wechatagent.memory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.liche.wechatagent.user.UserService;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,30 +20,35 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.regex.Pattern;
 
 /**
- * 记忆自动提取的触发（**2026-09-18 换成"轮次驱动 + 时间兜底 + 明确要求立即跑"**）。
+ * 记忆自动提取的触发（**2026-09-18 换成"轮次驱动 + 时间兜底"**）。
  *
  * <p>旧机制是"静默窗口"：每轮对话后开一个 180 秒的窗口，窗口内又说话就重置（最多拖 300 秒）。
  * 它有两个毛病：**① 一场连续对话里跑很多次**（实测 1.5 小时 13 次、0.13~0.19 元，且一半是空转），
  * **② 边界恰好切在话说到一半的地方**（"那改成 305 吧"被切到下一窗，模型看不到在改哪件事）。
  *
- * <p>现在的三个触发条件（任一满足就排一次，真正跑之前还会合并一小段时间 + 过最小间隔）：
+ * <p>现在的两个触发条件（任一满足就排一次，真正跑之前还会合并一小段时间 + 过最小间隔）：
  * <ol>
  *   <li><b>轮次</b>：上一次提取之后机主又说了 {@code memory.extraction-rounds}（默认 15）条 → 跑；</li>
  *   <li><b>兜底</b>：待提取窗口里最早那条已经放了 {@code memory.extraction-max-idle-hours}（默认 6）小时 → 跑，
- *       避免"聊了两句就安静了"的记忆一直不进库；</li>
- *   <li><b>用户说「记住」</b>：这句话本身就是"现在就记"的指令，立刻排（只等一个合并窗口）。</li>
+ *       避免"聊了两句就安静了"的记忆一直不进库。</li>
  * </ol>
+ * （原先还有第三个条件"用户说「记住」就立刻跑"，**2026-09-18 用户明确要求删掉**：不要这种特例。）
  *
- * <p><b>轮次从数据库数</b>（{@code conversation_memory} 里上一次提取之后的机主消息数），不在内存里记计数器：
- * 这个应用每次部署都重启，内存计数器会被反复清零，"攒够 15 轮"可能永远到不了。
- * 边界取"最近一次**非 FAILED** 的提取记录"——失败那次不算数，否则一段对话会被失败记录放过去。
+ * <p><b>轮次计数放在 Redis</b>（用户 2026-09-18 提的）：每来一条消息 {@code INCR memory:pending:&lt;user&gt;}，
+ * 提取真跑完就删掉。比每次查库便宜，而且 Redis 开了 AOF，重启不丢。
+ * **键丢了（Redis 被清空 / 过期）就回退查库**：按"上一次生效的提取"之后的机主消息数重新数一遍并把键种回去，
+ * 所以既快又不会因为 Redis 没了就卡住不提取。
+ *
+ * <p>**边界**（"上次看到哪儿为止"那条时间线）仍然从库里算，只在 Redis 计数缺失时用：
+ * 取最近一次**真正生效**的提取记录，用它的**开始**时刻（不是结束时刻——提取要跑十几秒，
+ * 这期间说的话既不在那次窗口里、时间上又早于结束时刻，用结束时刻当边界它们就永远轮不到提取了）；
+ * {@code FAILED}（失败）和 {@code STALE}（结果被丢弃）都**不算处理过**。
  *
  * <p>**上下文重叠**：窗口取最近 {@code memory.extraction-recent-turns}（默认 40 行）条对话，
- * 其中**最老的 {@code memory.extraction-overlap-turns}（默认 5）条机主消息只作背景**
- * （提取提示词里会标出来），这样跨窗口的一句话仍能被正确理解，又不会把旧内容反复提取成新记忆。
+ * 其中上次已经处理过的那几条机主消息**只作背景**（提取提示词里会标出来，规则 14），
+ * 这样跨窗口的一句话仍能被正确理解，又不会把旧内容反复提取成新记忆。
  *
  * <p>**它还记得"这一轮用户说了什么"**（{@code burstTexts}）：提取前的"事务型窄跳过"要按**新消息**判定
  * （问课表、设提醒、元问题这类不值得花钱），而不是按整窗——整窗里混着旧内容，判定会失准。
@@ -52,10 +59,16 @@ public class MemoryExtractionScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryExtractionScheduler.class);
 
-    /** 用户明确要求记住：这句话本身就要求"现在就提取"，不用再等攒够轮次 */
-    private static final Pattern REMEMBER_NOW = Pattern.compile("记住|记一下|记着|记下来|帮我记|别忘了");
-    /** 早于这个时间的都算"没有上一次提取"（不能用 LocalDateTime.MIN：PG 的 timestamp 存不下） */
+    /**
+     * 早于这个时间的都算"没有上一次提取"（不能用 LocalDateTime.MIN：PG 的 timestamp 存不下）
+     */
     private static final LocalDateTime EPOCH = LocalDateTime.of(1970, 1, 1, 0, 0);
+    /** 轮次计数（Redis）：上一次提取之后机主说了几条 */
+    private static final String KEY_PENDING = "memory:pending:";
+    /** 待提取窗口最早那条的时间（Redis，判"拖了 6 小时"用） */
+    private static final String KEY_PENDING_SINCE = "memory:pending-since:";
+    /** 计数键的兜底寿命：真提取过就会删，留着只是防止 Redis 里堆垃圾 */
+    private static final Duration KEY_TTL = Duration.ofDays(7);
 
     private static final class PendingExtraction {
         private final long generation;
@@ -78,6 +91,7 @@ public class MemoryExtractionScheduler {
     private final ScheduledExecutorService scheduler;
     private final MemoryExtractor extractor;
     private final UserService userService;
+    private final StringRedisTemplate redis;
     private final ConversationMemoryRepository conversationMemory;
     private final MemoryExtractionRunRepository runs;
     private final int rounds;
@@ -100,6 +114,7 @@ public class MemoryExtractionScheduler {
     public MemoryExtractionScheduler(@Qualifier("memoryExtractionThreadPool") ScheduledExecutorService memoryExtractionScheduler,
                                      MemoryExtractor extractor,
                                      UserService userService,
+                                     StringRedisTemplate redis,
                                      ConversationMemoryRepository conversationMemory,
                                      MemoryExtractionRunRepository runs,
                                      @Value("${memory.extraction-rounds:15}") int rounds,
@@ -111,6 +126,7 @@ public class MemoryExtractionScheduler {
         this.scheduler = memoryExtractionScheduler;
         this.extractor = extractor;
         this.userService = userService;
+        this.redis = redis;
         this.conversationMemory = conversationMemory;
         this.runs = runs;
         this.rounds = Math.max(1, rounds);
@@ -122,7 +138,7 @@ public class MemoryExtractionScheduler {
     }
 
     /**
-     * 单测/降级用的便捷构造器：**没有库，所以判定不了轮次**，退化成"每次调用都排一次"
+     * 单测/降级用的便捷构造器：**没有 Redis 也没有库，判定不了轮次**，退化成"每次调用都排一次"
      * （这样重试这类与触发策略无关的行为仍然可测）。
      */
     MemoryExtractionScheduler(ScheduledExecutorService memoryExtractionScheduler,
@@ -132,7 +148,7 @@ public class MemoryExtractionScheduler {
                               int minIntervalSeconds,
                               int retryAttempts,
                               int retryDelaySeconds) {
-        this(memoryExtractionScheduler, extractor, userService, null, null,
+        this(memoryExtractionScheduler, extractor, userService, null, null, null,
                 0, 1, coalesceSeconds, minIntervalSeconds, retryAttempts, retryDelaySeconds);
     }
 
@@ -142,10 +158,9 @@ public class MemoryExtractionScheduler {
     }
 
     /**
-     * 一轮对话结束后调用。
+     * 一轮对话结束后调用：先把"这一轮说了什么"记下来并给 Redis 计数 +1，再看够不够触发。
      *
-     * @param userText 这一轮用户说的话（可为空）；同一个窗口里多次调用会累积起来，
-     *                 既供"事务型窄跳过"判定，也用来识别"记住"这种立即提取的要求
+     * @param userText 这一轮用户说的话（可为空）；同一个窗口里多次调用会累积起来，供"事务型窄跳过"判定
      */
     public void schedule(String userId, String userText) {
         if (!userService.isMemoryEnabled(userId)) {
@@ -153,7 +168,8 @@ public class MemoryExtractionScheduler {
             return;
         }
         rememberBurstText(userId, userText);
-        String reason = decide(userId, userText);
+        bumpPending(userId);
+        String reason = decide(userId);
         if (reason == null) {
             // 轮次没攒够、也没超时：什么都不排（这正是省下那 13 次/1.5 小时的地方）
             return;
@@ -189,13 +205,10 @@ public class MemoryExtractionScheduler {
 
     /**
      * 该不该排一次提取；返回原因（用于日志），不该排返回 null。
-     * 没有库（单测/降级）时一律返回 {@code DEGRADED}——退化成旧行为，不影响提取本身。
+     * 没有 Redis 也没有库（单测/降级）时一律返回 {@code DEGRADED}——退化成"每次都排"，不影响提取本身。
      */
-    private String decide(String userId, String userText) {
-        if (userText != null && REMEMBER_NOW.matcher(userText).find()) {
-            return "EXPLICIT";
-        }
-        if (conversationMemory == null || runs == null) {
+    private String decide(String userId) {
+        if (redis == null || conversationMemory == null || runs == null) {
             return "DEGRADED";
         }
         Pending pending = pending(userId);
@@ -209,8 +222,111 @@ public class MemoryExtractionScheduler {
         return null;
     }
 
-    /** 待提取窗口：边界 = 最近一次**真正生效**的提取的**开始时刻**（不是结束时刻，见下） */
+    /**
+     * 一条新的机主消息：计数 +1，并记住"最早那条是什么时候"。
+     *
+     * <p><b>键不在时不能直接 INCR</b>——那会把键从 1 重新建出来，"按库里的真实情况兜底"这条路就永远走不到
+     * （一段对话会被当成"只有 1 条"）。所以键不在就先查库、按真实条数种回去；
+     * 此时这条消息**已经落库**（编排器是先写 conversation_memory 再调这里），所以种回去的数就是对的，不用再加 1。
+     */
+    private void bumpPending(String userId) {
+        if (redis == null || userId == null || userId.isBlank()) {
+            return;
+        }
+        try {
+            String key = KEY_PENDING + userId;
+            if (Boolean.TRUE.equals(redis.hasKey(key))) {
+                redis.opsForValue().increment(key);
+                return;
+            }
+            Pending fromDb = pendingFromDb(userId);
+            if (fromDb.turns() <= 0) {
+                return;
+            }
+            redis.opsForValue().set(key, Long.toString(fromDb.turns()), KEY_TTL);
+            if (fromDb.oldest() != null) {
+                redis.opsForValue().setIfAbsent(KEY_PENDING_SINCE + userId, fromDb.oldest().toString(), KEY_TTL);
+            }
+            log.info("轮次计数不在 Redis（首次或已被清空），按库里真实条数种回 user={} 待处理={} 条",
+                    userId, fromDb.turns());
+        } catch (Exception e) {
+            // Redis 挂了不影响提取：下面 pending() 还会再回退查库
+            log.warn("轮次计数写入 Redis 失败（本次回退查库）user={}: {}", userId, e.getMessage());
+        }
+    }
+
+    /** 提取真跑完了：窗口被消费掉，计数归零 */
+    private void clearPending(String userId) {
+        if (redis == null || userId == null || userId.isBlank()) {
+            return;
+        }
+        try {
+            redis.delete(List.of(KEY_PENDING + userId, KEY_PENDING_SINCE + userId));
+        } catch (Exception e) {
+            log.warn("清空轮次计数失败（下次会回退查库，不影响正确性）user={}: {}", userId, e.getMessage());
+        }
+    }
+
+    /**
+     * 待提取窗口：**优先 Redis 计数**（快、不压库），键不在才回退查库并把键种回去。
+     *
+     * <p>为什么两边都要：Redis 快但它可能被清空/过期，那时如果只认 Redis 就会"计数归零 → 一直不提取"；
+     * 库里的 {@code conversation_memory} 和提取记录才是事实，拿来兜底既慢不了多少（一个用户两条小查询），又不会漏。
+     */
     private Pending pending(String userId) {
+        Pending cached = pendingFromRedis(userId);
+        if (cached != null) {
+            return cached;
+        }
+        Pending fromDb = pendingFromDb(userId);
+        seedRedis(userId, fromDb);
+        return fromDb;
+    }
+
+    /** Redis 里有计数就用它；没有（键不存在）返回 null 表示"回退查库" */
+    private Pending pendingFromRedis(String userId) {
+        if (redis == null || userId == null || userId.isBlank()) {
+            return null;
+        }
+        try {
+            String value = redis.opsForValue().get(KEY_PENDING + userId);
+            if (value == null) {
+                return null;
+            }
+            long turns = Math.max(0L, Long.parseLong(value.trim()));
+            LocalDateTime oldest = null;
+            String since = redis.opsForValue().get(KEY_PENDING_SINCE + userId);
+            if (since != null) {
+                try {
+                    oldest = LocalDateTime.parse(since.trim());
+                } catch (Exception ignored) {
+                    oldest = null;
+                }
+            }
+            return new Pending(turns, oldest);
+        } catch (Exception e) {
+            log.warn("读 Redis 轮次计数失败（本次回退查库）user={}: {}", userId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 回退路径：把 Redis 计数按库里的真实情况种回去 */
+    private void seedRedis(String userId, Pending pending) {
+        if (redis == null || pending == null || pending.turns() <= 0) {
+            return;
+        }
+        try {
+            redis.opsForValue().set(KEY_PENDING + userId, Long.toString(pending.turns()), KEY_TTL);
+            if (pending.oldest() != null) {
+                redis.opsForValue().setIfAbsent(KEY_PENDING_SINCE + userId, pending.oldest().toString(), KEY_TTL);
+            }
+        } catch (Exception e) {
+            log.warn("回填 Redis 轮次计数失败（不影响本次判定）user={}: {}", userId, e.getMessage());
+        }
+    }
+
+    /** 待提取窗口（查库）：边界 = 最近一次**真正生效**的提取的**开始时刻**（不是结束时刻，见下） */
+    private Pending pendingFromDb(String userId) {
         if (conversationMemory == null || runs == null) {
             return Pending.NONE;
         }
@@ -245,6 +361,8 @@ public class MemoryExtractionScheduler {
         generations.remove(userId);
         burstTexts.remove(userId);
         cancelFuture(userId);
+        // 用户关了记忆 / 要求遗忘：计数也一起清掉，免得回头一开就"立刻触发一次"
+        clearPending(userId);
     }
 
     private void rememberBurstText(String userId, String userText) {
@@ -297,6 +415,8 @@ public class MemoryExtractionScheduler {
         lastRunMillis.put(userId, System.currentTimeMillis());
         if (completed) {
             generations.remove(userId, pending.generation);
+            // 这一趟真的跑完了：窗口被消费掉，Redis 计数归零（失败/过期都不清，见各自的 return）
+            clearPending(userId);
         } else if (!isCurrentGeneration(userId, pending.generation) || !userService.isMemoryEnabled(userId)) {
             return;
         } else if (pending.attempt >= retryAttempts) {
@@ -312,7 +432,7 @@ public class MemoryExtractionScheduler {
             return;
         }
         // 刚跑完这一趟的窗口里可能又满了（提取要跑十几秒，用户还在说话）→ 立刻再看一眼
-        if (userService.isMemoryEnabled(userId) && decide(userId, null) != null) {
+        if (userService.isMemoryEnabled(userId) && decide(userId) != null) {
             schedule(userId);
         }
     }

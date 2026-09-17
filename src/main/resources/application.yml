@@ -93,8 +93,11 @@ llm:
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。
+  # structured 2026-09-18 也从 4096 提到 16384：提取窗口变大之后（15 轮 ≈ 2000+ 字），
+  # 实测一次思考就吃掉 3577 token，4096 会把正文挤没 → JSON 解析失败 → 这一趟白跑还不报错。
+  # 上限只是"最多允许多少"，不按上限计费，放宽没有额外成本。
   max-tokens:
-    structured: ${LLM_MAX_TOKENS_STRUCTURED:4096}
+    structured: ${LLM_MAX_TOKENS_STRUCTURED:16384}
     reflect: ${LLM_MAX_TOKENS_REFLECT:16384}
     dialog: ${LLM_MAX_TOKENS_DIALOG:0}
     dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
@@ -289,14 +292,16 @@ memory:
   archive-sweep-interval-ms: ${MEMORY_ARCHIVE_SWEEP_INTERVAL_MS:600000}
   archive-sweep-initial-delay-ms: ${MEMORY_ARCHIVE_SWEEP_INITIAL_DELAY_MS:300000}
   # 记忆提取的触发节奏（**2026-09-18 换成轮次驱动**，见 MemoryExtractionScheduler 的类注释）：
-  # 上一次提取之后机主又说了 rounds 条 → 跑；待提取窗口最老那条放了 max-idle-hours 小时 → 兜底跑；
-  # 用户说「记住」→ 立刻跑。到点后再等 coalesce-seconds 合并同一串消息。旧参数 window/max-delay 已删除。
+  # 上一次提取之后机主又说了 rounds 条 → 跑；待提取窗口最老那条放了 max-idle-hours 小时 → 兜底跑。
+  # 到点后再等 coalesce-seconds 合并同一串消息。旧参数 window/max-delay 已删除；
+  # "用户说「记住」就立刻跑"这个特例按用户要求也删了（不要特例，只按轮次与时间）。
+  # 轮次计数在 Redis（memory:pending:<user>），提取跑完就删；键丢了会回退查库再种回去。
   extraction-rounds: ${MEMORY_EXTRACTION_ROUNDS:15}
   extraction-max-idle-hours: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:6}
   extraction-coalesce-seconds: ${MEMORY_EXTRACTION_COALESCE_SECONDS:10}
   # 上下文重叠：窗口里最老的 overlap-turns 条机主消息只作背景（上次已处理），跨窗口的一句话才读得懂
   extraction-overlap-turns: ${MEMORY_EXTRACTION_OVERLAP_TURNS:5}
-  # 最小间隔：同一个用户两次提取至少隔这么久（「记住」连说几次时不重复跑）；触发不会丢，只是往后挪。
+  # 最小间隔：同一个用户两次提取至少隔这么久（触发不会丢，只是往后挪）。
   extraction-min-interval-seconds: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:180}
   # 提取前的前置过滤：transactional-only = 只在"这一轮新消息全是事务型"时跳过（默认）；
   # off = 退回 2026-09-14 那道"长度/数字/我"的旧门槛（一键回退用）

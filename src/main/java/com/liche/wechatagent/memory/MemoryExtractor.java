@@ -144,6 +144,18 @@ public class MemoryExtractor {
         this.overlapTurns = Math.max(0, Math.min(20, overlapTurns));
     }
 
+    /**
+     * 这一趟要读多长的窗口（对话行数）：
+     * 默认 {@code memory.extraction-recent-turns}（40 行 ≈ 20 条机主消息），
+     * 但**新消息比它多时必须跟着放大**——轮次触发是 15 条，可要是用户一口气说了 25 条
+     * （或者提取被最小间隔/合并窗口推迟了），40 行就装不下，最老的几条会落在窗口外、**静默漏记**。
+     * 上限由 {@code memory.conversation-extraction-limit}（默认 80 行）兜住。
+     */
+    private int windowLimit(List<String> burstTexts) {
+        int newTurns = burstTexts == null ? 0 : burstTexts.size();
+        return Math.max(recentTurns, Math.min(400, newTurns * 2 + 10));
+    }
+
     /** 该把最老的几条机主消息标成"背景"（0 = 一条都不标） */
     private int backgroundUserTurns(List<ContextTurn> recent, int newTurns) {
         if (overlapTurns <= 0 || newTurns <= 0 || recent == null || recent.isEmpty()) {
@@ -291,7 +303,7 @@ public class MemoryExtractor {
                 return true;
             }
             List<ContextTurn> recent = conversationMemoryService == null
-                    ? List.of() : conversationMemoryService.recentForExtraction(userId, recentTurns);
+                    ? List.of() : conversationMemoryService.recentForExtraction(userId, windowLimit(burstTexts));
             if (recent.isEmpty()) {
                 recent = contextStore.getRecent(userId, recentTurns);
             }
@@ -315,9 +327,16 @@ public class MemoryExtractor {
             int backgroundTurns = backgroundUserTurns(recent, burstTexts == null ? 0 : burstTexts.size());
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
                     () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns))));
+            if (result == null) {
+                // 解析不出来**不能算"跑完了"**：那会把这段对话当成已处理、计数清零，它就再也不会被提取。
+                // 返回 false 走失败重试，并把原因记进审计（面板能看到）。
+                log.warn("记忆提取结果解析失败（本次不算已处理）user={} 窗口={} 轮", userId, recent.size());
+                trail[1] = "PARSE_FAILED";
+                return false;
+            }
             trail[0] = verdictOf(result);
-            log.info("记忆提取完成 user={} 窗口={} 轮（背景 {}） facts={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}",
-                    userId, recent.size(), backgroundTurns, result.facts().size(),
+            log.info("记忆提取完成 user={} 窗口={}/{} 轮（背景 {}） facts={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}",
+                    userId, recent.size(), windowLimit(burstTexts), backgroundTurns, result.facts().size(),
                     result.episodes().size(), result.newWork().size(), result.coreCandidates().size(),
                     result.coreUpdates().size(), result.conflicts().size(), result.completedWork().size(),
                     result.duplicates().size());
@@ -1018,7 +1037,8 @@ public class MemoryExtractor {
         } catch (Exception exception) {
             log.warn("解析记忆提取结果失败", exception);
         }
-        return new ExtractionResult(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        // null = 解析失败（**不是**"什么都没提取到"）：调用方要把它当失败，否则这段对话会被当成已处理
+        return null;
     }
 
     private List<EpisodeCandidate> parseEpisodes(JsonNode root) {
