@@ -20,13 +20,14 @@ class MemoryExtractionSchedulerTest {
             MemoryExtractor extractor = org.mockito.Mockito.mock(MemoryExtractor.class);
             UserService userService = org.mockito.Mockito.mock(UserService.class);
             when(userService.isMemoryEnabled("user-a")).thenReturn(true);
-            when(extractor.extract(org.mockito.ArgumentMatchers.eq("user-a"), any())).thenReturn(false, true);
+            when(extractor.extract(org.mockito.ArgumentMatchers.eq("user-a"), any(), any())).thenReturn(false, true);
 
             MemoryExtractionScheduler scheduler = new MemoryExtractionScheduler(
-                    executor, extractor, userService, 0, 0, 1, 0);
+                    executor, extractor, userService, 0, 0, 0, 1, 0);
             scheduler.schedule("user-a");
 
-            verify(extractor, timeout(1_000).times(2)).extract(org.mockito.ArgumentMatchers.eq("user-a"), any());
+            verify(extractor, timeout(1_000).times(2))
+                    .extract(org.mockito.ArgumentMatchers.eq("user-a"), any(), any());
         } finally {
             executor.shutdownNow();
         }
