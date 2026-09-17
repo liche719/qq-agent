@@ -282,11 +282,17 @@ public class MemoryExtractor {
         return extract(userId, List.of(), stillCurrent);
     }
 
+    public boolean extract(String userId, List<String> burstTexts, BooleanSupplier stillCurrent) {
+        return extract(userId, burstTexts, stillCurrent, MemoryExtractionRun.TRIGGER_AUTO);
+    }
+
     /**
      * @param burstTexts 这一轮静默窗口里**用户说过的话**（判"事务型窗口"用，规则见
      *                   docs/memory-hybrid-plan.md §4.3.1）；空列表时退回"整窗判定"（保守：判不了就不挡）
+     * @param trigger    触发来源（AUTO / MANUAL）：只进审计——面板「提取记录」的"触发"列要如实显示，
+     *                   手动点的那次记成"自动"会让人以为是系统自己跑的
      */
-    public boolean extract(String userId, List<String> burstTexts, BooleanSupplier stillCurrent) {
+    public boolean extract(String userId, List<String> burstTexts, BooleanSupplier stillCurrent, String trigger) {
         if (userId == null || userId.isBlank()) {
             return true;
         }
@@ -361,7 +367,7 @@ public class MemoryExtractor {
             return false;
         } finally {
             if (audit != null) {
-                audit.finish(userId, MemoryExtractionRun.TRIGGER_AUTO, span, windowTurns, windowChars,
+                audit.finish(userId, trigger == null ? MemoryExtractionRun.TRIGGER_AUTO : trigger, span, windowTurns, windowChars,
                         trail[0], null, trail[1]);
             }
             MDC.remove("userScope");

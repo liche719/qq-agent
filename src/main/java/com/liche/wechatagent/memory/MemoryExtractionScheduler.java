@@ -75,12 +75,15 @@ public class MemoryExtractionScheduler {
         private final int attempt;
         /** 这一轮排队的起点（毫秒）：合并窗口从它算起，反复被推后也不会超过它 + coalesce */
         private final long anchorMillis;
+        /** 触发来源（AUTO / MANUAL）：只为审计如实记录，重试时沿用 */
+        private final String trigger;
         private volatile ScheduledFuture<?> future;
 
-        private PendingExtraction(long generation, int attempt, long anchorMillis) {
+        private PendingExtraction(long generation, int attempt, long anchorMillis, String trigger) {
             this.generation = generation;
             this.attempt = attempt;
             this.anchorMillis = anchorMillis;
+            this.trigger = trigger;
         }
     }
 
@@ -174,7 +177,7 @@ public class MemoryExtractionScheduler {
         generations.put(userId, generation);
         cancelFuture(userId);
         // 只等 1 秒：面板上刚点完就去下面「提取记录」看，别让人以为没反应
-        scheduleAttempt(userId, generation, 0, 1000L, System.currentTimeMillis());
+        scheduleAttempt(userId, generation, 0, 1000L, System.currentTimeMillis(), MemoryExtractionRun.TRIGGER_MANUAL);
         log.info("记忆提取已排队 user={} 原因=MANUAL", userId);
         return true;
     }
@@ -205,7 +208,7 @@ public class MemoryExtractionScheduler {
             long generation = generationSequence.incrementAndGet();
             generations.put(userId, generation);
             cancelFuture(userId);
-            scheduleAttempt(userId, generation, 0, wait, now);
+            scheduleAttempt(userId, generation, 0, wait, now, MemoryExtractionRun.TRIGGER_AUTO);
             return;
         }
         if (runningUsers.contains(userId)) {
@@ -221,7 +224,7 @@ public class MemoryExtractionScheduler {
         long generation = generationSequence.incrementAndGet();
         generations.put(userId, generation);
         cancelFuture(userId);
-        scheduleAttempt(userId, generation, 0, delayMillis, anchor);
+        scheduleAttempt(userId, generation, 0, delayMillis, anchor, MemoryExtractionRun.TRIGGER_AUTO);
         log.info("记忆提取已排队 user={} 原因={} 待处理={} 条", userId, reason, pending(userId).turns());
     }
 
@@ -250,6 +253,9 @@ public class MemoryExtractionScheduler {
      * <p><b>键不在时不能直接 INCR</b>——那会把键从 1 重新建出来，"按库里的真实情况兜底"这条路就永远走不到
      * （一段对话会被当成"只有 1 条"）。所以键不在就先查库、按真实条数种回去；
      * 此时这条消息**已经落库**（编排器是先写 conversation_memory 再调这里），所以种回去的数就是对的，不用再加 1。
+     *
+     * <p>`0 → 1` 这一步要顺手把"最早一条"的时间戳写回去：提取跑完会把计数置 0、把时间戳删掉，
+     * 如果只 +1 不补时间戳，**"拖了 6 小时就跑一次"这条兜底会因为拿不到最早时间而永远不触发**。
      */
     private void bumpPending(String userId) {
         if (redis == null || userId == null || userId.isBlank()) {
@@ -258,7 +264,10 @@ public class MemoryExtractionScheduler {
         try {
             String key = KEY_PENDING + userId;
             if (Boolean.TRUE.equals(redis.hasKey(key))) {
-                redis.opsForValue().increment(key);
+                Long next = redis.opsForValue().increment(key);
+                if (next != null && next <= 1L) {
+                    redis.opsForValue().set(KEY_PENDING_SINCE + userId, LocalDateTime.now().toString(), KEY_TTL);
+                }
                 return;
             }
             Pending fromDb = pendingFromDb(userId);
@@ -277,15 +286,23 @@ public class MemoryExtractionScheduler {
         }
     }
 
-    /** 提取真跑完了：窗口被消费掉，计数归零 */
+    /**
+     * 提取真跑完了：窗口被消费掉，计数**置 0**（不是删键——2026-09-18 用户指出来的）。
+     *
+     * <p>为什么置 0 更好：下一条消息直接 {@code INCR} 就是 1，**省掉一次"回退查库"**；
+     * 而"Redis 被清空"这种情况并不会因此漏掉——被清空时键是**消失**（不是变成 0），
+     * 所以 {@code pendingFromRedis} 仍然返回 null、照样回退查库并种回来。
+     */
     private void clearPending(String userId) {
         if (redis == null || userId == null || userId.isBlank()) {
             return;
         }
         try {
-            redis.delete(List.of(KEY_PENDING + userId, KEY_PENDING_SINCE + userId));
+            // 计数键留一个 0，让"下一条消息 +1"不必查库；"最早一条"的时间戳删掉（窗口已经空了）
+            redis.opsForValue().set(KEY_PENDING + userId, "0", KEY_TTL);
+            redis.delete(KEY_PENDING_SINCE + userId);
         } catch (Exception e) {
-            log.warn("清空轮次计数失败（下次会回退查库，不影响正确性）user={}: {}", userId, e.getMessage());
+            log.warn("轮次计数归零失败（下次会回退查库，不影响正确性）user={}: {}", userId, e.getMessage());
         }
     }
 
@@ -297,7 +314,9 @@ public class MemoryExtractionScheduler {
      */
     private Pending pending(String userId) {
         Pending cached = pendingFromRedis(userId);
-        if (cached != null) {
+        // 计数有、"最早一条"的时间戳也在 → 直接用；计数是 0 → 窗口本来就是空的，也直接用。
+        // 只有"计数 >0 但时间戳丢了"才回退查库——6 小时兜底靠那个时间戳，缺了它那条路就永远不触发。
+        if (cached != null && (cached.turns() <= 0 || cached.oldest() != null)) {
             return cached;
         }
         Pending fromDb = pendingFromDb(userId);
@@ -411,8 +430,9 @@ public class MemoryExtractionScheduler {
         }
     }
 
-    private void scheduleAttempt(String userId, long generation, int attempt, long delayMillis, long anchorMillis) {
-        PendingExtraction pending = new PendingExtraction(generation, attempt, anchorMillis);
+    private void scheduleAttempt(String userId, long generation, int attempt, long delayMillis, long anchorMillis,
+                                String trigger) {
+        PendingExtraction pending = new PendingExtraction(generation, attempt, anchorMillis, trigger);
         PendingExtraction previous = pendingByUser.put(userId, pending);
         if (previous != null && previous != pending && previous.future != null) {
             previous.future.cancel(false);
@@ -430,7 +450,8 @@ public class MemoryExtractionScheduler {
         runningUsers.add(userId);
         try {
             completed = extractor.extract(userId, burst,
-                    () -> isCurrentGeneration(userId, pending.generation) && userService.isMemoryEnabled(userId));
+                    () -> isCurrentGeneration(userId, pending.generation) && userService.isMemoryEnabled(userId),
+                    pending.trigger);
         } finally {
             runningUsers.remove(userId);
         }
@@ -450,7 +471,7 @@ public class MemoryExtractionScheduler {
             log.warn("记忆提取失败，将在 {} 秒后重试 user={} attempt={}/{}", retryDelaySeconds, userId,
                     nextAttempt, retryAttempts);
             scheduleAttempt(userId, pending.generation, nextAttempt, retryDelaySeconds * 1000L,
-                    System.currentTimeMillis());
+                    System.currentTimeMillis(), pending.trigger);
             return;
         }
         // 刚跑完这一趟的窗口里可能又满了（提取要跑十几秒，用户还在说话）→ 立刻再看一眼
