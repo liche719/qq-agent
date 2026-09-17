@@ -80,3 +80,23 @@ unzip -o backup/20260913.zip -d /tmp/restore-20260913      # 解出 user-*/state
 都没挂出来（见 `AGENTS.md` 坑 38），所以即便当时在服务器存过也会随容器重建丢失。
 现在这些文件两边都没有了，只剩元数据。**这也说明「备份里留一份媒体本体」是有价值的**，
 只是它当时没赶上——现在改成了共享一份，成本可控。
+
+---
+
+## 库级备份（2026-09-17 加）
+
+除了上面那份**逻辑备份**（`backup/<yyyyMMdd>.zip`，每个用户的 `state.json`），每天还会多一份
+**库级备份** `backup/<yyyyMMdd>.sql.gz`：
+
+- 由 `DatabaseDumpService` 执行，**按数据源 URL 自动选工具**：`jdbc:postgresql://` → `pg_dump`，
+  `jdbc:mysql://` → `mysqldump`（所以迁 pg 之后这里不用改）
+- 镜像里两个客户端都装了（Dockerfile 的 `postgresql-client` + `default-mysql-client`）
+- 开关 `BACKUP_DUMP_ENABLED`（默认 true）；保留天数与逻辑备份共用 `BACKUP_RETENTION_DAYS`
+- 为什么会需要它：逻辑备份按业务模型导出，**导不出表结构和没进模型的列**；整库恢复只能靠这份
+
+**恢复（pg）**：`gunzip -c backup/<day>.sql.gz | psql -U <user> -d wechat_agent`
+**恢复（mysql）**：`gunzip -c backup/<day>.sql.gz | mysql -u <user> -p wechat_agent`
+
+**验证方法**（别等到凌晨三点）：把 `BACKUP_CRON` 临时改成 `0 */2 * * * ?`，重建容器，
+确认宿主机 `backup/` 下真的出现当天的 `.zip` 与 `.sql.gz`（日志里会有「库级备份完成」），
+验完改回 `0 0 3 * * ?` —— 这就是坑 38/46 记下来的做法。

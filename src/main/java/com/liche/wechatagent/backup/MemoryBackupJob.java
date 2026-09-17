@@ -82,6 +82,13 @@ public class MemoryBackupJob {
     private final int conversationBackupLimit;
     private final int changeLogLimit;
     private final ZoneId zone;
+    /** 库级备份（pg_dump / mysqldump，按数据源自动选）；单测直接构造时可为 null */
+    private DatabaseDumpService databaseDump;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDatabaseDump(DatabaseDumpService databaseDump) {
+        this.databaseDump = databaseDump;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
@@ -214,6 +221,10 @@ public class MemoryBackupJob {
             zipDay(dayDir, archive);
             deleteRecursively(dayDir);
             log.info("每日记忆与资料备份完成: {} ({} 个用户)", archive, userCount);
+            // 逻辑备份之外再留一份**库级**备份（表结构 + 全部列），它是真出事时能整库恢复的那一份
+            if (databaseDump != null) {
+                databaseDump.dump(LocalDate.now(zone));
+            }
             prune();
         } catch (Exception exception) {
             log.error("每日记忆备份失败", exception);
@@ -832,7 +843,13 @@ public class MemoryBackupJob {
         try (Stream<Path> entries = Files.list(backupDir)) {
             expired = entries.filter(path -> {
                 String name = path.getFileName().toString();
-                String day = name.endsWith(".zip") ? name.substring(0, name.length() - 4) : name;
+                // 三种形态都按日期清理：<yyyyMMdd>.zip（逻辑备份）、<yyyyMMdd>.sql.gz（库级备份）、<yyyyMMdd>/（老版本）
+                String day = name;
+                if (day.endsWith(".zip")) {
+                    day = day.substring(0, day.length() - 4);
+                } else if (day.endsWith(".sql.gz")) {
+                    day = day.substring(0, day.length() - 7);
+                }
                 if (!day.matches("\\d{8}")) {
                     return false;
                 }

@@ -183,6 +183,8 @@ services:
       # 不透传的话改 .env 不生效（同第 36 条坑），只能等到凌晨三点才知道有没有坏。
       BACKUP_CRON: ${BACKUP_CRON:-0 0 3 * * ?}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      # 库级备份（pg_dump / mysqldump，按数据源 URL 自动选）：关掉只影响这一份，逻辑备份照跑
+      BACKUP_DUMP_ENABLED: ${BACKUP_DUMP_ENABLED:-true}
     volumes:
       # 自签证书由服务器侧生成、不入库（/opt/wechat-agent-infra/docker/tls/）
       - ./docker/tls:/app/certs:ro

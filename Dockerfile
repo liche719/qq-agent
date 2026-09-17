@@ -21,6 +21,11 @@ RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests package
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
+# 库级备份要用到客户端：pg_dump（迁 pg 后用）/ mysqldump（现在用）。
+# 两个都装，切库时备份不用改（见 DatabaseDumpService）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client default-mysql-client \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /workspace/target/wechat-agent-java-0.0.1-SNAPSHOT.jar /app/app.jar
 EXPOSE 443
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
