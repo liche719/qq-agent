@@ -180,16 +180,19 @@ services:
       SCHEDULED_RESULT_MAX_CHARS: ${SCHEDULED_RESULT_MAX_CHARS:-2000}
       # 记忆提取的触发与窗口（2026-09-18 改成轮次驱动；见 docs/memory-vector-plan.md §15）
       # rounds = 攒够多少条机主消息提取一次；max-idle-hours = 待提取最老那条放了多久必须提取；
-      # coalesce = 到点后再等几秒合并同一串消息；overlap-turns = 窗口里最老几条只作背景
-      # （轮次计数放 Redis：memory:pending:<user>，提取跑完就删；键丢了会自动回退查库）
+      # coalesce = 到点后再等几秒合并同一串消息；overlap-turns = 窗口里多出来的那部分**上限**（默认 5 轮）
+      # window-rows = 0 表示**按 rounds 自动推导**窗口行数：
+      #               窗口 = (rounds + min(overlap-turns, ⌈rounds×0.3⌉)) × 2 → 15 轮 → 40 行、30 轮 → 70 行；
+      #               写正数才覆盖它（写死会被"改了 ROUNDS 窗口不跟着走"坑到）
+      # （轮次计数放 Redis：memory:pending:<user>，提取跑完置 0；键丢了会自动回退查库）
       MEMORY_EXTRACTION_ROUNDS: ${MEMORY_EXTRACTION_ROUNDS:-15}
       MEMORY_EXTRACTION_MAX_IDLE_HOURS: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:-6}
       MEMORY_EXTRACTION_COALESCE_SECONDS: ${MEMORY_EXTRACTION_COALESCE_SECONDS:-10}
       MEMORY_EXTRACTION_OVERLAP_TURNS: ${MEMORY_EXTRACTION_OVERLAP_TURNS:-5}
+      MEMORY_EXTRACTION_WINDOW_ROWS: ${MEMORY_EXTRACTION_WINDOW_ROWS:-0}
       MEMORY_EXTRACTION_RECENT_TURNS: ${MEMORY_EXTRACTION_RECENT_TURNS:-40}
       MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:-180}
-      # transactional-only（默认）= 只在"这一轮新消息全是事务型"时跳过；off = 一键回退旧门槛
-      MEMORY_EXTRACTION_PREFILTER: ${MEMORY_EXTRACTION_PREFILTER:-transactional-only}
+      # 前置过滤已删除（2026-09-18 用户要求）：该不该记全交给模型判断，不再用正则跳过整窗
       # 墨墨背单词开放 API；Token 也可在面板「背单词」页保存（面板里的值优先）
       MAIMEMO_ENABLED: ${MAIMEMO_ENABLED:-true}
       MAIMEMO_API_TOKEN: ${MAIMEMO_API_TOKEN:-}

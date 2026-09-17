@@ -295,17 +295,16 @@ memory:
   # 上一次提取之后机主又说了 rounds 条 → 跑；待提取窗口最老那条放了 max-idle-hours 小时 → 兜底跑。
   # 到点后再等 coalesce-seconds 合并同一串消息。旧参数 window/max-delay 已删除；
   # "用户说「记住」就立刻跑"这个特例按用户要求也删了（不要特例，只按轮次与时间）。
-  # 轮次计数在 Redis（memory:pending:<user>），提取跑完就删；键丢了会回退查库再种回去。
+  # 轮次计数在 Redis（memory:pending:<user>），提取跑完**置 0**；键丢了会回退查库再种回去。
   extraction-rounds: ${MEMORY_EXTRACTION_ROUNDS:15}
   extraction-max-idle-hours: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:6}
   extraction-coalesce-seconds: ${MEMORY_EXTRACTION_COALESCE_SECONDS:10}
-  # 上下文重叠：窗口里最老的 overlap-turns 条机主消息只作背景（上次已处理），跨窗口的一句话才读得懂
+  # 上下文重叠：窗口里多出来的这 30%（K 条机主消息）只作背景（上次已处理），跨窗口的一句话才读得懂
   extraction-overlap-turns: ${MEMORY_EXTRACTION_OVERLAP_TURNS:5}
   # 最小间隔：同一个用户两次提取至少隔这么久（触发不会丢，只是往后挪）。
   extraction-min-interval-seconds: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:180}
-  # 提取前的前置过滤：transactional-only = 只在"这一轮新消息全是事务型"时跳过（默认）；
-  # off = 退回 2026-09-14 那道"长度/数字/我"的旧门槛（一键回退用）
-  extraction-prefilter: ${MEMORY_EXTRACTION_PREFILTER:transactional-only}
+  # 2026-09-18：**前置过滤整块删除**（用户要求）——"这一轮全是问课表/设提醒就跳过"那套硬编码正则不再存在，
+  # 该不该记全交给模型判断。WINDOW_EMPTY（没有可读轮次）仍会跳过，那是事实不是启发式。
   extraction-retry-attempts: ${MEMORY_EXTRACTION_RETRY_ATTEMPTS:2}
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
   # 2026-09-14 曾短暂上线过"每天一次记忆归纳（consolidation）"，实测不合格（模型把两条原文用「；」拼起来当归纳、
@@ -316,9 +315,14 @@ memory:
   extraction-max-content-chars: ${MEMORY_EXTRACTION_MAX_CONTENT_CHARS:4000}
   extraction-max-keywords: ${MEMORY_EXTRACTION_MAX_KEYWORDS:8}
   extraction-default-confidence: ${MEMORY_EXTRACTION_DEFAULT_CONFIDENCE:85}
-  # 提取窗口取最近多少条对话行（user/assistant 混着算）：轮次驱动 15 轮 ≈ 30 行，再加 5 条背景，
-  # 所以这里要给到 40 —— 给 20 的话 15 轮根本装不下，最老的几条会被挤出窗口。
+  # 读不到库时（极少见）用它去 redis 兜底读窗口。**它不是"提取窗口"**——提取窗口见下面的 window-rows。
   extraction-recent-turns: ${MEMORY_EXTRACTION_RECENT_TURNS:40}
+  # 提取窗口取多少行对话（user/assistant 混着算）。**默认 0 = 按 ROUNDS 自动推导**：
+  #   窗口 = (ROUNDS + 重叠) × 2，重叠 = min(overlap-turns 上限, ⌈ROUNDS×0.3⌉)
+  #   15 轮 → 重叠 5 → 40 行；30 轮 → 重叠仍 5（上限）→ 70 行。
+  # 为什么不再写死 40：ROUNDS 一改，写死的窗口就跟不上，触发它的那几条里最老的会落在窗口外、静默漏记。
+  # 想手工钉死就给个正数（会覆盖推导值）。
+  extraction-window-rows: ${MEMORY_EXTRACTION_WINDOW_ROWS:0}
   # 事实层（v2，2026-09-18）：写新事实前先用**语义**召回这几条当前有效事实（不做字面匹配），
   # 交给模型三分类（无关/补充/矛盾）再决定新建还是改写；min-score 是余弦相似度下限，
   # 低于它的一律当"无关"直接新增（宁可多一条，也不要把无关的事错并到一起）。

@@ -26,7 +26,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
-import java.util.regex.Pattern;
 
 @Component
 public class MemoryExtractor {
@@ -34,44 +33,6 @@ public class MemoryExtractor {
     private static final Logger log = LoggerFactory.getLogger(MemoryExtractor.class);
     private static final String FENCE = "\u0060\u0060\u0060";
     private static final int DEFAULT_PRIORITY = 3;
-
-    /** 窗口内用户消息至少要有这么多"实字"才值得跑一次提取（见 worthExtracting） */
-    private static final int MIN_SUBSTANCE_CHARS = 5;
-
-    /**
-     * 前置过滤的两组规则（2026-09-17 定稿，回放数据见 docs/memory-hybrid-plan.md §4.3.1）。
-     *
-     * <p>{@link #MUST_KEEP} **任一命中就一定要跑**——长期身份/偏好/目标/底线，以及"修正某条已有事实"的表达。
-     * 其余五个是"事务型"小类：整窗新消息全部命中它们时跳过。
-     */
-    private static final Pattern MUST_KEEP = Pattern.compile(
-            "记住|记一下|记着|别忘了|以后|我习惯|我喜欢|我不喜欢|我是|我的|我打算|想先|备考|专硕|学硕|考研"
-                    + "|目标|计划|生日|电话|地址|过敏|室友|女朋友|男朋友|改成|纠正|说错|不是.{0,8}是"
-                    + "|不要推送|别推送|不要做|底线|原则|保证|承诺");
-    /** 课表/教室/时间这类**话题**词。
-     *  **2026-09-18 起它单独不再等于"事务型"**：v2 事实层要记的就是这些值（教室/时间），
-     *  只有"在问"（同时命中 {@link #ASKING}）才跳过，陈述句一律照跑——否则"第一周周二晚数学课在 303"
-     *  这种正好要记的句子会被前置过滤挡掉，事实层永远是空的。
-     *  **不要放裸「时间」**：`我想重新规划一下每天的时间` 会被误判成事务型（实测踩到）。 */
-    private static final Pattern CLASSROOM_TOPIC = Pattern.compile(
-            "教室|课表|什么课|有课|上课|第.周|几点上|几点下|几号|星期|周几|几点|哪个教室");
-    /** 提问信号：和话题词同时出现才算"只是在问"（不产生新值） */
-    private static final Pattern ASKING = Pattern.compile(
-            "[?？]|吗|呢|在哪|哪个|几点|几号|是不是|有没有|还有|怎么走|什么时候"
-                    + "|现在.{0,4}(时间|几点)|今天.{0,4}(几号|星期|周几)");
-    /** 元问题：问它自己干了什么 */
-    private static final Pattern TRANSACTIONAL_META = Pattern.compile(
-            "刚刚.{0,6}(记录|工具|说)|什么工具|什么功能|你想做什么|自己的想法|记录了什么|留的线索");
-    /** 提醒操作（提醒已经落 reminder_task 表，不需要再进记忆） */
-    private static final Pattern TRANSACTIONAL_REMINDER = Pattern.compile("提醒|分钟后|小时后");
-    /** 资料操作：看/发它存过的文件 */
-    private static final Pattern TRANSACTIONAL_MEDIA = Pattern.compile("文件|资料|图片|截图|发我|保存好的");
-    /** 纯噪声：只有标点、语气词、纯应答。**不要按长度一刀切**——
-     * `考公`（2 字）、`不吃了`（3 字）这种短句可能正是要记的（实测踩到）。 */
-    private static final Pattern TRANSACTIONAL_NOISE = Pattern.compile(
-            "^[\\s?？。！!~～、,，.]+$"
-                    + "|^(呜呜+|哭+|草|嗯+|哦+|啊+|哈+|呵+)$"
-                    + "|^(好|行|好的|行吧|收到|谢谢|谢了|ok|OK|Ok|不客气|没事)$");
 
     /**
      * 新核心事实与已有核心记忆的相似度超过它 → 判定为"同一个事实的新版本"，走替换（旧条目 SUPERSEDED）而不是新增。
@@ -111,15 +72,9 @@ public class MemoryExtractor {
         this.audit = audit;
     }
 
-    /** 前置过滤档位：{@code transactional-only}（默认，事务型窄跳过）/ {@code off}（退回旧门槛） */
-    private String prefilter = "transactional-only";
-
-    @Value("${memory.extraction-prefilter:transactional-only}")
-    public void setPrefilter(String prefilter) {
-        this.prefilter = prefilter == null || prefilter.isBlank() ? "transactional-only" : prefilter.trim();
-    }
-
-    /** 事实层（2026-09-18）：会变的信息（课表/教室/时间…）写这里，见 {@link MemoryFactService}。没装配就整块跳过 */
+    /**
+     * 事实层（2026-09-18）：会变的信息（课表/教室/时间…）写这里，见 {@link MemoryFactService}。没装配就整块跳过
+     */
     private MemoryFactService factService;
 
     @Autowired(required = false)
@@ -144,16 +99,42 @@ public class MemoryExtractor {
         this.overlapTurns = Math.max(0, Math.min(20, overlapTurns));
     }
 
+    /** 轮次触发的条数（与调度器同一个配置）：用来推导"这一趟该读多长的窗口"，见 {@link #windowLimit} */
+    private int roundsForWindow = 15;
+
+    @Value("${memory.extraction-rounds:15}")
+    public void setRoundsForWindow(int roundsForWindow) {
+        this.roundsForWindow = Math.max(1, roundsForWindow);
+    }
+
+    /** 窗口行数的显式覆盖（{@code memory.extraction-window-rows}）：0 = 按 ROUNDS 自动推导 */
+    private int windowRowsOverride = 0;
+
+    @Value("${memory.extraction-window-rows:0}")
+    public void setWindowRowsOverride(int windowRowsOverride) {
+        this.windowRowsOverride = Math.max(0, windowRowsOverride);
+    }
+
     /**
-     * 这一趟要读多长的窗口（对话行数）：
-     * 默认 {@code memory.extraction-recent-turns}（40 行 ≈ 20 条机主消息），
-     * 但**新消息比它多时必须跟着放大**——轮次触发是 15 条，可要是用户一口气说了 25 条
-     * （或者提取被最小间隔/合并窗口推迟了），40 行就装不下，最老的几条会落在窗口外、**静默漏记**。
-     * 上限由 {@code memory.conversation-extraction-limit}（默认 80 行）兜住。
+     * 这一趟要读多长的窗口（对话行数）：**跟着"轮次触发条数"走**，不写死。
+     *
+     * <p>窗口 = (ROUNDS + 重叠) × 2 行，重叠 = **min(上限, ⌈ROUNDS×0.3⌉)**：
+     * <ul>
+     *   <li>15 轮 → 重叠 min(5, 5) = 5 → (15+5)×2 = **40 行**（就是原来那个数）；</li>
+     *   <li>30 轮 → 重叠 min(5, 9) = **5**（用户 2026-09-18 加的约束：重叠最多 5 轮，不能随轮次无限涨）→ 70 行。</li>
+     * </ul>
+     * 写死的坏处很实在：把 ROUNDS 调到 25，窗口还是 40 行的话，**触发它的那 25 条里最老的 5 条会落在窗口外、静默漏记**。
+     *
+     * <p>另外：新消息比它多时继续放大（一口气说很多条、或提取被推迟），上限由
+     * {@code memory.conversation-extraction-limit}（默认 80 行）兜住。
+     * 想手工钉死就配 {@code memory.extraction-window-rows}（正数覆盖推导值）。
      */
     private int windowLimit(List<String> burstTexts) {
         int newTurns = burstTexts == null ? 0 : burstTexts.size();
-        return Math.max(recentTurns, Math.min(400, newTurns * 2 + 10));
+        // 重叠最多 overlapTurns 轮（默认 5）：rounds×0.3 超过它就取它
+        int overlap = Math.min(overlapTurns, (int) Math.ceil(roundsForWindow * 0.3));
+        int base = windowRowsOverride > 0 ? windowRowsOverride : (roundsForWindow + overlap) * 2;
+        return Math.max(base, Math.min(400, newTurns * 2 + 10));
     }
 
     /** 该把最老的几条机主消息标成"背景"（0 = 一条都不标） */
@@ -319,13 +300,10 @@ public class MemoryExtractor {
             }
             windowTurns = recent.size();
             windowChars = charsOf(recent);
-            String skipped = prefilterSkip(recent, burstTexts);
-            if (skipped != null) {
-                log.info("记忆提取跳过：{} user={} turns={} burst={}", skipped, userId, recent.size(),
-                        burstTexts == null ? 0 : burstTexts.size());
-                trail[1] = skipped;
-                return true;
-            }
+            // 2026-09-18：这里原来有一道"前置过滤"（硬编码正则判"事务型窗口"就整窗跳过）。
+            // 用户明确要求删掉：**该不该记全交给模型判断**，不要用正则替它做决定。
+            // 它已经咬过一次——"教室/课表/第.周"整类被它当事务型跳过，正好把要记的事实挡在门外。
+            // 代价是"整窗都在问课表"这种轮次也会真跑一次模型（一次约 0.05 元）；嫌贵就调大 ROUNDS，而不是加回正则。
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
             // 结构化抽取：温度 0（见 LlmScenarioSettings）；深度思考 2026-09-14 起不再关（记忆质量优先，且提取是后台异步跑）
@@ -860,77 +838,6 @@ public class MemoryExtractor {
         for (String duplicate : duplicates) {
             if (duplicate != null && !duplicate.isBlank()
                     && (content.contains(duplicate) || duplicate.contains(content))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 提取前的**零成本前置过滤**（2026-09-17）。
-     *
-     * <p>默认 {@code transactional-only}：**不再按"长度/数字/我"判**（那道旧门槛会漏掉「考公」这种短而重要的句子），
-     * 改成"默认就跑，只在**这一轮新消息全是事务型**时跳过"。事务型 = 问课表/教室/时间、问它存过的资料、
-     * 元问题（"刚刚记录了什么"）、设/改提醒、纯噪声（≤4 字或语气词）。
-     *
-     * <p>规则表与回放数据见 docs/memory-hybrid-plan.md §4.3.1（最近 3 天 41 个窗口里可跳过 19 个，46%）。
-     * **任一命中"长期信号"就跑**；判不了（没有新消息文本）也跑——宁可多花一分钱，不冒丢记忆的险。
-     *
-     * @return null = 正常跑；否则是要记进审计的跳过原因
-     */
-    private String prefilterSkip(List<ContextTurn> recent, List<String> burstTexts) {
-        if ("off".equalsIgnoreCase(prefilter)) {
-            // 回退开关：退回 2026-09-14 那道旧门槛
-            return worthExtracting(recent) ? null : "PRECHECK";
-        }
-        if (burstTexts == null || burstTexts.isEmpty()) {
-            return null;
-        }
-        for (String text : burstTexts) {
-            if (text != null && MUST_KEEP.matcher(text).find()) {
-                return null;
-            }
-        }
-        for (String text : burstTexts) {
-            if (!isTransactional(text)) {
-                return null;
-            }
-        }
-        return "TRANSACTIONAL";
-    }
-
-    /** 事务型消息：不值得为它花一次带思考的调用（判定宽松——拿不准就算"不是事务型"，照跑） */
-    private boolean isTransactional(String text) {
-        if (text == null || text.isBlank()) {
-            return true;
-        }
-        String trimmed = text.trim();
-        boolean classroomQuestion = CLASSROOM_TOPIC.matcher(trimmed).find() && ASKING.matcher(trimmed).find();
-        return classroomQuestion
-                || TRANSACTIONAL_META.matcher(trimmed).find()
-                || TRANSACTIONAL_REMINDER.matcher(trimmed).find()
-                || TRANSACTIONAL_MEDIA.matcher(trimmed).find()
-                || TRANSACTIONAL_NOISE.matcher(trimmed).find();
-    }
-
-    /**
-     * 窗口里有没有"值得记"的内容：只要有一条**用户消息**算实质内容就返回 true。
-     *
-     * <p>判定故意宽松（宁可多跑一次提取，也不要漏记）：去掉标点后 ≥ {@value #MIN_SUBSTANCE_CHARS} 个字、
-     * 或含数字（日期/分数/时长往往就靠这个）、或含「我/咱」（第一人称陈述）。所以
-     * 「好」「在吗」「嗯嗯」「谢谢」会被跳过，而「我不喝咖啡」「考试推迟了」不会。
-     *
-     * <p>**2026-09-17 起只在 {@code memory.extraction-prefilter=off} 时才用**（默认走事务型窄跳过）。
-     */
-    private boolean worthExtracting(List<ContextTurn> recent) {
-        for (ContextTurn turn : recent) {
-            if (turn == null || !"user".equals(turn.role()) || turn.text() == null) {
-                continue;
-            }
-            String normalized = MemoryTextSimilarity.normalize(turn.text());
-            if (normalized.length() >= MIN_SUBSTANCE_CHARS
-                    || normalized.chars().anyMatch(Character::isDigit)
-                    || normalized.indexOf('我') >= 0 || normalized.indexOf('咱') >= 0) {
                 return true;
             }
         }
