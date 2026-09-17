@@ -71,11 +71,26 @@ services:
       # ⚠️ 这个非空默认值会**整体覆盖**代码里的默认集合（坑 61）：加了新场景必须同时改这里
       LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reflect,reminder_parse,schedule_parse,archive}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
-      LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-4096}
+      LLM_MAX_TOKENS_STRUCTURED: ${LLM_MAX_TOKENS_STRUCTURED:-8192}
       # 反思单独一档：输出只有一句话、思考很重（4096 会被思考吃满 → 整条反思作废）
       LLM_MAX_TOKENS_REFLECT: ${LLM_MAX_TOKENS_REFLECT:-16384}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
       LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
+      # 向量模型（记忆事实层的语义召回，2026-09-18）：**api-key 在服务器 .env 里留空占位**，
+      # 留空时功能降级成"只新增不合并"、不会报错。默认端点=阿里云百炼 OpenAI 兼容模式，
+      # 模型按用户指定用 qwen3.7-text-embedding-flash（1024 维，与表里的 vector(1024) 对齐）。
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3.7-text-embedding-flash}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-20}
+      EMBEDDING_CONNECT_TIMEOUT_SECONDS: ${EMBEDDING_CONNECT_TIMEOUT_SECONDS:-5}
+      # 事实层召回参数（坑 36：不透传就改不动）
+      MEMORY_FACT_RECALL_LIMIT: ${MEMORY_FACT_RECALL_LIMIT:-6}
+      MEMORY_FACT_RECALL_MIN_SCORE: ${MEMORY_FACT_RECALL_MIN_SCORE:-0.5}
+      # 召回工具 recallMemoryFacts（模型主动查，不再每轮注入）
+      MEMORY_FACT_TOOL_RECALL_LIMIT: ${MEMORY_FACT_TOOL_RECALL_LIMIT:-8}
+      MEMORY_FACT_TOOL_MIN_SCORE: ${MEMORY_FACT_TOOL_MIN_SCORE:-0.3}
       # thinkDeeper（模型自己申请升档）的预算与额度
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
@@ -161,9 +176,14 @@ services:
       SCHEDULED_ENABLED: ${SCHEDULED_ENABLED:-true}
       SCHEDULED_MAX_PER_USER: ${SCHEDULED_MAX_PER_USER:-10}
       SCHEDULED_RESULT_MAX_CHARS: ${SCHEDULED_RESULT_MAX_CHARS:-2000}
-      # 记忆提取的节奏与前置过滤（2026-09-17 加；见 docs/memory-hybrid-plan.md §4.3）
-      MEMORY_EXTRACTION_WINDOW_SECONDS: ${MEMORY_EXTRACTION_WINDOW_SECONDS:-180}
-      MEMORY_EXTRACTION_MAX_DELAY_SECONDS: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:-300}
+      # 记忆提取的触发与窗口（2026-09-18 改成轮次驱动；见 docs/memory-vector-plan.md §15）
+      # rounds = 攒够多少条机主消息提取一次；max-idle-hours = 待提取最老那条放了多久必须提取；
+      # coalesce = 到点后再等几秒合并同一串消息；overlap-turns = 窗口里最老几条只作背景
+      MEMORY_EXTRACTION_ROUNDS: ${MEMORY_EXTRACTION_ROUNDS:-15}
+      MEMORY_EXTRACTION_MAX_IDLE_HOURS: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:-6}
+      MEMORY_EXTRACTION_COALESCE_SECONDS: ${MEMORY_EXTRACTION_COALESCE_SECONDS:-10}
+      MEMORY_EXTRACTION_OVERLAP_TURNS: ${MEMORY_EXTRACTION_OVERLAP_TURNS:-5}
+      MEMORY_EXTRACTION_RECENT_TURNS: ${MEMORY_EXTRACTION_RECENT_TURNS:-40}
       MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:-180}
       # transactional-only（默认）= 只在"这一轮新消息全是事务型"时跳过；off = 一键回退旧门槛
       MEMORY_EXTRACTION_PREFILTER: ${MEMORY_EXTRACTION_PREFILTER:-transactional-only}
@@ -204,36 +224,39 @@ services:
       - ./stored-media:/app/stored-media
       - ./logs:/app/logs
     depends_on:
-      mysql:
+      # 2026-09-18：整库迁到 PostgreSQL 后，agent 不再依赖 mysql（容器已删、**数据卷仍保留**做回滚）。
+      # 回滚时把下面这段和 mysql 服务一起恢复即可。
+      postgres:
         condition: service_healthy
       redis:
         condition: service_started
       searxng:
         condition: service_started
 
-  mysql:
-    # 数据卷由 8.0.46 创建，**换 8.0.27 会导致 InnoDB 起不来**（AGENTS 第 5 节第 1 条）。
-    # 再钉死 digest，避免同 tag 被上游重推时悄悄换了内容。
-    image: mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
-    container_name: wechat-agent-mysql
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
-      MYSQL_DATABASE: ${MYSQL_DB:-wechat_agent}
-      TZ: Asia/Shanghai
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+08:00"]
-    ports: ["127.0.0.1:3306:3306"]
-    volumes: ["mysql-data:/var/lib/mysql"]
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p$${MYSQL_ROOT_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+  # ── MySQL：2026-09-18 迁 pg 后**不再启动**（容器已删，数据卷 wechat-agent-infra_mysql-data 保留）。
+  # 回滚做法：取消下面整段的注释 + 把 agent 的 depends_on 里 postgres 换回 mysql，
+  # 再在服务器 .env 里把 DB_URL/DB_DRIVER/DB_USER/DB_PASSWORD 改回 MySQL（或删掉那四行走默认值）。
+  # mysql:
+  #   image: mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
+  #   container_name: wechat-agent-mysql
+  #   restart: unless-stopped
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+  #     MYSQL_DATABASE: ${MYSQL_DB:-wechat_agent}
+  #     TZ: Asia/Shanghai
+  #   command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-time-zone=+08:00"]
+  #   ports: ["127.0.0.1:3306:3306"]
+  #   volumes: ["mysql-data:/var/lib/mysql"]
+  #   healthcheck:
+  #     test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p$${MYSQL_ROOT_PASSWORD}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
 
   redis:
     # 钉 digest（这一层实测跑的是 Redis 7.4.11）；`redis:7-alpine` 这种浮动 minor 会跟着上游走

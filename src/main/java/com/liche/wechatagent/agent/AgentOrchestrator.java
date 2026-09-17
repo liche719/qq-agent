@@ -348,8 +348,9 @@ public class AgentOrchestrator {
             return new HandledReply(commandReply.get(), null);
         }
 
-        // 新的正常对话到达 → 取消该用户挂起的记忆提取（3 秒静默窗口重置）
-        extractionScheduler.cancelPending(userId);
+        // 2026-09-18：这里原来每轮开头都 `cancelPending`（旧"静默窗口重置"的语义）。
+        // 触发改成"轮次驱动"之后**不能再取消**：① 排队中的那次提取会被自己刚说的话取消掉；
+        // ② 用户说「记住」排的那次会被紧跟的第二条消息取消，明确要求就丢了。调度器自己按轮次/兜底判定即可。
 
         // 2) 正常对话：加载记忆 → 大模型对话（含工具）
         UserProfile profile = userService.get(userId);

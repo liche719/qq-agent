@@ -27,6 +27,21 @@ public interface ConversationMemoryRepository extends JpaRepository<Conversation
     boolean existsByUserIdAndEventKey(String userId, String eventKey);
     long countByUserId(String userId);
 
+    /**
+     * 上一次提取之后，机主又说了多少条（**轮次驱动的触发就靠它**，2026-09-18）。
+     *
+     * <p>为什么从库里数、而不是在内存里记计数器：这个应用**每次部署都重启**，
+     * 内存计数器会被反复清零——那样"攒够 15 轮"可能永远触发不了，记忆提取等于停摆。
+     */
+    @Query("select count(memory) from ConversationMemory memory where memory.userId = :userId "
+            + "and memory.role = 'user' and memory.createdAt > :after")
+    long countUserTurnsAfter(@Param("userId") String userId, @Param("after") LocalDateTime after);
+
+    /** 待提取窗口里**最早**那条机主消息的时间（判"拖了 6 小时还没提取"用） */
+    @Query("select min(memory.createdAt) from ConversationMemory memory where memory.userId = :userId "
+            + "and memory.role = 'user' and memory.createdAt > :after")
+    LocalDateTime oldestUserTurnAfter(@Param("userId") String userId, @Param("after") LocalDateTime after);
+
     List<ConversationMemory> findByUserIdAndIdGreaterThanOrderByIdAsc(String userId, Long id, Pageable pageable);
 
     @Modifying

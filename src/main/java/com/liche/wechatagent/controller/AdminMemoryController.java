@@ -5,6 +5,9 @@ import com.liche.wechatagent.memory.MemoryChangeLog;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.MemoryExtractionRun;
 import com.liche.wechatagent.memory.MemoryExtractionRunRepository;
+import com.liche.wechatagent.memory.MemoryFact;
+import com.liche.wechatagent.memory.MemoryFactRepository;
+import com.liche.wechatagent.memory.MemoryFactService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,13 +39,19 @@ public class AdminMemoryController {
 
     private final MemoryExtractionRunRepository runs;
     private final MemoryChangeLogRepository changeLogs;
+    private final MemoryFactRepository facts;
+    private final MemoryFactService factService;
     private final AlertProperties alertProperties;
 
     public AdminMemoryController(MemoryExtractionRunRepository runs,
                                  MemoryChangeLogRepository changeLogs,
+                                 MemoryFactRepository facts,
+                                 MemoryFactService factService,
                                  AlertProperties alertProperties) {
         this.runs = runs;
         this.changeLogs = changeLogs;
+        this.facts = facts;
+        this.factService = factService;
         this.alertProperties = alertProperties;
     }
 
@@ -72,6 +81,10 @@ public class AdminMemoryController {
         rows.add(row("失败", failed + " 次"));
         rows.add(row("今日提取花费", String.format("%.4f 元", cost)));
         rows.add(row("今日写入记忆", todayWrites(today) + " 条"));
+        if (!ownerUserId().isBlank()) {
+            rows.add(row("事实（会变的信息）", factService.countActive(ownerUserId()) + " 条有效，缺向量 "
+                    + missingVectors() + " 条"));
+        }
         if (!all.isEmpty()) {
             MemoryExtractionRun last = all.get(0);
             rows.add(row("最近一次", last.getCreatedAt().format(STAMP)
@@ -131,6 +144,65 @@ public class AdminMemoryController {
 
     // ---------------------------------------------------------------- 内部
 
+    /**
+     * 事实层（v2，2026-09-18）：会变的信息一条一句地躺在这里，取代关系用状态列表示。
+     * 基线（DOC=从图片/文件看出来的）与补丁（USER=用户说的）分开显示——"图上写 303、他后来补充 305"要看得见。
+     */
+    @GetMapping("/facts")
+    public Map<String, Object> facts(@RequestParam(defaultValue = "80") int limit) {
+        String userId = ownerUserId();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (!userId.isBlank()) {
+            java.util.Set<Long> embedded = factService.embeddedIds(userId);
+            for (MemoryFact fact : facts.findByUserIdOrderByUpdatedAtDesc(userId,
+                    PageRequest.of(0, Math.max(1, Math.min(200, limit))))) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("subject", clip(fact.getSubject(), 40));
+                item.put("predicate", fact.getPredicate() == null ? "-" : fact.getPredicate());
+                item.put("object", clip(fact.getObject(), 80));
+                item.put("source", source(fact.getSource()));
+                item.put("status", status(fact.getStatus()));
+                item.put("vector", embedded.contains(fact.getId()) ? "有" : "无");
+                item.put("updated", fact.getUpdatedAt() == null ? "-" : fact.getUpdatedAt().format(STAMP));
+                rows.add(item);
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("rows", rows);
+        return result;
+    }
+
+    /** 缺向量的事实条数（用户是先有事实、后填的 api-key，所以这个数要能看见并会自己回落到 0） */
+    private long missingVectors() {
+        String userId = ownerUserId();
+        if (userId.isBlank()) {
+            return 0L;
+        }
+        try {
+            return factService.countMissingEmbedding(userId);
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    private String source(String raw) {
+        return switch (raw == null ? "" : raw) {
+            case "DOC" -> "图片/文件（基线）";
+            case "USER" -> "用户说的（补丁）";
+            case "AUTO" -> "推断";
+            default -> raw == null ? "-" : raw;
+        };
+    }
+
+    private String status(String raw) {
+        return switch (raw == null ? "" : raw) {
+            case "ACTIVE" -> "有效";
+            case "SUPERSEDED" -> "已被取代";
+            case "EXPIRED" -> "已过期";
+            default -> raw == null ? "-" : raw;
+        };
+    }
+
     private List<MemoryExtractionRun> bounded(int limit) {
         int size = Math.max(1, Math.min(100, limit));
         List<MemoryExtractionRun> all = runs.findTop100ByOrderByCreatedAtDesc();
@@ -185,6 +257,7 @@ public class AdminMemoryController {
         return switch (raw == null ? "" : raw) {
             case "ADD" -> "新增";
             case "UPDATE" -> "改写";
+            case "CONFIRM" -> "确认（同值，不新增）";
             case "SUPERSEDE" -> "替换（留旧行）";
             case "COMPLETE" -> "标记完成";
             case "ARCHIVE" -> "归档";
@@ -198,6 +271,7 @@ public class AdminMemoryController {
         return switch (raw == null ? "" : raw) {
             case "CORE" -> "核心";
             case "WORK" -> "中期";
+            case "FACT" -> "事实";
             case "ARCHIVE" -> "归档";
             default -> raw == null ? "-" : raw;
         };

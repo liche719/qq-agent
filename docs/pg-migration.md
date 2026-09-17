@@ -35,6 +35,11 @@
    "切换"看起来成功、其实应用还在 MySQL 上。**判断依据**：容器 env + `pg_stat_activity` + MySQL 连接数三处一起看。
 8. **Spring 的 `${VAR:默认值}` 只在"变量缺失"时用默认，空字符串会覆盖默认**：所以 compose 里 DB_* 的默认值
    写成 `${DB_USER:-${MYSQL_APP_USER:-root}}`（嵌套插值实测可用），避免"设了空值把库连坏"。
+9. **`QUARTZ_DELEGATE` 必须是全限定类名** `org.quartz.impl.jdbcjobstore.PostgreSQLDelegate`（2026-09-18 实测）。
+   配成简写（Quartz 有"补默认包名"的兜底，能不能生效看版本，别赌）或漏配 → 退到 `StdJDBCDelegate`
+   → 用 `ResultSet.getBlob` 读 PG 的 bytea 列 → 报 **`不良的类型值 long : \x`**，
+   表现是**每次重启都刷"恢复提醒调度失败 reminderId=…"**（提醒恢复属于"用户长期记忆不丢失"那条线，不能有 ERROR）。
+   **判断依据**：本地同一份数据、只把 `QUARTZ_DELEGATE` 补成全限定名，重启后 ERROR 归零。
 
 ## 回滚（MySQL 容器与数据卷都还在）
 
@@ -50,4 +55,4 @@ AGENT_IMAGE=$(docker inspect wechat-agent-java -f '{{.Config.Image}}') \
 
 - 数据源参数化：`DB_URL/DB_DRIVER/DB_USER/DB_PASSWORD`（默认值仍是 MySQL，不设即行为不变）
 - 每晚**库级备份**（`DatabaseDumpService`）：按数据源自动选 `pg_dump`/`mysqldump`，落 `backup/<yyyyMMdd>.sql.gz`
-- Quartz：`QUARTZ_DELEGATE` 可配（pg 用 `PostgreSQLDelegate`）；QRTZ 表在 pg 里已建好（切库不用重建）
+- Quartz：`QUARTZ_DELEGATE` 可配（pg 用**全限定名** `org.quartz.impl.jdbcjobstore.PostgreSQLDelegate`，见坑 9）；QRTZ 表在 pg 里已建好（切库不用重建）

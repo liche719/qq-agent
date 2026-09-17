@@ -205,6 +205,14 @@ public class AdminPanelController {
                         column("tokens", "输入/输出", false),
                         column("cost", "花费", false),
                         column("duration", "用时", false)), List.of()),
+                table("事实层（会变的信息：课表/教室/时间…，一条一句）", "/api/admin/memory/facts?limit=80", List.of(
+                        column("subject", "这件事", false),
+                        column("predicate", "属性", false),
+                        column("object", "当前值", true),
+                        column("source", "来源", false),
+                        column("status", "状态", false),
+                        column("vector", "向量", false),
+                        column("updated", "更新时间", false)), List.of()),
                 table("最近写入的记忆（留痕，可核对）", "/api/admin/memory/writes?limit=50", List.of(
                         column("time", "时间", false),
                         column("action", "动作", false),

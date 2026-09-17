@@ -23,7 +23,7 @@ class MemoryExtractionSchedulerTest {
             when(extractor.extract(org.mockito.ArgumentMatchers.eq("user-a"), any(), any())).thenReturn(false, true);
 
             MemoryExtractionScheduler scheduler = new MemoryExtractionScheduler(
-                    executor, extractor, userService, 0, 0, 0, 1, 0);
+                    executor, extractor, userService, 0, 0, 1, 0);
             scheduler.schedule("user-a");
 
             verify(extractor, timeout(1_000).times(2))

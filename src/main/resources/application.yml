@@ -260,6 +260,19 @@ wechat:
   channel:
     mode: ${WECHAT_CHANNEL_MODE:disabled}   # QQ 项目默认不启动微信通道；本地调试可显式设 simulator
 
+# 向量模型（记忆事实层的语义召回，2026-09-18）：OpenAI 兼容的 /embeddings，默认走阿里云百炼。
+# 模型用 **qwen3.7-text-embedding-flash**（官方文档：支持 256/512/768/1024 维、默认 1024 维，
+# 0.125 元/百万 token，比 text-embedding-v4 便宜 4 倍；128K 上下文）。**维度必须与表里的 vector(1024) 一致。**
+# **api-key 留空时功能自动降级成「只新增不合并」**（事实照样入库，不召回、不判矛盾），不会报错。
+# 服务器 .env 里填 EMBEDDING_API_KEY 即启用；凭据只在那份 600 的文件里。
+embedding:
+  base-url: ${EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  api-key: ${EMBEDDING_API_KEY:}
+  model: ${EMBEDDING_MODEL:qwen3.7-text-embedding-flash}
+  dimensions: ${EMBEDDING_DIMENSIONS:1024}
+  timeout-seconds: ${EMBEDDING_TIMEOUT_SECONDS:20}
+  connect-timeout-seconds: ${EMBEDDING_CONNECT_TIMEOUT_SECONDS:5}
+
 memory:
   extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}
   extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
@@ -275,13 +288,15 @@ memory:
   work-archive-batch: ${MEMORY_WORK_ARCHIVE_BATCH:10}
   archive-sweep-interval-ms: ${MEMORY_ARCHIVE_SWEEP_INTERVAL_MS:600000}
   archive-sweep-initial-delay-ms: ${MEMORY_ARCHIVE_SWEEP_INITIAL_DELAY_MS:300000}
-  # 记忆提取的触发节奏：**静默 45 秒**才跑一次（用户连续发消息时一直往后推，最多推 150 秒），
-  # 这样一场 20 条的对话只提取几次，而不是每发一条就调一次模型（2026-09-14 用户提"太耗资源"后调的；
-  # 参数含义：window = 静默多久算一轮聊完，max-delay = 一直被推时最多拖多久就必须跑一次）
-  extraction-window-seconds: ${MEMORY_EXTRACTION_WINDOW_SECONDS:180}
-  extraction-max-delay-seconds: ${MEMORY_EXTRACTION_MAX_DELAY_SECONDS:300}
-  # 最小间隔：同一个用户两次提取至少隔这么久（高频短对话里防止"每两三分钟就跑一次"）；
-  # 触发不会丢，只是往后挪。见 docs/memory-hybrid-plan.md §4.3
+  # 记忆提取的触发节奏（**2026-09-18 换成轮次驱动**，见 MemoryExtractionScheduler 的类注释）：
+  # 上一次提取之后机主又说了 rounds 条 → 跑；待提取窗口最老那条放了 max-idle-hours 小时 → 兜底跑；
+  # 用户说「记住」→ 立刻跑。到点后再等 coalesce-seconds 合并同一串消息。旧参数 window/max-delay 已删除。
+  extraction-rounds: ${MEMORY_EXTRACTION_ROUNDS:15}
+  extraction-max-idle-hours: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:6}
+  extraction-coalesce-seconds: ${MEMORY_EXTRACTION_COALESCE_SECONDS:10}
+  # 上下文重叠：窗口里最老的 overlap-turns 条机主消息只作背景（上次已处理），跨窗口的一句话才读得懂
+  extraction-overlap-turns: ${MEMORY_EXTRACTION_OVERLAP_TURNS:5}
+  # 最小间隔：同一个用户两次提取至少隔这么久（「记住」连说几次时不重复跑）；触发不会丢，只是往后挪。
   extraction-min-interval-seconds: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:180}
   # 提取前的前置过滤：transactional-only = 只在"这一轮新消息全是事务型"时跳过（默认）；
   # off = 退回 2026-09-14 那道"长度/数字/我"的旧门槛（一键回退用）
@@ -296,7 +311,18 @@ memory:
   extraction-max-content-chars: ${MEMORY_EXTRACTION_MAX_CONTENT_CHARS:4000}
   extraction-max-keywords: ${MEMORY_EXTRACTION_MAX_KEYWORDS:8}
   extraction-default-confidence: ${MEMORY_EXTRACTION_DEFAULT_CONFIDENCE:85}
-  extraction-recent-turns: ${MEMORY_EXTRACTION_RECENT_TURNS:20}
+  # 提取窗口取最近多少条对话行（user/assistant 混着算）：轮次驱动 15 轮 ≈ 30 行，再加 5 条背景，
+  # 所以这里要给到 40 —— 给 20 的话 15 轮根本装不下，最老的几条会被挤出窗口。
+  extraction-recent-turns: ${MEMORY_EXTRACTION_RECENT_TURNS:40}
+  # 事实层（v2，2026-09-18）：写新事实前先用**语义**召回这几条当前有效事实（不做字面匹配），
+  # 交给模型三分类（无关/补充/矛盾）再决定新建还是改写；min-score 是余弦相似度下限，
+  # 低于它的一律当"无关"直接新增（宁可多一条，也不要把无关的事错并到一起）。
+  fact-recall-limit: ${MEMORY_FACT_RECALL_LIMIT:6}
+  fact-recall-min-score: ${MEMORY_FACT_RECALL_MIN_SCORE:0.5}
+  # 召回工具 recallMemoryFacts（**模型主动查**，不再每轮注入——2026-09-18 按用户要求改）：
+  # 它问了就给宽一点，查一次只是一次向量检索的价钱；min-score 比写入时更低（宁可多给几条让它自己判断）
+  fact-tool-recall-limit: ${MEMORY_FACT_TOOL_RECALL_LIMIT:8}
+  fact-tool-min-score: ${MEMORY_FACT_TOOL_MIN_SCORE:0.3}
   min-confidence: ${MEMORY_MIN_CONFIDENCE:60}
   default-work-priority: ${MEMORY_DEFAULT_WORK_PRIORITY:3}
   default-core-importance: ${MEMORY_DEFAULT_CORE_IMPORTANCE:5}

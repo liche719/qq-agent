@@ -48,10 +48,17 @@ public class MemoryExtractor {
             "记住|记一下|记着|别忘了|以后|我习惯|我喜欢|我不喜欢|我是|我的|我打算|想先|备考|专硕|学硕|考研"
                     + "|目标|计划|生日|电话|地址|过敏|室友|女朋友|男朋友|改成|纠正|说错|不是.{0,8}是"
                     + "|不要推送|别推送|不要做|底线|原则|保证|承诺");
-    /** 课表/教室/时间（按规则 12 本来就不进记忆，改的是资料内容）。
+    /** 课表/教室/时间这类**话题**词。
+     *  **2026-09-18 起它单独不再等于"事务型"**：v2 事实层要记的就是这些值（教室/时间），
+     *  只有"在问"（同时命中 {@link #ASKING}）才跳过，陈述句一律照跑——否则"第一周周二晚数学课在 303"
+     *  这种正好要记的句子会被前置过滤挡掉，事实层永远是空的。
      *  **不要放裸「时间」**：`我想重新规划一下每天的时间` 会被误判成事务型（实测踩到）。 */
-    private static final Pattern TRANSACTIONAL_CLASSROOM = Pattern.compile(
-            "教室|课表|什么课|有课|上课|第.周|几点上|几点下|几号|星期|周几|几点|哪个教室|现在.*(时间|几点)|今天.*(几号|星期|周几)");
+    private static final Pattern CLASSROOM_TOPIC = Pattern.compile(
+            "教室|课表|什么课|有课|上课|第.周|几点上|几点下|几号|星期|周几|几点|哪个教室");
+    /** 提问信号：和话题词同时出现才算"只是在问"（不产生新值） */
+    private static final Pattern ASKING = Pattern.compile(
+            "[?？]|吗|呢|在哪|哪个|几点|几号|是不是|有没有|还有|怎么走|什么时候"
+                    + "|现在.{0,4}(时间|几点)|今天.{0,4}(几号|星期|周几)");
     /** 元问题：问它自己干了什么 */
     private static final Pattern TRANSACTIONAL_META = Pattern.compile(
             "刚刚.{0,6}(记录|工具|说)|什么工具|什么功能|你想做什么|自己的想法|记录了什么|留的线索");
@@ -112,6 +119,45 @@ public class MemoryExtractor {
         this.prefilter = prefilter == null || prefilter.isBlank() ? "transactional-only" : prefilter.trim();
     }
 
+    /** 事实层（2026-09-18）：会变的信息（课表/教室/时间…）写这里，见 {@link MemoryFactService}。没装配就整块跳过 */
+    private MemoryFactService factService;
+
+    @Autowired(required = false)
+    public void setFactService(MemoryFactService factService) {
+        this.factService = factService;
+    }
+
+    /**
+     * 上下文重叠：窗口里**最老的这几条机主消息只作背景**（上次提取已经看过）。
+     * 为什么需要：触发按"攒够 15 轮"来，窗口边界会切在话说到一半的地方——"那改成 305 吧"被切到下一窗，
+     * 模型就不知道在改哪件事。多留几条作背景，跨窗口的话才读得懂；标出来又不会被反复提取成新记忆。
+     *
+     * <p><b>具体标几条不是拍脑袋定的</b>：按"这一窗真正新增了几条"（{@code burstTexts} 是上一轮提取之后
+     * 用户说过的话）算——窗口里 20 条、其中 15 条是新的 → 最老 5 条标背景。
+     * **首次提取（没有 burst 信息）一条都不标**：那时候没有任何"上次已经处理过"的消息，
+     * 标了就等于把最老的几条永久漏掉。
+     */
+    private int overlapTurns = 5;
+
+    @Value("${memory.extraction-overlap-turns:5}")
+    public void setOverlapTurns(int overlapTurns) {
+        this.overlapTurns = Math.max(0, Math.min(20, overlapTurns));
+    }
+
+    /** 该把最老的几条机主消息标成"背景"（0 = 一条都不标） */
+    private int backgroundUserTurns(List<ContextTurn> recent, int newTurns) {
+        if (overlapTurns <= 0 || newTurns <= 0 || recent == null || recent.isEmpty()) {
+            return 0;
+        }
+        int userTurns = 0;
+        for (ContextTurn turn : recent) {
+            if (turn != null && "user".equals(turn.role())) {
+                userTurns++;
+            }
+        }
+        return Math.min(overlapTurns, Math.max(0, userTurns - newTurns));
+    }
+
     @Autowired
     public MemoryExtractor(ChatModel chatModel,
                            ContextStore contextStore,
@@ -119,7 +165,7 @@ public class MemoryExtractor {
                            CoreMemoryService coreMemoryService,
                            MemoryArchiveService archiveService,
                            ObjectMapper objectMapper,
-                           @Value("${memory.extraction-recent-turns:20}") int recentTurns,
+                           @Value("${memory.extraction-recent-turns:40}") int recentTurns,
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock,
                            ConversationMemoryService conversationMemoryService,
@@ -266,12 +312,15 @@ public class MemoryExtractor {
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
             // 结构化抽取：温度 0（见 LlmScenarioSettings）；深度思考 2026-09-14 起不再关（记忆质量优先，且提取是后台异步跑）
             List<ContextTurn> promptRecent = recent;
+            int backgroundTurns = backgroundUserTurns(recent, burstTexts == null ? 0 : burstTexts.size());
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
-                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores))));
+                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns))));
             trail[0] = verdictOf(result);
-            log.info("记忆提取完成 user={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}", userId,
-                    result.episodes().size(), result.newWork().size(), result.coreCandidates().size(), result.coreUpdates().size(),
-                    result.conflicts().size(), result.completedWork().size(), result.duplicates().size());
+            log.info("记忆提取完成 user={} 窗口={} 轮（背景 {}） facts={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}",
+                    userId, recent.size(), backgroundTurns, result.facts().size(),
+                    result.episodes().size(), result.newWork().size(), result.coreCandidates().size(),
+                    result.coreUpdates().size(), result.conflicts().size(), result.completedWork().size(),
+                    result.duplicates().size());
             if (!currentCheck.getAsBoolean()) {
                 log.info("记忆提取结果已过期，放弃写回 user={}", userId);
                 trail[1] = "STALE";
@@ -307,7 +356,8 @@ public class MemoryExtractor {
         }
         return "core=" + result.coreCandidates().size() + " work=" + result.newWork().size()
                 + " episode=" + result.episodes().size() + " updates=" + result.coreUpdates().size()
-                + " completed=" + result.completedWork().size() + " duplicates=" + result.duplicates().size();
+                + " completed=" + result.completedWork().size() + " duplicates=" + result.duplicates().size()
+                + " facts=" + result.facts().size();
     }
 
     private int charsOf(List<ContextTurn> turns) {
@@ -418,7 +468,8 @@ public class MemoryExtractor {
     public record ExtractionResult(List<EpisodeCandidate> episodes, List<NewWork> newWork,
                                    List<CoreCandidate> coreCandidates,
                                    List<CoreUpdate> coreUpdates, List<WorkConflict> conflicts,
-                                   List<WorkCompletion> completedWork, List<String> duplicates) {
+                                   List<WorkCompletion> completedWork, List<String> duplicates,
+                                   List<MemoryFactCandidate> facts) {
     }
 
     private void apply(String userId, ExtractionResult result, List<ContextTurn> recent) {
@@ -432,8 +483,38 @@ public class MemoryExtractor {
         applyCoreUpdates(userId, result, allowedSourceIds);
         applyWorkConflicts(userId, result, allowedSourceIds);
         applyWorkCompletions(userId, result, allowedSourceIds);
+        applyFacts(userId, result);
         runSafely(userId, "过期工作记忆", workMemoryService::expireDueMemories);
         runSafely(userId, "归档工作记忆", () -> archiveService.compressIfNeeded(userId));
+    }
+
+    /**
+     * 事实层（v2，2026-09-18）：一条一句话，重建/取代交给 {@link MemoryFactService}（向量召回 + 模型判关系）。
+     *
+     * <p>这里**故意不做** {@link #isAcceptable} 那道长度门槛：事实的 object 天生很短（"303"、"周三"），
+     * 用 core/work 的门槛会把它们全滤掉。只按 confidence 与列宽把关。
+     */
+    private void applyFacts(String userId, ExtractionResult result) {
+        if (factService == null) {
+            return;
+        }
+        List<MemoryFactCandidate> candidates = new ArrayList<>();
+        for (MemoryFactCandidate candidate : safeList(result.facts())) {
+            if (candidate == null || !candidate.usable()) {
+                continue;
+            }
+            if (candidate.confidence() < minConfidence) {
+                continue;
+            }
+            candidates.add(candidate);
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        runSafely(userId, "事实层写入", () -> {
+            int written = factService.apply(userId, candidates);
+            log.info("事实层写入 user={} candidates={} new={}", userId, candidates.size(), written);
+        });
     }
 
     private void applyEpisodes(String userId, ExtractionResult result, Set<String> allowedSourceIds) {
@@ -799,7 +880,8 @@ public class MemoryExtractor {
             return true;
         }
         String trimmed = text.trim();
-        return TRANSACTIONAL_CLASSROOM.matcher(trimmed).find()
+        boolean classroomQuestion = CLASSROOM_TOPIC.matcher(trimmed).find() && ASKING.matcher(trimmed).find();
+        return classroomQuestion
                 || TRANSACTIONAL_META.matcher(trimmed).find()
                 || TRANSACTIONAL_REMINDER.matcher(trimmed).find()
                 || TRANSACTIONAL_MEDIA.matcher(trimmed).find()
@@ -830,13 +912,14 @@ public class MemoryExtractor {
         return false;
     }
 
-    private String buildPrompt(List<ContextTurn> recent, List<UserWorkMemory> existing, List<UserCoreMemory> cores) {
+    private String buildPrompt(List<ContextTurn> recent, List<UserWorkMemory> existing, List<UserCoreMemory> cores,
+                               int backgroundTurns) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是用户的长期记忆提取器。当前时间：")
                 .append(LocalDateTime.now(zone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
                 .append("。只从最近对话中提取值得长期保留的信息。\n\n");
         prompt.append("规则：\n")
-                .append("1. 只能依据 user 角色的明确陈述；assistant 回复、附件正文、网页、工具结果和推测都不能成为记忆。\n")
+                .append("1. 只能依据 user 角色的明确陈述；assistant 回复、网页、工具结果和推测都不能成为记忆。**唯一例外是 facts**：用户自己发来的图片/文件里你确实看到的内容，可以写进 facts（source=DOC），但不要由附件正文推演出别的记忆。\n")
                 .append("2. 稳定身份、长期目标、长期偏好、原则和底线写入 coreCandidates。核心记忆不设置有效期；只要用户明确表达且未来仍有价值，就应长期保留。\n")
                 .append("3. 对未来交流有价值的完整经历写入 episodes：包含发生了什么、用户当时的处境/感受、结果或未决状态；一次性普通问答不要写。occurredAt 使用 yyyy-MM-ddTHH:mm:ss，episodeType 可用 EXPERIENCE、MILESTONE、RELATIONSHIP、DECISION 或 DOCUMENT。\n")
                 .append("4. 持续项目、明确尚未结束的任务写入 newWorkItems。用户给出具体日期/时间，或明确相对期限（如明天、下周、本月）时，按当前时间换算 validUntil，使用 yyyy-MM-ddTHH:mm:ss；没有明确期限就留空。\n")
@@ -850,11 +933,17 @@ public class MemoryExtractor {
                 .append("10. 对每个新建、更新或完成项，sourceMessageIds 只能从该 user 消息行中方括号给出的 ID 选择。不得编造 ID；无可用 ID 时返回空数组。\n")
                 .append("11. 与已有记忆语义重复度超过 ")
                 .append(Math.round(dedupThreshold * 100)).append("% 时不新增，把原文放入 duplicates；重复的核心目标仍可放入 coreCandidates 以更新最后确认时间。\n")
-                .append("12. 【不要记会变的信息】课表、教室号/上课地点、第几节课的时间、临时日程、一次性的具体数字（如今天学了几小时、几点下课），"
-                        + "**一律不要写进 coreCandidates 或 newWorkItems**，也不要写进 episodes——它们要么每周都在变、要么过期就成了错信息。"
-                        + "用户问课表时系统会直接读他保存的课表图片，不需要靠记忆。\n")
-                .append("13. 【只有用户明确要你记的才记】用户说「记一下/记住/以后都这样」这类明确要求，才算值得长期保留；"
-                        + "你从图片、文件里自己看出来的事实（哪怕核对得很准）也不写记忆，除非用户明确要求记住它。\n\n");
+                .append("12. 【会变的信息只写 facts】课表、教室/上课地点、第几节课的时间、临时日程、一次性的具体数字（如今天学了几小时），"
+                        + "**一律不要写进 coreCandidates、newWorkItems、episodes**，而是写进 facts（一条一句话）。"
+                        + "它们每周都在变，但事实层会按「同一件事的同一个属性」自动用新值取代旧值，所以**写进来是安全的、也是必须的**"
+                        + "——不写就永远想不起来。每件事每次只写**当前有效**的那个值，不要写「以前是…后来改成…」。\n")
+                .append("13. 【facts 的写法】subject=这件事的名字（同一件事每次必须用**完全一样**的 subject，例：第一周·周二晚·数学课）；"
+                        + "predicate=属性（教室 / 时间 / 教师 / 周次）；object=值（303 / 周二 19:00）；content=一句完整事实；"
+                        + "source=USER 表示用户自己说的，source=DOC 表示你是从用户发来的图片或文件里看到的（只看你确实看到的，图里没有的不要补）。"
+                        + "课表图这类信息请**逐条拆开**写，不要写成一句话塞很多件事。\n")
+                .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
+                        + "（比如「那改成 305 吧」到底在改哪件事），不要只凭它们新建记忆；"
+                        + "只有当这次的新消息明确修正或延续了它们时，才按新消息的内容写。\n\n");
         prompt.append("已存在的核心记忆：\n");
         if (cores.isEmpty()) {
             prompt.append("（无）\n");
@@ -877,12 +966,20 @@ public class MemoryExtractor {
             }
         }
         prompt.append("\n最近对话：\n");
+        int seenUserTurns = 0;
         for (ContextTurn turn : recent) {
-            if ("user".equals(turn.role())) {
-                prompt.append("user [sourceMessageIds=")
-                        .append(String.join(",", turn.sourceMessageIds()))
-                        .append("]: <USER_CONTENT>").append(turn.text()).append("</USER_CONTENT>\n");
+            if (!"user".equals(turn.role())) {
+                continue;
             }
+            // 最老的这几条上一次提取已经处理过，只作背景（见 overlapTurns / backgroundUserTurns 的说明）
+            boolean background = seenUserTurns++ < backgroundTurns;
+            prompt.append("user");
+            if (background) {
+                prompt.append("[背景/上次已处理]");
+            }
+            prompt.append(" [sourceMessageIds=")
+                    .append(String.join(",", turn.sourceMessageIds()))
+                    .append("]: <USER_CONTENT>").append(turn.text()).append("</USER_CONTENT>\n");
         }
         prompt.append("\n只输出 JSON，不要解释：\n")
                 .append("{\"episodes\":[{\"title\":\"...\",\"summary\":\"...\",\"episodeType\":\"EXPERIENCE\",\"occurredAt\":\"\",\"importance\":3,\"confidence\":")
@@ -900,7 +997,11 @@ public class MemoryExtractor {
                 .append(",\"confidence\":")
                 .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"validUntil\":\"\",\"sourceMessageIds\":[\"...\"]}],")
                 .append("\"completedWorkItems\":[{\"existingId\":1,\"reason\":\"...\",\"confidence\":")
-                .append(defaultConfidence).append(",\"sourceMessageIds\":[\"...\"]}],\"duplicates\":[\"...\"]}");
+                .append(defaultConfidence).append(",\"sourceMessageIds\":[\"...\"]}],")
+                .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
+                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"confidence\":")
+                .append(defaultConfidence).append(",\"keywords\":[\"...\"],\"sourceMessageIds\":[\"...\"]}],")
+                .append("\"duplicates\":[\"...\"]}");
         return prompt.toString();
     }
 
@@ -916,11 +1017,11 @@ public class MemoryExtractor {
         try {
             JsonNode root = objectMapper.readTree(text);
             return new ExtractionResult(parseEpisodes(root), parseNewWork(root), parseCoreCandidates(root), parseCoreUpdates(root),
-                    parseWorkConflicts(root), parseCompletedWork(root), parseDuplicates(root));
+                    parseWorkConflicts(root), parseCompletedWork(root), parseDuplicates(root), parseFacts(root));
         } catch (Exception exception) {
             log.warn("解析记忆提取结果失败", exception);
         }
-        return new ExtractionResult(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        return new ExtractionResult(List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     private List<EpisodeCandidate> parseEpisodes(JsonNode root) {
@@ -1017,6 +1118,22 @@ public class MemoryExtractor {
         for (JsonNode node : root.path("duplicates")) {
             if (++count > maxCandidateItems) break;
             values.add(node.asText(""));
+        }
+        return values;
+    }
+
+    // Parses atomic facts (memory v2): one sentence per fact, merged by subject+predicate later.
+    private List<MemoryFactCandidate> parseFacts(JsonNode root) {
+        List<MemoryFactCandidate> values = new ArrayList<>();
+        int count = 0;
+        for (JsonNode node : root.path("facts")) {
+            if (++count > maxCandidateItems) break;
+            Long docMediaId = node.path("docMediaId").isNumber() ? node.path("docMediaId").asLong() : null;
+            values.add(new MemoryFactCandidate(node.path("subject").asText(""), node.path("predicate").asText(""),
+                    node.path("object").asText(""), node.path("content").asText(""),
+                    node.path("source").asText("USER"),
+                    boundedInt(node.path("confidence").asInt(defaultConfidence), 0, 100), docMediaId,
+                    stringList(node.path("keywords"), maxKeywords), sourceMessageIds(node.path("sourceMessageIds"))));
         }
         return values;
     }
