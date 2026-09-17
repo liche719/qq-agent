@@ -8,6 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -35,8 +37,9 @@ public class EpisodicMemory {
     @Column(length = 200, nullable = false)
     private String title;
 
-    @Lob
-    @Column(columnDefinition = "LONGTEXT", nullable = false)
+    /** 长文本：可移植写法（MySQL→longtext、PostgreSQL→text） */
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(nullable = false)
     private String summary;
 
     @Column(length = 32, nullable = false)

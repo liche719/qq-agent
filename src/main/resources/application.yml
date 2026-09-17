@@ -20,10 +20,12 @@ spring:
   config:
     import: optional:file:.env[.properties]
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=${APP_TIME_ZONE:Asia/Shanghai}&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false
-    username: ${MYSQL_USER:}
-    password: ${MYSQL_PASSWORD:}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 2026-09-17：url/driver 参数化，**默认值仍是 MySQL（行为不变）**；
+    # 迁 pg 时只改 env（DB_URL/DB_USER/DB_PASSWORD/DB_DRIVER），回滚也是改回来
+    url: ${DB_URL:jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DB:wechat_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=${APP_TIME_ZONE:Asia/Shanghai}&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${DB_USER:${MYSQL_USER:}}
+    password: ${DB_PASSWORD:${MYSQL_PASSWORD:}}
+    driver-class-name: ${DB_DRIVER:com.mysql.cj.jdbc.Driver}
     hikari:
       maximum-pool-size: ${MYSQL_POOL_MAX_SIZE:8}
       minimum-idle: ${MYSQL_POOL_MIN_IDLE:2}

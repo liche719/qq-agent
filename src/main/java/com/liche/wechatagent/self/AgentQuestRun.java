@@ -71,8 +71,9 @@ public class AgentQuestRun {
     @Column(name = "duration_ms", nullable = false)
     private Integer durationMs = 0;
 
-    /** 这次作业实际花了多少元（按 cache 命中/未命中 + 峰谷精算，不是估算） */
-    @Column(name = "cost_yuan", nullable = false)
+    /** 这次作业实际花了多少元（按 cache 命中/未命中 + 峰谷精算，不是估算）。
+     *  **必须显式 precision/scale**：默认 numeric(38,2) 会把 0.0568 变成 0.06（迁 pg 时实测） */
+    @Column(name = "cost_yuan", nullable = false, precision = 10, scale = 4)
     private java.math.BigDecimal costYuan = java.math.BigDecimal.ZERO;
 
     @Column(name = "cache_hit_tokens", nullable = false)
@@ -86,7 +87,7 @@ public class AgentQuestRun {
     private Boolean extended = false;
 
     /** 这次作业被给的预算（元）——面板上能看出"它是在多少钱里干完的" */
-    @Column(name = "budget_yuan", nullable = false)
+    @Column(name = "budget_yuan", nullable = false, precision = 10, scale = 4)
     private java.math.BigDecimal budgetYuan = java.math.BigDecimal.ZERO;
 
     @Column(name = "created_at", nullable = false)

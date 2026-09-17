@@ -9,6 +9,8 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -42,8 +44,9 @@ public class ConversationMemory {
     @Column(length = 128)
     private String eventKey;
 
-    @Lob
-    @Column(columnDefinition = "LONGTEXT", nullable = false)
+    /** 长文本：用可移植写法（MySQL→longtext、PostgreSQL→text），别写死 LONGTEXT（2026-09-17 迁 pg 时踩到） */
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(nullable = false)
     private String content;
 
     @Column(length = 2000)

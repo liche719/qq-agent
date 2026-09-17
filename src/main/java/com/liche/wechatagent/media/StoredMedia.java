@@ -8,6 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -57,8 +59,9 @@ public class StoredMedia {
     @Column(length = 1000)
     private String importanceReason;
 
-    @Lob
-    @Column(columnDefinition = "LONGTEXT")
+    /** 长文本：可移植写法（MySQL→longtext、PostgreSQL→text） */
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column
     private String extractedText;
 
     @Column(length = 255)
