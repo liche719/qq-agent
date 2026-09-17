@@ -42,6 +42,13 @@ services:
       # （健康检查会用新口令去 ping 而库里还是旧的 → 部署直接起不来）。现在两者彻底分开。
       MYSQL_USER: ${MYSQL_APP_USER:-root}
       MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-root}
+      # 2026-09-17：整库迁 pg 用。**不设 DB_URL/DB_DRIVER 就是原来的 MySQL**（默认值给了非空回退，
+      # 因为 Spring 的 `${DB_URL:默认}` 只在"变量缺失"时用默认，**空字符串会覆盖掉默认** —— 这个坑必须避开）。
+      # 切换=在服务器 .env 写 pg 的四个值 + 重建；回滚=把这四个值改回 MySQL（或从 .env 删掉）。
+      DB_URL: ${DB_URL:-jdbc:mysql://127.0.0.1:3306/wechat_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+      DB_DRIVER: ${DB_DRIVER:-com.mysql.cj.jdbc.Driver}
+      DB_USER: ${DB_USER:-${MYSQL_APP_USER:-root}}
+      DB_PASSWORD: ${DB_PASSWORD:-${MYSQL_APP_PASSWORD:-root}}
       REDIS_HOST: 127.0.0.1
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
