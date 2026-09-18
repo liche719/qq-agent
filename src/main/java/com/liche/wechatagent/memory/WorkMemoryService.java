@@ -1,8 +1,13 @@
 package com.liche.wechatagent.memory;
 
+import com.liche.wechatagent.config.EmbeddingClient;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import com.liche.wechatagent.exception.BizException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,9 +22,13 @@ import java.util.Set;
 @Service
 public class WorkMemoryService {
 
+    private static final Logger log = LoggerFactory.getLogger(WorkMemoryService.class);
+
     private final UserWorkMemoryRepository workRepository;
     private final MemoryChangeLogRepository changeLogRepository;
     private final MemoryContentSimilarity similarity;
+    private final EmbeddingClient embeddingClient;
+    private final WorkMemoryVectorStore vectorStore;
     private final int maxContentChars;
     private final int defaultConfidence;
     private final int defaultPriority;
@@ -28,10 +37,14 @@ public class WorkMemoryService {
     public WorkMemoryService(UserWorkMemoryRepository workRepository,
                              MemoryChangeLogRepository changeLogRepository,
                              MemoryContentSimilarity similarity,
-                             MemoryPolicyProperties policyProperties) {
+                             MemoryPolicyProperties policyProperties,
+                             EmbeddingClient embeddingClient,
+                             WorkMemoryVectorStore vectorStore) {
         this.workRepository = workRepository;
         this.changeLogRepository = changeLogRepository;
         this.similarity = similarity;
+        this.embeddingClient = embeddingClient;
+        this.vectorStore = vectorStore;
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
         this.maxContentChars = bounded(policies.getWorkMaxContentChars(), 128,
                 MemoryPolicyProperties.WORK_CONTENT_COLUMN_MAX_CHARS,
@@ -45,11 +58,12 @@ public class WorkMemoryService {
     public WorkMemoryService(UserWorkMemoryRepository workRepository,
                              MemoryChangeLogRepository changeLogRepository,
                              MemoryContentSimilarity similarity) {
-        this(workRepository, changeLogRepository, similarity, new MemoryPolicyProperties());
+        this(workRepository, changeLogRepository, similarity, new MemoryPolicyProperties(), null, null);
     }
 
     WorkMemoryService(UserWorkMemoryRepository workRepository, MemoryChangeLogRepository changeLogRepository) {
-        this(workRepository, changeLogRepository, new MemoryContentSimilarity(0.8d), new MemoryPolicyProperties());
+        this(workRepository, changeLogRepository, new MemoryContentSimilarity(0.8d), new MemoryPolicyProperties(),
+                null, null);
     }
 
     @Transactional
@@ -100,6 +114,7 @@ public class WorkMemoryService {
         applyLifecycle(mem, provenance, validUntil, false);
         applyAttributes(mem, normalizedAttributes);
         workRepository.save(mem);
+        indexVector(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "ADD", "WORK", mem.getId(), null, normalized,
                 "自动记忆提取", operator));
         return mem;
@@ -212,6 +227,7 @@ public class WorkMemoryService {
         if (savedReplacement == null) {
             savedReplacement = replacement;
         }
+        indexVector(savedReplacement);
         mem.setStatus(MemoryStatus.SUPERSEDED.name());
         mem.setSupersededById(savedReplacement.getId());
         mem.setUpdatedAt(now);
@@ -314,9 +330,84 @@ public class WorkMemoryService {
                 reason == null || reason.isBlank() ? "用户明确表示该事项已完成" : reason, "AUTO"));
     }
 
+    /**
+     * 给一条工作记忆算向量并写回（失败只记日志，记忆本身已经落库）。
+     *
+     * <p>向量只服务一件事：**注入时按"跟当前话题像不像"挑**（见 {@code MemoryRetrievalService}）。
+     * 内容改了就重算，所以这里挂在"新增/被替代后新行落库"两个写点上。
+     */
+    private void indexVector(UserWorkMemory memory) {
+        if (memory == null || memory.getId() == null || embeddingClient == null || vectorStore == null
+                || !embeddingClient.isEnabled()) {
+            return;
+        }
+        float[] vector = embeddingClient.embedOne(memory.getContent());
+        if (vector != null) {
+            vectorStore.saveEmbedding(memory.getId(), vector, embeddingClient.model());
+        }
+    }
+
+    /**
+     * 给"还没有向量"的工作记忆补向量（一次最多 {@code max} 条）。
+     *
+     * <p>为什么需要：向量列是后来才加的（V14），存量行没有向量；而没有向量的行**不会参与注入**
+     * （P2 设计里没有"字面关键词兜底"这条路）。启动时补一次、以后靠写路径保持最新。
+     */
+    public int reindexMissing(String userId, int max) {
+        if (userId == null || userId.isBlank() || max <= 0 || embeddingClient == null || vectorStore == null
+                || !embeddingClient.isEnabled()) {
+            return 0;
+        }
+        try {
+            Set<Long> embedded = vectorStore.idsWithEmbedding(userId);
+            List<UserWorkMemory> pending = new ArrayList<>();
+            List<UserWorkMemory> all = workRepository.findByUserId(userId);
+            for (UserWorkMemory memory : all == null ? List.<UserWorkMemory>of() : all) {
+                if (memory == null || memory.getId() == null || embedded.contains(memory.getId())) {
+                    continue;
+                }
+                pending.add(memory);
+                if (pending.size() >= max) {
+                    break;
+                }
+            }
+            if (pending.isEmpty()) {
+                return 0;
+            }
+            List<float[]> vectors = embeddingClient.embedAll(pending.stream().map(UserWorkMemory::getContent).toList());
+            if (vectors == null || vectors.size() != pending.size()) {
+                return 0;
+            }
+            for (int index = 0; index < pending.size(); index++) {
+                vectorStore.saveEmbedding(pending.get(index).getId(), vectors.get(index), embeddingClient.model());
+            }
+            return pending.size();
+        } catch (Exception e) {
+            log.warn("补齐工作记忆向量失败 user={}: {}", userId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 启动时把存量工作记忆的向量补齐一次（每个用户一批，量很小：64 行 3 个用户）。
+     * 失败只记日志，不影响启动——但缺向量的行会**暂时不被注入**，所以日志里要看得到。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void backfillVectorsOnStartup() {
+        if (embeddingClient == null || vectorStore == null || !embeddingClient.isEnabled()) {
+            return;
+        }
+        int total = 0;
+        for (String userId : vectorStore.distinctUserIdsWithMissingEmbedding()) {
+            total += reindexMissing(userId, 500);
+        }
+        if (total > 0) {
+            log.info("工作记忆向量补齐完成：{} 条", total);
+        }
+    }
+
     @Transactional
-    public int expireDueMemories() {
-        LocalDateTime now = LocalDateTime.now();
+    public int expireDueMemories() {        LocalDateTime now = LocalDateTime.now();
         int changed = 0;
         List<UserWorkMemory> due = workRepository.findByValidUntilBefore(now);
         if (due == null) {

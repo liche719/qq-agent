@@ -101,6 +101,9 @@ services:
       # 超限就不塞、自动退回"向量召回 + 小判定"。详见 docs/memory-vector-plan.md §16。
       MEMORY_FACT_PROMPT_CARDS: ${MEMORY_FACT_PROMPT_CARDS:-30}
       MEMORY_FACT_PROMPT_CARDS_MAX_CHARS: ${MEMORY_FACT_PROMPT_CARDS_MAX_CHARS:-4000}
+      # 工作记忆按向量相似度注入（P2，2026-09-18）：低于门槛就不注入，不再按字面关键词填满名额。
+      # 0.45 是用真模型在真数据上量的（分布见 application.yml）；调大 = 只注入更像的（更省 token 但可能漏）。
+      MEMORY_WORK_VECTOR_FLOOR: ${MEMORY_WORK_VECTOR_FLOOR:-0.45}
       # thinkDeeper（模型自己申请升档）的预算与额度
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}

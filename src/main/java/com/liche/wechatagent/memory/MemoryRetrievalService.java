@@ -1,8 +1,11 @@
 package com.liche.wechatagent.memory;
 
+import com.liche.wechatagent.config.EmbeddingClient;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -24,12 +27,17 @@ import java.util.Locale;
 @Component
 public class MemoryRetrievalService {
 
+    private static final Logger log = LoggerFactory.getLogger(MemoryRetrievalService.class);
+
     private static final Pattern HAN_OR_WORD = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
     private final UserCoreMemoryRepository coreRepository;
     private final UserWorkMemoryRepository workRepository;
     private final ConversationMemoryService conversationMemoryService;
     private final EpisodicMemoryService episodicMemoryService;
     private final StoredMediaRepository storedMediaRepository;
+    private final EmbeddingClient embeddingClient;
+    private final WorkMemoryVectorStore workVectorStore;
+    private final double workVectorFloor;
     private final int historicalLimit;
     private final int minimumHistoricalScore;
     private final List<String> historyMarkers;
@@ -44,13 +52,19 @@ public class MemoryRetrievalService {
                                   EpisodicMemoryService episodicMemoryService,
                                   StoredMediaRepository storedMediaRepository,
                                   MemoryPolicyProperties policyProperties,
+                                  EmbeddingClient embeddingClient,
+                                  WorkMemoryVectorStore workVectorStore,
                                   @Value("${memory.historical-retrieval-limit:8}") int historicalLimit,
-                                  @Value("${memory.historical-min-score:3}") int minimumHistoricalScore) {
+                                  @Value("${memory.historical-min-score:3}") int minimumHistoricalScore,
+                                  @Value("${memory.work-vector-floor:0.5}") double workVectorFloor) {
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
         this.conversationMemoryService = conversationMemoryService;
         this.episodicMemoryService = episodicMemoryService;
         this.storedMediaRepository = storedMediaRepository;
+        this.embeddingClient = embeddingClient;
+        this.workVectorStore = workVectorStore;
+        this.workVectorFloor = workVectorFloor <= 0 ? 0d : Math.min(1d, workVectorFloor);
         this.historicalLimit = Math.max(1, historicalLimit);
         this.minimumHistoricalScore = Math.max(1, minimumHistoricalScore);
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
@@ -68,7 +82,7 @@ public class MemoryRetrievalService {
                            ConversationMemoryService conversationMemoryService,
                            StoredMediaRepository storedMediaRepository) {
         this(coreRepository, workRepository, conversationMemoryService,
-                null, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
+                null, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d);
     }
 
     MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
@@ -77,7 +91,7 @@ public class MemoryRetrievalService {
                            EpisodicMemoryService episodicMemoryService,
                            StoredMediaRepository storedMediaRepository) {
         this(coreRepository, workRepository, conversationMemoryService,
-                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
+                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d);
     }
 
     @Transactional
@@ -86,7 +100,9 @@ public class MemoryRetrievalService {
         return retrieve(userId, query, coreMaxLoad, coreMaxChars, workMaxLoad, workMaxChars, 15);
     }
 
-    /** 事务边界放在最外层入口：内部的使用时间刷新走 @Modifying 定向更新，需要事务。 */
+    /**
+     * 事务边界放在最外层入口：内部的使用时间刷新走 @Modifying 定向更新，需要事务。
+     */
     @Transactional
     public RetrievedMemory retrieve(String userId, String query, int coreMaxLoad, int coreMaxChars,
                                     int workMaxLoad, int workMaxChars, int usageTouchIntervalMinutes) {
@@ -109,7 +125,13 @@ public class MemoryRetrievalService {
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
         int activeWorkBudget = Math.max(1, totalWorkBudget - episodeBudget);
         List<UserWorkMemory> activeWork = activeWorkCandidates(userId, normalizedQuery, now);
-        List<UserWorkMemory> selectedWork = select(activeWork, UserWorkMemory::getContent,
+        // P2（2026-09-18）：注入资格**只看当前这句的向量相似度**——过不了门槛就不注入，
+        // 不再"排完序一律填到上限"（实测那会带来 600~1300 字纯陪跑）。**没有字面关键词兜底这条路**：
+        // 算不出向量的行就是不注入，所以写路径 + 启动补齐要保证活跃行都有向量。
+        // 为什么不用"最近几轮拼成窗口"：实测过（3 轮）会把语义摊平——注入回涨到 13~15 条，连
+        // "今天心情不错"都能捞出一堆课表，故窗口整块不做（详见 docs/memory-vector-plan.md §18）。
+        List<UserWorkMemory> relevantWork = rankWorkByRelevance(userId, normalizedQuery, activeWork);
+        List<UserWorkMemory> selectedWork = select(relevantWork, UserWorkMemory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, workMaxLoad), activeWorkBudget);
         touchUsage(now, selectedCores, selectedWork, usageTouchIntervalMinutes);
@@ -121,11 +143,9 @@ public class MemoryRetrievalService {
             episodicMemoryService.touch(selectedEpisodes, now, usageTouchIntervalMinutes);
         }
 
-        boolean hasRelevantActiveMemory = cores.stream()
-                .anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
+        boolean hasRelevantActiveMemory = !relevantWork.isEmpty()
+                || cores.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
                         >= minimumHistoricalScore)
-                || activeWork.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
-                >= minimumHistoricalScore)
                 || !episodeCandidates.isEmpty();
         List<HistoricalItem> historical = historicalItems(userId, normalizedQuery, historicalQuery,
                 hasRelevantActiveMemory, now);
@@ -204,6 +224,54 @@ public class MemoryRetrievalService {
                         .thenComparing(UserWorkMemory::getUpdatedAt,
                                 Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
+    }
+
+    /**
+     * 用向量给活跃工作记忆打分并筛出够像的那些（2026-09-18，P2）。
+     *
+     * <p>一次 {@code embedOne(query)} + 一条 SQL 拿回全部候选的余弦相似度；低于
+     * {@code memory.work-vector-floor} 的一律丢弃——**不再用字面关键词把名额填满**。
+     * 字面得分只留作同分时的次序（"都要做，结果一样就好"）。
+     */
+    private List<UserWorkMemory> rankWorkByRelevance(String userId, String normalizedQuery,
+                                                     List<UserWorkMemory> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        if (embeddingClient == null || workVectorStore == null || !embeddingClient.isEnabled()
+                || normalizedQuery == null || normalizedQuery.isBlank()) {
+            log.warn("没有可用的向量（embedding.api-key 未配？），本轮不注入工作记忆 user={}", userId);
+            return List.of();
+        }
+        float[] query = embeddingClient.embedOne(normalizedQuery);
+        if (query == null) {
+            log.warn("问题向量算不出来，本轮不注入工作记忆 user={}", userId);
+            return List.of();
+        }
+        Map<Long, Double> similarities = workVectorStore.scores(userId, query);
+        List<UserWorkMemory> ranked = new ArrayList<>();
+        for (UserWorkMemory memory : candidates) {
+            if (memory == null || memory.getId() == null) {
+                continue;
+            }
+            Double similarity = similarities.get(memory.getId());
+            if (similarity == null || similarity < workVectorFloor) {
+                continue;
+            }
+            ranked.add(memory);
+        }
+        ranked.sort(Comparator
+                .comparingDouble((UserWorkMemory memory) -> similarities.getOrDefault(memory.getId(), 0d))
+                .reversed()
+                .thenComparing(Comparator.comparingInt((UserWorkMemory memory) ->
+                        score(memory.getContent(), memory.getKeywords(), normalizedQuery)).reversed())
+                .thenComparing(Comparator.comparing(UserWorkMemory::getImportance,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .thenComparing(Comparator.comparing(UserWorkMemory::getPriority,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .thenComparing(UserWorkMemory::getUpdatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())));
+        return ranked;
     }
 
     public record RetrievedMemory(String coreSection, String workSection) {
