@@ -51,6 +51,12 @@ public class MemoryFact {
     /** 模型从对话里推断的 */
     public static final String SOURCE_AUTO = "AUTO";
 
+    /** 关系判定（主调用直接给结论时用；见 {@link MemoryFactCandidate#relation()}） */
+    public static final String RELATION_NEW = "NEW";
+    public static final String RELATION_SUPERSEDES = "SUPERSEDES";
+    public static final String RELATION_SUPPLEMENT = "SUPPLEMENT";
+    public static final String RELATION_SAME = "SAME";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

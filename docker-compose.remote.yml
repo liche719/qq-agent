@@ -96,6 +96,11 @@ services:
       # 召回工具 recallMemoryFacts（模型主动查，不再每轮注入）
       MEMORY_FACT_TOOL_RECALL_LIMIT: ${MEMORY_FACT_TOOL_RECALL_LIMIT:-8}
       MEMORY_FACT_TOOL_MIN_SCORE: ${MEMORY_FACT_TOOL_MIN_SCORE:-0.3}
+      # 已有事实卡片塞进主提示词的上限（0 = 不塞）与渲染字数上限：
+      # 塞了就"一次调用定稿"（模型自己给 relation/targetSubject），省掉每条事实一次小调用；
+      # 超限就不塞、自动退回"向量召回 + 小判定"。详见 docs/memory-vector-plan.md §16。
+      MEMORY_FACT_PROMPT_CARDS: ${MEMORY_FACT_PROMPT_CARDS:-30}
+      MEMORY_FACT_PROMPT_CARDS_MAX_CHARS: ${MEMORY_FACT_PROMPT_CARDS_MAX_CHARS:-4000}
       # thinkDeeper（模型自己申请升档）的预算与额度
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}

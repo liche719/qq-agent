@@ -108,7 +108,12 @@ public class MemoryFactService {
                 if (!seenSlots.add(candidate.slotKey())) {
                     continue;
                 }
-                if (writeOne(userId, candidate)) {
+                // 主调用直接给了合并结论（提示词里带了已有事实卡片清单）→ 不再召回、不再单独判定，
+                // 省掉"每条事实一次小调用"。没给结论才走召回 + 模型判关系那条老路。
+                boolean ok = candidate.hasDecision()
+                        ? writeWithDecision(userId, candidate)
+                        : writeOne(userId, candidate);
+                if (ok) {
                     written++;
                 }
             } catch (Exception e) {
@@ -116,6 +121,51 @@ public class MemoryFactService {
             }
         }
         return written;
+    }
+
+    /**
+     * 主调用已经判过关系：按它的结论写回（**不再调模型**）。
+     *
+     * <p>定位"合并目标"用的是 {@code targetSubject + predicate} 精确查槽——**不用向量、也不用 id**，
+     * 因为提示词里给模型的卡片清单就是这些 subject，模型只要照抄那个名字即可。
+     * 找不到目标时保守地当新建（宁可多一条，也不猜着改）。
+     */
+    private boolean writeWithDecision(String userId, MemoryFactCandidate candidate) {
+        String relation = candidate.relation();
+        String target = candidate.targetSubject();
+        if (MemoryFact.RELATION_NEW.equals(relation) || target == null || target.isBlank()) {
+            return persist(userId, candidate, List.of(), "新增");
+        }
+        MemoryFact existing = factRepository
+                .findFirstByUserIdAndSubjectIgnoreCaseAndPredicateIgnoreCaseAndStatus(
+                        userId, target, candidate.predicate(), MemoryFact.STATUS_ACTIVE)
+                .orElse(null);
+        if (existing == null) {
+            // 模型提到的目标不在"当前有效事实"里（可能已被取代）→ 当新建，并沿用它的说法
+            return persist(userId, candidate, List.of(), "新增（未找到合并目标）");
+        }
+        if (MemoryFact.RELATION_SAME.equals(relation)) {
+            touch(userId, existing, candidate, "主调用判定：同一个值");
+            return false;
+        }
+        if (MemoryFact.RELATION_SUPERSEDES.equals(relation)) {
+            return persist(userId, candidate, List.of(existing), "主调用判定：同一属性被改写");
+        }
+        // SUPPLEMENT：补充**另一个属性**，旧信息仍然成立 → 沿用目标那件事的 subject（拼法也照它的来，
+        // 免得"第一周·周二晚·数学课"和"周二晚数学课"各成一张卡），只新增这一行
+        String subject = existing.getSubject();
+        try {
+            subject = factRepository
+                    .findFirstByUserIdAndSubjectIgnoreCaseAndStatus(userId, target, MemoryFact.STATUS_ACTIVE)
+                    .map(MemoryFact::getSubject)
+                    .orElse(existing.getSubject());
+        } catch (Exception e) {
+            log.warn("沿用卡片 subject 失败（按模型给的原样写）: {}", e.getMessage());
+        }
+        MemoryFactCandidate merged = new MemoryFactCandidate(subject, candidate.predicate(),
+                candidate.object(), candidate.content(), candidate.source(), candidate.confidence(),
+                candidate.docMediaId(), candidate.keywords(), candidate.sourceMessageIds(), null, null);
+        return persist(userId, merged, List.of(), "补充同一件事的另一个属性");
     }
 
     /** 返回 true = 新增了一条（SAME 的刷新不算） */
@@ -146,7 +196,33 @@ public class MemoryFactService {
                     candidate.content(), candidate.source(), candidate.confidence(), candidate.docMediaId(),
                     candidate.keywords(), candidate.sourceMessageIds());
         }
+        List<MemoryFact> targets = new ArrayList<>();
+        List<String> reasons = new ArrayList<>();
+        for (Relation relation : relations) {
+            if (!"SUPERSEDES".equals(relation.relation())) {
+                continue;
+            }
+            MemoryFact target = findOwned(userId, relation.id());
+            if (target != null) {
+                targets.add(target);
+                reasons.add(relation.reason());
+            }
+        }
+        return persist(userId, candidate, targets, reasons.isEmpty() ? "新增" : String.join("；", reasons));
+    }
 
+    /**
+     * 定稿并落库（**所有写入路径的最后一步**）：
+     * ① 先确定最终 subject/predicate/content；② 插新行；③ 把该作废的目标作废（含"同槽兜底"）；
+     * ④ **按最终 content 只算一次向量**存起来；⑤ 写变更留痕。
+     *
+     * <p>为什么向量放在最后、只算一次：召回那次算的向量对应的是"模型刚吐出来的文本"，
+     * 而这里入库的文本可能已经被收敛过（沿用了已有卡片的 subject）。**向量必须对应最终入库的文本**，
+     * 否则读取时按内容召回的语义就对不上了。旧行被取代时**不重算**——行不动、向量不动，
+     * 召回只查 {@code status='ACTIVE'}，旧向量不会再被用到。
+     */
+    private boolean persist(String userId, MemoryFactCandidate candidate, List<MemoryFact> supersedeTargets,
+                            String reason) {
         MemoryFact fact = new MemoryFact();
         fact.setUserId(userId);
         fact.setSubject(candidate.subject());
@@ -164,25 +240,25 @@ public class MemoryFactService {
         MemoryFact saved = factRepository.save(fact);
 
         Set<Long> superseded = new HashSet<>();
-        for (Relation relation : relations) {
-            if (!"SUPERSEDES".equals(relation.relation())) {
-                continue;
-            }
-            MemoryFact target = findOwned(userId, relation.id());
+        for (int i = 0; i < supersedeTargets.size(); i++) {
+            MemoryFact target = supersedeTargets.get(i);
             if (target != null && !target.getId().equals(saved.getId())) {
-                supersede(userId, target, saved, relation.reason());
+                supersede(userId, target, saved, reasons(i, reason));
                 superseded.add(target.getId());
             }
         }
-        // 精确同槽兜底（向量没召回到时的最后一道网）：subject+predicate 完全一样、值不同 → 也算改写。
-        // 用**收敛之后**的 subject/predicate 去查，所以先沿用 anchor，再查槽。
+        // 精确同槽兜底（向量没召回到、或模型漏判时的最后一道网）：subject+predicate 完全一样、值不同 → 也算改写
         exactSlot(userId, saved, superseded);
         saveVector(saved);
         changeLogRepository.save(new MemoryChangeLog(userId, "ADD", CHANGE_LAYER, saved.getId(), null,
                 saved.getContent(), candidate.source(), "AUTO"));
-        log.info("事实入库 user={} id={} source={} subject={} predicate={} object={}", userId, saved.getId(),
-                saved.getSource(), saved.getSubject(), saved.getPredicate(), saved.getObject());
+        log.info("事实入库 user={} id={} source={} subject={} predicate={} object={} 依据={}", userId, saved.getId(),
+                saved.getSource(), saved.getSubject(), saved.getPredicate(), saved.getObject(), reason);
         return true;
+    }
+
+    private String reasons(int index, String fallback) {
+        return fallback == null || fallback.isBlank() ? "被新值取代" : fallback;
     }
 
     /** 同一个属性槽上还有别的有效值（且 LLM 已经忘了/没召回到它）→ 按"被改写"处理 */

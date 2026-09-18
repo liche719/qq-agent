@@ -137,6 +137,20 @@ public class MemoryExtractor {
         return Math.max(base, Math.min(400, newTurns * 2 + 10));
     }
 
+    /** 已有事实卡片清单最多列多少张 / 渲染上限多少字（超过就不列，退回召回+判定） */
+    private int factPromptCards = 30;
+    private int factPromptCardsMaxChars = 4000;
+
+    @Value("${memory.fact-prompt-cards:30}")
+    public void setFactPromptCards(int factPromptCards) {
+        this.factPromptCards = Math.max(0, Math.min(200, factPromptCards));
+    }
+
+    @Value("${memory.fact-prompt-cards-max-chars:4000}")
+    public void setFactPromptCardsMaxChars(int factPromptCardsMaxChars) {
+        this.factPromptCardsMaxChars = Math.max(500, factPromptCardsMaxChars);
+    }
+
     /** 该把最老的几条机主消息标成"背景"（0 = 一条都不标） */
     private int backgroundUserTurns(List<ContextTurn> recent, int newTurns) {
         if (overlapTurns <= 0 || newTurns <= 0 || recent == null || recent.isEmpty()) {
@@ -306,17 +320,24 @@ public class MemoryExtractor {
             // 代价是"整窗都在问课表"这种轮次也会真跑一次模型（一次约 0.05 元）；嫌贵就调大 ROUNDS，而不是加回正则。
             List<UserWorkMemory> existing = workMemoryService.listActive(userId);
             List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
-            // 结构化抽取：温度 0（见 LlmScenarioSettings）；深度思考 2026-09-14 起不再关（记忆质量优先，且提取是后台异步跑）
+            // 已有事实卡片：事实不多时**直接列进主提示词**，让模型在输出 facts 时顺带给合并结论
+            // （NEW/SUPERSEDES/SUPPLEMENT/SAME）→ 一次调用定稿，省掉"每条事实一次小调用"。
+            // 卡片太多就不列（列不下就会被迫截断、可能漏掉该合并的那条），那时退回"向量召回 + 小判定"。
             List<ContextTurn> promptRecent = recent;
             int backgroundTurns = backgroundUserTurns(recent, burstTexts == null ? 0 : burstTexts.size());
+            String factCards = factCardsForPrompt(userId);
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
-                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns))));
+                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns, factCards))));
             if (result == null) {
                 // 解析不出来**不能算"跑完了"**：那会把这段对话当成已处理、计数清零，它就再也不会被提取。
                 // 返回 false 走失败重试，并把原因记进审计（面板能看到）。
                 log.warn("记忆提取结果解析失败（本次不算已处理）user={} 窗口={} 轮", userId, recent.size());
                 trail[1] = "PARSE_FAILED";
                 return false;
+            }
+            if (factCards.isEmpty()) {
+                // 没带卡片清单时模型看不到已有事实，它给的 relation/targetSubject 不能信 → 清掉，走召回+判定
+                result = withoutFactDecisions(result);
             }
             trail[0] = verdictOf(result);
             log.info("记忆提取完成 user={} 窗口={}/{} 轮（背景 {}） facts={} episodes={} work={} core={} coreUpdates={} workUpdates={} completed={} duplicates={}",
@@ -330,13 +351,14 @@ public class MemoryExtractor {
                 return true;
             }
             List<ContextTurn> extractionRecent = recent;
+            ExtractionResult writeBack = result;
             mutationLock.runExclusive(userId, () -> {
                 if (!currentCheck.getAsBoolean()) {
                     log.info("记忆提取结果已过期，放弃写回 user={}", userId);
                     trail[1] = "STALE";
                     return;
                 }
-                apply(userId, result, extractionRecent);
+                apply(userId, writeBack, extractionRecent);
             });
             return true;
         } catch (Exception e) {
@@ -844,8 +866,57 @@ public class MemoryExtractor {
         return false;
     }
 
+    /**
+     * 把"当前有效的会变信息"渲染成卡片清单塞给模型（事实不多时）。
+     *
+     * <p>为什么要塞：模型要在**同一次调用**里判断"这条新事实跟已有的哪张卡是同一件事"。
+     * 不塞的话只能先让它吐事实、再算向量召回、再叫一次模型判关系（每条事实一次小调用，实测 4 条多花 0.015 元 + 15 秒）。
+     *
+     * <p>事实太多（超过 {@code memory.fact-prompt-cards}，默认 30 张）或渲染太长
+     * （超过 {@code memory.fact-prompt-cards-max-chars}，默认 4000 字）就返回空串 = 不带清单，
+     * 写回时自动退回"召回 + 小判定"那条路——硬塞进去必然要截断，截断就可能漏掉该合并的那条。
+     */
+    private String factCardsForPrompt(String userId) {
+        if (factService == null || userId == null || userId.isBlank() || factPromptCards <= 0) {
+            return "";
+        }
+        try {
+            List<MemoryFactService.FactCard> cards = factService.cards(userId, factPromptCards);
+            if (cards.isEmpty()) {
+                return "";
+            }
+            StringBuilder text = new StringBuilder();
+            for (MemoryFactService.FactCard card : cards) {
+                text.append("· ").append(card.subject()).append('：').append(card.valuesText()).append('\n');
+            }
+            if (text.length() > factPromptCardsMaxChars) {
+                log.info("已有事实卡片太长（{} 字），本次不带进提示词、退回召回+判定 user={}", text.length(), userId);
+                return "";
+            }
+            return text.toString();
+        } catch (Exception e) {
+            log.warn("读取事实卡片失败（本次不带进提示词）: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    /** 不带卡片清单时，把模型给的 relation/targetSubject 清掉（它看不到已有事实，那些字段不可信） */
+    private ExtractionResult withoutFactDecisions(ExtractionResult result) {
+        if (result == null || result.facts().isEmpty()) {
+            return result;
+        }
+        List<MemoryFactCandidate> cleaned = new ArrayList<>();
+        for (MemoryFactCandidate fact : result.facts()) {
+            cleaned.add(fact == null ? null : new MemoryFactCandidate(fact.subject(), fact.predicate(),
+                    fact.object(), fact.content(), fact.source(), fact.confidence(), fact.docMediaId(),
+                    fact.keywords(), fact.sourceMessageIds()));
+        }
+        return new ExtractionResult(result.episodes(), result.newWork(), result.coreCandidates(),
+                result.coreUpdates(), result.conflicts(), result.completedWork(), result.duplicates(), cleaned);
+    }
+
     private String buildPrompt(List<ContextTurn> recent, List<UserWorkMemory> existing, List<UserCoreMemory> cores,
-                               int backgroundTurns) {
+                               int backgroundTurns, String factCards) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是用户的长期记忆提取器。当前时间：")
                 .append(LocalDateTime.now(zone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
@@ -875,8 +946,18 @@ public class MemoryExtractor {
                         + "课表图这类信息请**逐条拆开**写，不要写成一句话塞很多件事。\n")
                 .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
                         + "（比如「那改成 305 吧」到底在改哪件事），不要只凭它们新建记忆；"
-                        + "只有当这次的新消息明确修正或延续了它们时，才按新消息的内容写。\n\n");
-        prompt.append("已存在的核心记忆：\n");
+                        + "只有当这次的新消息明确修正或延续了它们时，才按新消息的内容写。\n");
+        if (factCards != null && !factCards.isEmpty()) {
+            // 带了卡片清单才加这条规则：让模型**在同一次输出里**把合并结论给出来（省掉后续每条一次小调用）
+            prompt.append("15. 【facts 的合并】下面是系统现在记着的「会变的信息」。写 facts 时，如果这条跟某张卡片讲的是"
+                    + "**同一件事**，必须同时给出 relation 和 targetSubject：\n")
+                    .append("    - NEW：这件事没记过 → relation=NEW，targetSubject 留空。\n")
+                    .append("    - SUPERSEDES：同一件事的**同一个属性**、新值取代旧值（教室 303→305）→ targetSubject 抄那张卡片的名字。\n")
+                    .append("    - SUPPLEMENT：同一件事的**另一个属性**或额外细节（已有教室，新的是教师）→ targetSubject 抄那张卡片的名字。\n")
+                    .append("    - SAME：同一件事的**同一个值**（只是换了说法）→ targetSubject 抄那张卡片的名字，不要重复记一条。\n")
+                    .append("    targetSubject 必须**逐字照抄**卡片里冒号前面的那个名字，不要自己改写或缩写（改了就会被当成新的一件事）。\n");
+        }
+        prompt.append("\n已存在的核心记忆：\n");
         if (cores.isEmpty()) {
             prompt.append("（无）\n");
         } else {
@@ -900,6 +981,9 @@ public class MemoryExtractor {
                         .append('｜').append(memory.getKeywords() == null ? "" : memory.getKeywords())
                         .append("）\n");
             }
+        }
+        if (factCards != null && !factCards.isEmpty()) {
+            prompt.append("\n已记着的会变信息（写 facts 时按第 15 条给 relation / targetSubject）：\n").append(factCards);
         }
         prompt.append("\n最近对话：\n");
         int seenUserTurns = 0;
@@ -928,7 +1012,7 @@ public class MemoryExtractor {
                 .append("\"workConflicts\":[{\"existingId\":0,\"existingContent\":\"\",\"proposedContent\":\"\",\"validUntil\":\"\"}],")
                 .append("\"completedWorkItems\":[{\"existingId\":0,\"reason\":\"\"}],")
                 .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
-                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\"}],")
+                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"relation\":\"NEW\",\"targetSubject\":\"\"}],")
                 .append("\"duplicates\":[]}\n")
                 .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []）");
         return prompt.toString();
@@ -1063,7 +1147,8 @@ public class MemoryExtractor {
                     node.path("object").asText(""), node.path("content").asText(""),
                     node.path("source").asText("USER"),
                     boundedInt(node.path("confidence").asInt(defaultConfidence), 0, 100), docMediaId,
-                    stringList(node.path("keywords"), maxKeywords), sourceMessageIds(node.path("sourceMessageIds"))));
+                    stringList(node.path("keywords"), maxKeywords), sourceMessageIds(node.path("sourceMessageIds")),
+                    node.path("relation").asText(null), node.path("targetSubject").asText(null)));
         }
         return values;
     }

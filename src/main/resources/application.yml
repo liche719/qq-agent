@@ -337,6 +337,12 @@ memory:
   # 它问了就给宽一点，查一次只是一次向量检索的价钱；min-score 比写入时更低（宁可多给几条让它自己判断）
   fact-tool-recall-limit: ${MEMORY_FACT_TOOL_RECALL_LIMIT:8}
   fact-tool-min-score: ${MEMORY_FACT_TOOL_MIN_SCORE:0.3}
+  # 已有事实卡片要不要直接塞进主提示词（2026-09-18）：塞了就**一次调用定稿**——模型在同一次输出里
+  # 给出 relation（NEW/SUPERSEDES/SUPPLEMENT/SAME）和 targetSubject，省掉"每条事实再叫一次模型判关系"
+  # （实测 4 条事实那次多花 0.0146 元 + 15 秒）。超过这个张数、或渲染超过下面那个字数，就不塞，
+  # 写回时自动退回"向量召回 + 小判定"那条老路（硬塞必然截断，截断就可能漏掉该合并的那条）。
+  fact-prompt-cards: ${MEMORY_FACT_PROMPT_CARDS:30}
+  fact-prompt-cards-max-chars: ${MEMORY_FACT_PROMPT_CARDS_MAX_CHARS:4000}
   min-confidence: ${MEMORY_MIN_CONFIDENCE:60}
   default-work-priority: ${MEMORY_DEFAULT_WORK_PRIORITY:3}
   default-core-importance: ${MEMORY_DEFAULT_CORE_IMPORTANCE:5}

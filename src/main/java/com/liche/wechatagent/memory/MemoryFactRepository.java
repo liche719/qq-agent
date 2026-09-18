@@ -26,5 +26,8 @@ public interface MemoryFactRepository extends JpaRepository<MemoryFact, Long> {
     Optional<MemoryFact> findFirstByUserIdAndSubjectIgnoreCaseAndPredicateIgnoreCaseAndStatus(
             String userId, String subject, String predicate, String status);
 
+    /** 同一件事（subject 相同）的当前有效事实：用来沿用它的**原始拼法**，免得同一件事两种写法各成一张卡 */
+    Optional<MemoryFact> findFirstByUserIdAndSubjectIgnoreCaseAndStatus(String userId, String subject, String status);
+
     long countByUserIdAndStatus(String userId, String status);
 }
