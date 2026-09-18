@@ -1,11 +1,14 @@
 package com.liche.wechatagent.memory;
 
 import com.liche.wechatagent.agent.ContextTurn;
+import com.liche.wechatagent.config.EmbeddingClient;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +18,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Comparator;
@@ -30,47 +34,44 @@ import java.util.regex.Pattern;
 public class ConversationMemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationMemoryService.class);
-    private static final Pattern RETRIEVAL_TERM = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
     /** 记忆提取只看用户与机器人的对话行；工具调用的 system 行（call + result）不参与提取 */
     private static final List<String> EXTRACTION_ROLES = List.of("user", "assistant");
     private final ConversationMemoryRepository repository;
+    private final EmbeddingClient embeddingClient;
+    private final PgVectorStore vectorStore;
     private final int extractionLimit;
     private final int retrievalLimit;
-    private final int searchPerTerm;
     private final int retentionDays;
     private final int maxContentChars;
-    private final int maxRetrievalTerms;
     private final int forgetScanBatchSize;
-    private final List<String> retrievalNoise;
     private final ZoneId zone;
 
     @Autowired
     public ConversationMemoryService(ConversationMemoryRepository repository,
+                                     EmbeddingClient embeddingClient,
+                                     PgVectorStore vectorStore,
                                      @Value("${memory.conversation-extraction-limit:80}") int extractionLimit,
                                      @Value("${memory.conversation-retrieval-limit:2000}") int retrievalLimit,
-                                     @Value("${memory.conversation-search-per-term:16}") int searchPerTerm,
                                      @Value("${memory.conversation-retention-days:3650}") int retentionDays,
                                      @Value("${memory.conversation-max-content-chars:12000}") int maxContentChars,
                                      MemoryPolicyProperties policyProperties,
                                      @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.repository = repository;
+        this.embeddingClient = embeddingClient;
+        this.vectorStore = vectorStore;
         this.extractionLimit = Math.max(2, extractionLimit);
         this.retrievalLimit = Math.max(10, retrievalLimit);
-        this.searchPerTerm = Math.max(1, Math.min(100, searchPerTerm));
         this.retentionDays = Math.max(0, retentionDays);
         this.maxContentChars = Math.max(500, maxContentChars);
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
-        this.maxRetrievalTerms = bounded(policies.getConversationMaxRetrievalTerms(), 1, 64,
-                MemoryPolicyProperties.DEFAULT_CONVERSATION_MAX_RETRIEVAL_TERMS);
         this.forgetScanBatchSize = bounded(policies.getConversationForgetScanBatch(), 1, 10_000,
                 MemoryPolicyProperties.DEFAULT_CONVERSATION_FORGET_SCAN_BATCH);
-        this.retrievalNoise = policies.getConversationRetrievalNoise();
         this.zone = parseZone(timeZoneId);
     }
 
     ConversationMemoryService(ConversationMemoryRepository repository, int extractionLimit, int retrievalLimit,
                               int retentionDays, int maxContentChars) {
-        this(repository, extractionLimit, retrievalLimit, 16, retentionDays, maxContentChars,
+        this(repository, null, null, extractionLimit, retrievalLimit, retentionDays, maxContentChars,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
 
@@ -98,10 +99,136 @@ public class ConversationMemoryService {
             if (normalizedEventKey != null && repository.existsByUserIdAndEventKey(userId, normalizedEventKey)) {
                 return;
             }
-            repository.save(new ConversationMemory(userId, role.trim().toLowerCase(Locale.ROOT), normalizedEventKey,
-                    normalized, sourceMessageIds, sourceMediaIds, timestamp, expiresAt));
+            ConversationMemory saved = repository.save(new ConversationMemory(userId, role.trim().toLowerCase(Locale.ROOT),
+                    normalizedEventKey, normalized, sourceMessageIds, sourceMediaIds, timestamp, expiresAt));
+            indexVector(saved);
         } catch (Exception exception) {
             log.warn("持久化对话证据失败 user={} reason={}", userId, exception.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 给一条对话证据算向量（2026-09-18，P3）。
+     *
+     * <p>只给 user/assistant 正文算：工具调用那两条 system 记录只是轨迹，不是"说过的话"。
+     * 写发生在回复发出**之后**，所以这次 embedding 调用不会让用户多等。
+     */
+    private void indexVector(ConversationMemory record) {
+        if (record == null || record.getId() == null || embeddingClient == null || vectorStore == null
+                || !embeddingClient.isEnabled()) {
+            return;
+        }
+        String role = record.getRole() == null ? "" : record.getRole().toLowerCase(Locale.ROOT);
+        if (!"user".equals(role) && !"assistant".equals(role)) {
+            return;
+        }
+        float[] vector = embeddingClient.embedOne(record.getContent());
+        if (vector != null) {
+            vectorStore.saveEmbedding("conversation_memory", record.getId(), vector, embeddingClient.model());
+        }
+    }
+
+    /**
+     * 按语义取回该用户最相关的原始对话证据（top-K，只留相似度 ≥ {@code minScore} 的）。
+     *
+     * <p>取代了原来"最近窗口 + 按字面词 LIKE 捞旧记录"的 {@code relevantForRetrieval}：
+     * 那条路对无关问题也会塞满 1500 字旧对话，而且换个说法就捞不到。
+     */
+    public List<ConversationHit> searchByVector(String userId, float[] query, int limit, double minScore) {
+        if (!validUserId(userId) || vectorStore == null || query == null || query.length == 0 || limit <= 0) {
+            return List.of();
+        }
+        List<PgVectorStore.Hit> hits = vectorStore.search("conversation_memory", userId, query, limit, minScore);
+        if (hits.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, Double> scores = new LinkedHashMap<>();
+        for (PgVectorStore.Hit hit : hits) {
+            scores.put(hit.id(), hit.score());
+        }
+        LocalDateTime now = LocalDateTime.now(zone);
+        return new ArrayList<>(repository.findAllById(scores.keySet())).stream()
+                .filter(record -> record != null && userId.equals(record.getUserId()))
+                .filter(record -> notExpired(record, now))
+                .map(record -> new ConversationHit(record, scores.getOrDefault(record.getId(), 0d)))
+                .sorted(Comparator.comparingDouble(ConversationHit::score).reversed())
+                .toList();
+    }
+
+    /** 一条对话证据 + 它的余弦相似度（相似度只在"排序与文案"里用得到） */
+    public record ConversationHit(ConversationMemory record, double score) {
+    }
+
+    /**
+     * 启动时把存量对话证据的向量补齐一次（生产 1100+ 行，分批 500；失败只记日志）。
+     * 缺向量的行**不参与检索**（P3 没有字面兜底这条路），所以日志里要看得到补齐结果。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void backfillVectorsOnStartup() {
+        if (embeddingClient == null || vectorStore == null || !embeddingClient.isEnabled()) {
+            return;
+        }
+        int total = 0;
+        for (String userId : vectorStore.userIdsWithMissing("conversation_memory")) {
+            total += reindexMissing(userId, 500);
+        }
+        if (total > 0) {
+            log.info("对话证据向量补齐完成：{} 条", total);
+        }
+    }
+
+    /** 给"还没有向量"的对话证据补向量（一次最多 {@code max} 条，只补 user/assistant 正文） */
+    public int reindexMissing(String userId, int max) {
+        if (!validUserId(userId) || max <= 0 || embeddingClient == null || vectorStore == null
+                || !embeddingClient.isEnabled()) {
+            return 0;
+        }
+        try {
+            Set<Long> embedded = vectorStore.idsWithEmbedding("conversation_memory", userId);
+            List<ConversationMemory> pending = new ArrayList<>();
+            long lastId = 0L;
+            while (pending.size() < max) {
+                List<ConversationMemory> batch = repository.findByUserIdAndIdGreaterThanOrderByIdAsc(userId, lastId,
+                        PageRequest.of(0, Math.min(200, max)));
+                if (batch == null || batch.isEmpty()) {
+                    break;
+                }
+                for (ConversationMemory record : batch) {
+                    lastId = Math.max(lastId, record.getId() == null ? 0L : record.getId());
+                    if (record.getId() == null || embedded.contains(record.getId())) {
+                        continue;
+                    }
+                    String role = record.getRole() == null ? "" : record.getRole().toLowerCase(Locale.ROOT);
+                    if (!"user".equals(role) && !"assistant".equals(role)) {
+                        continue;
+                    }
+                    pending.add(record);
+                    if (pending.size() >= max) {
+                        break;
+                    }
+                }
+                if (batch.size() < Math.min(200, max)) {
+                    break;
+                }
+            }
+            if (pending.isEmpty()) {
+                return 0;
+            }
+            List<float[]> vectors = embeddingClient.embedAll(pending.stream()
+                    .map(ConversationMemory::getContent).toList());
+            if (vectors == null || vectors.size() != pending.size()) {
+                return 0;
+            }
+            // 工具轨迹那两条 system 行没有向量、永远会出现在"缺向量"里，所以这里的 max 只当"补多少条"用，
+            // 不做"补完就没有了"的判断——面板看的是 distinct 用户，不会因此反复扫。
+            for (int index = 0; index < pending.size(); index++) {
+                vectorStore.saveEmbedding("conversation_memory", pending.get(index).getId(), vectors.get(index),
+                        embeddingClient.model());
+            }
+            return pending.size();
+        } catch (Exception exception) {
+            log.warn("补齐对话证据向量失败 user={} reason={}", userId, exception.getClass().getSimpleName());
+            return 0;
         }
     }
 
@@ -173,70 +300,6 @@ public class ConversationMemoryService {
         } catch (Exception exception) {
             log.warn("按预算读取近期对话失败 user={} reason={}", userId, exception.getClass().getSimpleName());
             return List.of();
-        }
-    }
-
-    public List<ConversationMemory> recentForRetrieval(String userId) {
-        if (!validUserId(userId)) {
-            return List.of();
-        }
-        List<ConversationMemory> paged;
-        try {
-            List<ConversationMemory> source = repository.findByUserIdOrderByCreatedAtDesc(userId,
-                            PageRequest.of(0, retrievalLimit));
-            paged = source == null ? List.of() : source;
-        } catch (Exception exception) {
-            log.warn("读取历史对话失败 user={} reason={}", userId, exception.getClass().getSimpleName());
-            return List.of();
-        }
-        LocalDateTime now = LocalDateTime.now(zone);
-        return (paged == null ? List.<ConversationMemory>of() : paged).stream()
-                .filter(record -> record != null && userId.equals(record.getUserId()))
-                .filter(record -> notExpired(record, now))
-                .sorted(Comparator.comparing(ConversationMemory::getCreatedAt,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .limit(retrievalLimit)
-                .toList();
-    }
-
-    /**
-     * Retrieves a bounded recent window plus older records that contain a distinctive term from the current query.
-     * This keeps ordinary requests cheap while allowing an old topic to be recalled even after many newer messages.
-     */
-    public List<ConversationMemory> relevantForRetrieval(String userId, String query) {
-        if (!validUserId(userId)) {
-            return List.of();
-        }
-        LinkedHashMap<String, ConversationMemory> unique = new LinkedHashMap<>();
-        addRecentRecords(unique, userId);
-        searchHistoricalTerms(unique, userId, query);
-        return unique.values().stream()
-                .sorted(Comparator.comparing(ConversationMemory::getCreatedAt,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .toList();
-    }
-
-    // Adds the bounded recent conversation window to the retrieval candidates.
-    private void addRecentRecords(LinkedHashMap<String, ConversationMemory> target, String userId) {
-        for (ConversationMemory record : recentForRetrieval(userId)) {
-            putOwnedActive(target, userId, record);
-        }
-    }
-
-    // Searches older conversation evidence using distinctive terms from the current query.
-    private void searchHistoricalTerms(LinkedHashMap<String, ConversationMemory> target, String userId,
-                                       String query) {
-        for (String term : retrievalTerms(query)) {
-            try {
-                List<ConversationMemory> matches = repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(
-                        userId, likeLiteral(term), PageRequest.of(0, searchPerTerm));
-                if (matches != null) {
-                    matches.forEach(record -> putOwnedActive(target, userId, record));
-                }
-            } catch (Exception exception) {
-                log.debug("按历史关键词检索对话证据失败 user={} reason={}", userId,
-                        exception.getClass().getSimpleName());
-            }
         }
     }
 
@@ -314,74 +377,6 @@ public class ConversationMemoryService {
     private boolean notExpired(ConversationMemory record, LocalDateTime now) {
         return record != null && (record.getExpiresAt() == null
                 || record.getExpiresAt().isAfter(now));
-    }
-
-    private void putOwnedActive(LinkedHashMap<String, ConversationMemory> target, String userId,
-                                ConversationMemory record) {
-        if (record == null || !userId.equals(record.getUserId()) || !notExpired(record, LocalDateTime.now(zone))) {
-            return;
-        }
-        String key = record.getId() == null
-                ? record.getUserId() + "\u0000" + record.getEventKey() + "\u0000" + record.getCreatedAt()
-                : "id:" + record.getId();
-        target.putIfAbsent(key, record);
-    }
-
-    private List<String> retrievalTerms(String query) {
-        if (query == null || query.isBlank()) {
-            return List.of();
-        }
-        String cleaned = query;
-        for (String noise : retrievalNoise) {
-            cleaned = cleaned.replace(noise, " ");
-        }
-        cleaned = cleaned.replaceAll("[的了啊呀吗呢吧请帮问]", " ");
-        LinkedHashSet<String> candidates = new LinkedHashSet<>();
-        Matcher matcher = RETRIEVAL_TERM.matcher(cleaned);
-        while (matcher.find()) {
-            String term = matcher.group().trim();
-            if (term.length() < 2) {
-                continue;
-            }
-            if (term.length() <= 12) {
-                candidates.add(term);
-            }
-            for (int length = Math.min(6, term.length()); length >= 2; length--) {
-                for (int start = 0; start + length <= term.length(); start++) {
-                    candidates.add(term.substring(start, start + length));
-                }
-            }
-        }
-        return candidates.stream()
-                .filter(term -> term.length() >= 2)
-                .sorted(Comparator.comparingInt(String::length).reversed())
-                .limit(maxRetrievalTerms)
-                .toList();
-    }
-
-    /**
-     * 把关键词转成 LIKE 的**字面量**：`\`、`%`、`_` 前面加反斜杠。
-     *
-     * <p>Spring Data 的 {@code Containing} 会把它包成 {@code %term%} 送进 {@code like ?}，而 MySQL 默认的
-     * LIKE 转义符就是反斜杠（2026-09-15 在生产库核对过：`sql_mode` 没有 `NO_BACKSLASH_ESCAPES`）。
-     * 转义后用户消息里带的 `%`/`_` 只按字面量匹配——实测 `like '%_%'` 命中全表 924 行，
-     * 转义成 `'%\_%'` 后只剩 146 行（含真实下划线的那批）。
-     *
-     * <p>注：参数绑定本来就已经挡住注入，这一步挡的是**通配符把召回范围放大**。
-     */
-    private static String likeLiteral(String term) {
-        if (term == null || term.isEmpty()) {
-            return term;
-        }
-        StringBuilder escaped = new StringBuilder(term.length() + 8);
-        for (int index = 0; index < term.length(); index++) {
-            char ch = term.charAt(index);
-            if (ch == '\\' || ch == '%' || ch == '_') {
-                escaped.append('\\');
-            }
-            escaped.append(ch);
-        }
-        return escaped.toString();
     }
 
     private boolean validUserId(String userId) {

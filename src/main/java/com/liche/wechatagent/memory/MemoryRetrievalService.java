@@ -38,6 +38,9 @@ public class MemoryRetrievalService {
     private final EmbeddingClient embeddingClient;
     private final WorkMemoryVectorStore workVectorStore;
     private final double workVectorFloor;
+    private final double episodeVectorFloor;
+    private final double conversationVectorFloor;
+    private final int conversationRecallLimit;
     private final int historicalLimit;
     private final int minimumHistoricalScore;
     private final List<String> historyMarkers;
@@ -56,7 +59,10 @@ public class MemoryRetrievalService {
                                   WorkMemoryVectorStore workVectorStore,
                                   @Value("${memory.historical-retrieval-limit:8}") int historicalLimit,
                                   @Value("${memory.historical-min-score:3}") int minimumHistoricalScore,
-                                  @Value("${memory.work-vector-floor:0.5}") double workVectorFloor) {
+                                  @Value("${memory.work-vector-floor:0.45}") double workVectorFloor,
+                                  @Value("${memory.episode-vector-floor:0.45}") double episodeVectorFloor,
+                                  @Value("${memory.conversation-vector-floor:0.45}") double conversationVectorFloor,
+                                  @Value("${memory.conversation-recall-limit:6}") int conversationRecallLimit) {
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
         this.conversationMemoryService = conversationMemoryService;
@@ -65,6 +71,9 @@ public class MemoryRetrievalService {
         this.embeddingClient = embeddingClient;
         this.workVectorStore = workVectorStore;
         this.workVectorFloor = workVectorFloor <= 0 ? 0d : Math.min(1d, workVectorFloor);
+        this.episodeVectorFloor = episodeVectorFloor <= 0 ? 0d : Math.min(1d, episodeVectorFloor);
+        this.conversationVectorFloor = conversationVectorFloor <= 0 ? 0d : Math.min(1d, conversationVectorFloor);
+        this.conversationRecallLimit = Math.max(1, Math.min(32, conversationRecallLimit));
         this.historicalLimit = Math.max(1, historicalLimit);
         this.minimumHistoricalScore = Math.max(1, minimumHistoricalScore);
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
@@ -82,7 +91,7 @@ public class MemoryRetrievalService {
                            ConversationMemoryService conversationMemoryService,
                            StoredMediaRepository storedMediaRepository) {
         this(coreRepository, workRepository, conversationMemoryService,
-                null, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d);
+                null, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d, 0.5d, 0.5d, 6);
     }
 
     MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
@@ -91,7 +100,8 @@ public class MemoryRetrievalService {
                            EpisodicMemoryService episodicMemoryService,
                            StoredMediaRepository storedMediaRepository) {
         this(coreRepository, workRepository, conversationMemoryService,
-                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d);
+                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d, 0.5d,
+                0.5d, 6);
     }
 
     @Transactional
@@ -113,13 +123,15 @@ public class MemoryRetrievalService {
         String normalizedQuery = normalize(query);
         boolean historicalQuery = containsHistoryMarker(normalizedQuery);
         Map<Long, StoredMedia> linkedMedia = linkedMedia(userId);
+        // 一次算好"当前这句"的向量，工作记忆 / 情景记忆 / 历史对话三处共用（省调用，也保证口径一致）
+        float[] queryVector = embedQuery(userId, normalizedQuery);
 
         List<UserCoreMemory> cores = activeCoreCandidates(userId, normalizedQuery);
         List<UserCoreMemory> selectedCores = select(cores, UserCoreMemory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, coreMaxLoad), Math.max(1, coreMaxChars));
 
-        List<EpisodicMemory> episodeCandidates = activeEpisodeCandidates(userId, normalizedQuery);
+        List<EpisodicMemory> episodeCandidates = activeEpisodeCandidates(userId, queryVector);
         int totalWorkBudget = Math.max(1, workMaxChars);
         int episodeBudget = episodeCandidates.isEmpty() ? 0
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
@@ -130,7 +142,7 @@ public class MemoryRetrievalService {
         // 算不出向量的行就是不注入，所以写路径 + 启动补齐要保证活跃行都有向量。
         // 为什么不用"最近几轮拼成窗口"：实测过（3 轮）会把语义摊平——注入回涨到 13~15 条，连
         // "今天心情不错"都能捞出一堆课表，故窗口整块不做（详见 docs/memory-vector-plan.md §18）。
-        List<UserWorkMemory> relevantWork = rankWorkByRelevance(userId, normalizedQuery, activeWork);
+        List<UserWorkMemory> relevantWork = rankWorkByRelevance(userId, normalizedQuery, queryVector, activeWork);
         List<UserWorkMemory> selectedWork = select(relevantWork, UserWorkMemory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, workMaxLoad), activeWorkBudget);
@@ -148,7 +160,7 @@ public class MemoryRetrievalService {
                         >= minimumHistoricalScore)
                 || !episodeCandidates.isEmpty();
         List<HistoricalItem> historical = historicalItems(userId, normalizedQuery, historicalQuery,
-                hasRelevantActiveMemory, now);
+                hasRelevantActiveMemory, now, queryVector);
         String coreSection = format(selectedCores, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
         String workSection = format(selectedWork, memory -> "- " + memory.getContent()
@@ -168,21 +180,16 @@ public class MemoryRetrievalService {
         return new RetrievedMemory(coreSection, workSection);
     }
 
-    private List<EpisodicMemory> activeEpisodeCandidates(String userId, String normalizedQuery) {
-        if (episodicMemoryService == null || normalizedQuery == null || normalizedQuery.isBlank()) {
+    /**
+     * 情景记忆的候选（2026-09-18，P3）：改用**向量相似度**筛，和"换了说法也能找回来"一致。
+     * 原来按字面关键词打分，换个说法就完全找不到。
+     */
+    private List<EpisodicMemory> activeEpisodeCandidates(String userId, float[] queryVector) {
+        if (episodicMemoryService == null || queryVector == null) {
             return List.of();
         }
-        return episodicMemoryService.listActive(userId).stream()
+        return episodicMemoryService.rankByVector(userId, queryVector, episodeVectorFloor).stream()
                 .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
-                .filter(memory -> score(memory.getTitle() + " " + memory.getSummary(), memory.getKeywords(),
-                        normalizedQuery) >= minimumHistoricalScore)
-                .sorted(Comparator
-                        .comparingInt((EpisodicMemory memory) -> score(memory.getTitle() + " " + memory.getSummary(),
-                                memory.getKeywords(), normalizedQuery)).reversed()
-                        .thenComparing(EpisodicMemory::getImportance,
-                                Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(EpisodicMemory::getOccurredAt,
-                                Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
     }
 
@@ -233,22 +240,16 @@ public class MemoryRetrievalService {
      * {@code memory.work-vector-floor} 的一律丢弃——**不再用字面关键词把名额填满**。
      * 字面得分只留作同分时的次序（"都要做，结果一样就好"）。
      */
-    private List<UserWorkMemory> rankWorkByRelevance(String userId, String normalizedQuery,
+    private List<UserWorkMemory> rankWorkByRelevance(String userId, String normalizedQuery, float[] queryVector,
                                                      List<UserWorkMemory> candidates) {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
-        if (embeddingClient == null || workVectorStore == null || !embeddingClient.isEnabled()
-                || normalizedQuery == null || normalizedQuery.isBlank()) {
-            log.warn("没有可用的向量（embedding.api-key 未配？），本轮不注入工作记忆 user={}", userId);
+        if (queryVector == null) {
+            log.warn("没有可用的问题向量，本轮不注入工作记忆 user={}", userId);
             return List.of();
         }
-        float[] query = embeddingClient.embedOne(normalizedQuery);
-        if (query == null) {
-            log.warn("问题向量算不出来，本轮不注入工作记忆 user={}", userId);
-            return List.of();
-        }
-        Map<Long, Double> similarities = workVectorStore.scores(userId, query);
+        Map<Long, Double> similarities = workVectorStore.scores(userId, queryVector);
         List<UserWorkMemory> ranked = new ArrayList<>();
         for (UserWorkMemory memory : candidates) {
             if (memory == null || memory.getId() == null) {
@@ -277,8 +278,27 @@ public class MemoryRetrievalService {
     public record RetrievedMemory(String coreSection, String workSection) {
     }
 
+    /**
+     * 算"当前这句"的向量（工作记忆 / 情景记忆 / 历史对话三处共用）。
+     *
+     * <p>拿不到就返回 null——调用方按"这次没有可用的向量"处理（**不做字面兜底**，用户 2026-09-18 明确要求）。
+     */
+    private float[] embedQuery(String userId, String normalizedQuery) {
+        if (embeddingClient == null || workVectorStore == null || !embeddingClient.isEnabled()
+                || normalizedQuery == null || normalizedQuery.isBlank()) {
+            log.warn("没有可用的向量（embedding.api-key 未配？），本轮不注入向量相关的记忆 user={}", userId);
+            return null;
+        }
+        float[] query = embeddingClient.embedOne(normalizedQuery);
+        if (query == null) {
+            log.warn("问题向量算不出来，本轮不注入向量相关的记忆 user={}", userId);
+        }
+        return query;
+    }
+
     private List<HistoricalItem> historicalItems(String userId, String query, boolean historicalQuery,
-                                                  boolean hasRelevantActiveMemory, LocalDateTime now) {
+                                                  boolean hasRelevantActiveMemory, LocalDateTime now,
+                                                  float[] queryVector) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
@@ -295,28 +315,25 @@ public class MemoryRetrievalService {
             addHistorical(candidates, seen, memory.getContent(), status,
                     score(memory.getContent(), memory.getKeywords(), query), historicalQuery, memory.getUpdatedAt());
         }
-        if (conversationMemoryService != null && (historicalQuery || !hasRelevantActiveMemory)) {
-            List<ConversationMemory> records = conversationMemoryService.relevantForRetrieval(userId, query);
-            if (records == null || records.isEmpty()) {
-                records = conversationMemoryService.recentForRetrieval(userId);
-            }
-            if (records == null) {
-                records = List.of();
-            }
-            for (ConversationMemory record : records) {
+        // 2026-09-18（P3）：原来的"最近窗口 + 字面词 LIKE"整块删掉——那条路对无关问题也会塞满 1500 字旧对话。
+        // 现在按向量取 top-K、过门槛才进；字数上限由调用方按预算压（见 retrieve）。
+        if (conversationMemoryService != null && queryVector != null
+                && (historicalQuery || !hasRelevantActiveMemory)) {
+            List<ConversationMemoryService.ConversationHit> records = conversationMemoryService.searchByVector(
+                    userId, queryVector, conversationRecallLimit, conversationVectorFloor);
+            for (ConversationMemoryService.ConversationHit hit : records) {
+                ConversationMemory record = hit.record();
                 if (record == null || !ownedBy(record.getUserId(), userId)) {
                     continue;
                 }
-                int conversationScore = score(record.getContent(), "", query);
-                if (conversationScore >= minimumHistoricalScore) {
-                    String label = switch (record.getRole() == null ? "" : record.getRole().toLowerCase(Locale.ROOT)) {
-                        case "assistant" -> "助手曾回复";
-                        case "system" -> "工具执行记录";
-                        default -> "用户曾说";
-                    };
-                    addHistorical(candidates, seen, label + "：" + record.getContent(), "CONVERSATION",
-                            conversationScore, historicalQuery, record.getCreatedAt());
-                }
+                String label = switch (record.getRole() == null ? "" : record.getRole().toLowerCase(Locale.ROOT)) {
+                    case "assistant" -> "助手曾回复";
+                    case "system" -> "工具执行记录";
+                    default -> "用户曾说";
+                };
+                // 分数只是"排序用"：对话证据是余弦（0~1 → 0~100），工作记忆历史是字面分，两者不同尺度
+                addHistorical(candidates, seen, label + "：" + record.getContent(), "CONVERSATION",
+                        (int) Math.round(hit.score() * 100), historicalQuery, record.getCreatedAt());
             }
         }
         return candidates.stream()

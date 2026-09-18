@@ -429,8 +429,14 @@ memory:
   historical-min-score: ${MEMORY_HISTORICAL_MIN_SCORE:3}
   conversation-extraction-limit: ${MEMORY_CONVERSATION_EXTRACTION_LIMIT:80}
   conversation-retrieval-limit: ${MEMORY_CONVERSATION_RETRIEVAL_LIMIT:2000}
-  conversation-search-per-term: ${MEMORY_CONVERSATION_SEARCH_PER_TERM:16}
-  conversation-max-retrieval-terms: ${MEMORY_CONVERSATION_MAX_RETRIEVAL_TERMS:8}
+  # P3（2026-09-18）：原始对话与情景记忆也改成"按向量找回来"。
+  # 原来的 conversation-search-per-term / conversation-max-retrieval-terms 是"按字面词 LIKE 捞旧对话"的参数，
+  # 那条路已整块删除（对无关问题也会塞满 1500 字旧对话），这两个键不再被读。
+  conversation-vector-floor: ${MEMORY_CONVERSATION_VECTOR_FLOOR:0.45}
+  conversation-recall-limit: ${MEMORY_CONVERSATION_RECALL_LIMIT:6}
+  conversation-tool-recall-limit: ${MEMORY_CONVERSATION_TOOL_RECALL_LIMIT:8}
+  conversation-tool-min-score: ${MEMORY_CONVERSATION_TOOL_MIN_SCORE:0.45}
+  episode-vector-floor: ${MEMORY_EPISODE_VECTOR_FLOOR:0.45}
   conversation-forget-scan-batch: ${MEMORY_CONVERSATION_FORGET_SCAN_BATCH:250}
   conversation-retention-days: ${MEMORY_CONVERSATION_RETENTION_DAYS:3650}
   conversation-max-content-chars: ${MEMORY_CONVERSATION_MAX_CONTENT_CHARS:12000}

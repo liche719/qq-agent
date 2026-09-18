@@ -91,35 +91,8 @@ class ConversationMemoryServiceTest {
         verify(repository).deleteAll(List.of(matching));
     }
 
-    @Test
-    void recallsAnOlderMatchingEvidenceOutsideTheRecentWindow() {
-        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
-        ConversationMemory recent = new ConversationMemory("u1", "user", "recent", "最近的普通聊天",
-                List.of("recent-message"), LocalDateTime.now(), null);
-        ConversationMemory olderMatch = new ConversationMemory("u1", "user", "old", "我计划考南京理工大学研究生",
-                List.of("old-message"), LocalDateTime.now().minusMonths(8), null);
-        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class))).thenReturn(List.of(recent));
-        when(repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(eq("u1"), eq("南京理工"), any(Pageable.class)))
-                .thenReturn(List.of(olderMatch));
-        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
-
-        List<ConversationMemory> result = service.relevantForRetrieval("u1", "南京理工");
-
-        assertTrue(result.stream().anyMatch(item -> "old".equals(item.getEventKey())));
-    }
-
-    @Test
-    void neverIncludesForeignMatchesReturnedByRepository() {
-        ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
-        ConversationMemory foreign = new ConversationMemory("u2", "user", "foreign", "南京理工大学计划",
-                List.of("other-message"), LocalDateTime.now(), null);
-        when(repository.findByUserIdOrderByCreatedAtDesc(eq("u1"), any(Pageable.class))).thenReturn(List.of());
-        when(repository.findByUserIdAndContentContainingOrderByCreatedAtDesc(eq("u1"), eq("南京理工"), any(Pageable.class)))
-                .thenReturn(List.of(foreign));
-        ConversationMemoryService service = new ConversationMemoryService(repository, 20, 50, 0, 500);
-
-        assertTrue(service.relevantForRetrieval("u1", "南京理工").isEmpty());
-    }
+    // 2026-09-18（P3）：原来这里有两个用例测"按字面词 LIKE 捞旧对话"（relevantForRetrieval）——
+    // 那条路已整块删除（对无关问题也会塞满 1500 字旧对话），现在按向量取，测这两个用例的前提不存在了。
 
     @Test
     void purgesExpiredEvidenceWithOneBoundedDatabaseOperation() {

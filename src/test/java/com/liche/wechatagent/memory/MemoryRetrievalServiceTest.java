@@ -1,19 +1,50 @@
 package com.liche.wechatagent.memory;
 
+import com.liche.wechatagent.config.EmbeddingClient;
+import com.liche.wechatagent.config.MemoryPolicyProperties;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MemoryRetrievalServiceTest {
+
+    private static final float[] QUERY_VECTOR = new float[]{0.1f, 0.2f, 0.3f};
+
+    /** 2026-09-18（P2/P3）：三处"按向量挑"的层都需要一个可用的向量客户端，测试里统一给个桩。 */
+    private MemoryRetrievalService service(UserCoreMemoryRepository coreRepository,
+                                           UserWorkMemoryRepository workRepository,
+                                           ConversationMemoryService conversationService,
+                                           EpisodicMemoryService episodicService) {
+        EmbeddingClient embeddingClient = mock(EmbeddingClient.class);
+        when(embeddingClient.isEnabled()).thenReturn(true);
+        when(embeddingClient.embedOne(anyString())).thenReturn(QUERY_VECTOR);
+        WorkMemoryVectorStore workVectorStore = mock(WorkMemoryVectorStore.class);
+        when(workVectorStore.scores(anyString(), any())).thenReturn(Map.of());
+        return new MemoryRetrievalService(coreRepository, workRepository, conversationService, episodicService, null,
+                new MemoryPolicyProperties(), embeddingClient, workVectorStore, 8, 3, 0.45d, 0.45d, 0.45d, 6);
+    }
+
+    private List<ConversationMemoryService.ConversationHit> hits(ConversationMemory... records) {
+        List<ConversationMemoryService.ConversationHit> hits = new ArrayList<>();
+        for (ConversationMemory record : records) {
+            hits.add(new ConversationMemoryService.ConversationHit(record, 0.72d));
+        }
+        return hits;
+    }
 
     @Test
     void recallsDurableConversationOutsideTheShortContextWindow() {
@@ -28,9 +59,9 @@ class MemoryRetrievalServiceTest {
         }
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(conversationService.recentForRetrieval("u1")).thenReturn(records);
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, null);
+        when(conversationService.searchByVector(anyString(), any(), anyInt(), anyDouble()))
+                .thenReturn(hits(records.get(0)));
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前说过的南京理工考试计划",
                 4, 1000, 4, 1000);
@@ -47,9 +78,9 @@ class MemoryRetrievalServiceTest {
                 List.of(), LocalDateTime.now(), null);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(conversationService.recentForRetrieval("u1")).thenReturn(List.of(foreign));
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, null);
+        when(conversationService.searchByVector(anyString(), any(), anyInt(), anyDouble()))
+                .thenReturn(hits(foreign));
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的秘密",
                 4, 1000, 4, 1000);
@@ -69,11 +100,8 @@ class MemoryRetrievalServiceTest {
         expired.setStatus(MemoryStatus.COMPLETED.name());
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of(expired));
-        when(conversationService.relevantForRetrieval("u1", "之前的南京理工复习安排"))
-                .thenReturn(List.of());
-        when(conversationService.recentForRetrieval("u1")).thenReturn(List.of());
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, null);
+        when(conversationService.searchByVector(anyString(), any(), anyInt(), anyDouble())).thenReturn(List.of());
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的南京理工复习安排",
                 4, 1000, 4, 1000);
@@ -90,10 +118,9 @@ class MemoryRetrievalServiceTest {
                 "南京理工".repeat(200), List.of(), LocalDateTime.now().minusMonths(1), null);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(conversationService.relevantForRetrieval("u1", "之前的南京理工"))
-                .thenReturn(List.of(evidence));
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, null);
+        when(conversationService.searchByVector(anyString(), any(), anyInt(), anyDouble()))
+                .thenReturn(hits(evidence));
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的南京理工",
                 4, 1000, 4, 180);
@@ -111,14 +138,13 @@ class MemoryRetrievalServiceTest {
         goal.setId(1L);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of(goal));
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, null);
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "南京理工考研目标",
                 4, 1000, 4, 1000);
 
         assertTrue(result.coreSection().contains("南京理工大学研究生"));
-        verify(conversationService, never()).relevantForRetrieval("u1", "南京理工考研目标");
+        verify(conversationService, never()).searchByVector(anyString(), any(), anyInt(), anyDouble());
     }
 
     @Test
@@ -134,9 +160,9 @@ class MemoryRetrievalServiceTest {
                 "EXPERIENCE", 5, 90, LocalDateTime.now(), MemoryProvenance.userExplicit(List.of("m2"), List.of()));
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(episodicService.listActive("u1")).thenReturn(List.of(owned, foreign));
-        MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                conversationService, episodicService, null);
+        // 2026-09-18（P3）：情景记忆改成按向量筛（rankByVector），租户隔离仍由检索服务这道过滤器兜住
+        when(episodicService.rankByVector(anyString(), any(), anyDouble())).thenReturn(List.of(owned, foreign));
+        MemoryRetrievalService service = service(coreRepository, workRepository, conversationService, episodicService);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "上次打印申请表为什么着急",
                 4, 1000, 4, 1000);

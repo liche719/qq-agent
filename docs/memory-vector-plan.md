@@ -579,3 +579,28 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 **顺带清掉 3 条互相矛盾的老行**（`deploy/postgres/data-20260918-supersede-conflicting-work-memory.sql`）：`#29`/`#30`（教务系统"必须 VPN / 403"的旧结论）被 `#31`（jw 校外可直接打开、jwc 才需 VPN）取代，`#32`（女友简版）被 `#33`（含班级/课程/教室）取代 → 标 `SUPERSEDED` + 写变更日志（**不 DELETE**，回滚＝把 status 改回 ACTIVE）。清完之后问"教务系统在校外打不开"，模型从"事实库查不到、以你手上的通知为准"（打太极）变成直接给两个入口和各自要不要 VPN。`#19`/`#36`/`#50` 是"一条记多事"的混合条目，整行撤会丢信息，**没动**。
 
 **为什么不清掉工作层的其它重复**：工作层没有事实层那套 `SUPERSEDES`/同槽合并（那是事实层的机制）。这次的取舍是"只撤被完整取代的"，更大范围的去重应该由提取规则 + 事实层承接，不在这一步做。
+
+## 19. 原始对话与情景记忆也按向量检索 + `searchConversation` 工具（P3，2026-09-18；已上线并实测）
+
+**要解决什么**：`conversation_memory`（生产 1100+ 行原始对话）和 `episodic_memory` 还在靠**字面**匹配。最难受的表现是历史兜底：没有任何活跃记忆匹配时，系统按字面词捞旧对话并把**1500 字**硬灌进提示词——实测"今天心情不错，随便聊聊"这种毫无信息量的消息也会被灌满旧课表。而且模型**没有手**：它只能看注入给它的东西，没法自己翻旧账。
+
+**做了什么**
+1. `deploy/postgres/V15__conversation_and_episode_embedding.sql`：`conversation_memory` 与 `episodic_memory` 各加 `embedding vector(1024)` + `embedding_model` + HNSW（不映射进实体，同 V11/V14）。
+2. 新的 `PgVectorStore`：**通用**的 pgvector 读写（写向量 / 打分 / top-K / 缺向量统计），表名参数化 + 白名单。**事实层与工作记忆那两个 store 这次没动**（已验证的路径不碰），以后要合并把它们改成委托本类即可。
+3. 写路径：对话证据落库后给 **user/assistant 正文**算一次向量（工具轨迹那些 system 行不算——它们只是执行记录，全库 542 行永远没有向量，这是设计而不是漏）；情景记忆落库/合并时算一次。都发生在回复发出**之后**，用户无感。
+4. 启动补齐：`ConversationMemoryService` / `EpisodicMemoryService` 各在 `ApplicationReadyEvent` 分批补存量（本地实测 `对话证据向量补齐完成：571 条`，user/assistant 行补齐率 100%）。
+5. 检索：情景记忆的候选改成 `rankByVector`（向量 ≥ 门槛）；**历史兜底那条 LIKE 路线整块删除**（`relevantForRetrieval` / `recentForRetrieval` / `searchHistoricalTerms` / `retrievalTerms` / `likeLiteral` 以及 `conversation-search-per-term`、`conversation-max-retrieval-terms` 两个配置键），改成"向量 top-K 且 ≥ 门槛"。
+6. 新工具 **`searchConversation(query)`**（只读、无副作用）：模型自己按语义搜原始对话，返回带时间的片段。
+
+**实测（本地 rehearsal + 真向量模型 + 真 DeepSeek）**
+
+| 探针 | 改前 work 注入 | 改后 | 说明 |
+|---|---|---|---|
+| 今天心情不错，随便聊聊 | 1500 字（旧对话灌满） | **274 字** | 只剩与这句语义相关的几轮历史 |
+| 量子计算退相干时间（从没聊过） | 1500 字 | **62 字** | 只留一条字面命中的过期工作记忆，对话证据一条不进 |
+| 帮我搜我们以前聊过的考研目标 | — | 1494 字 + **工具调用** | 模型主动调 `searchConversation`，按时间列出 9-01 的旧轮 |
+| 之前说的挂科重修，我原话是怎么说的 | — | 927 字 + **工具调用** | 工具返回 7 条旧轮，模型据此复述（并如实说明"这轮返回的几乎都是我当时的回复"） |
+
+`searchConversation` 的工具轨迹在库里可查（`tool=searchConversation phase=call/result`）：两次调用的 query 是模型自己组织的（`考研目标 目标院校 分数`、`挂科重修 体育 走在前列的广东实践`），返回 5~7 条真实旧轮。
+
+**已知边界**：① 工具轨迹（system 行）永不参与语义检索，所以"工具执行记录"标签只可能来自工作记忆的历史条目；② 情景记忆生产上只有 19 行、本地副本 0 行，`episode-vector-floor` 还没在真实 episodes 数据上校准过（现在与 work/conversation 同用 0.45）；③ 三个向量 store（fact / work / 通用）有重复代码，合并留作后续机械改动。
