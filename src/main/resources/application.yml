@@ -512,6 +512,11 @@ alert:
   disk-free-min-bytes: ${ALERT_DISK_FREE_MIN_BYTES:2147483648}
   heap-used-max-percent: ${ALERT_HEAP_USED_MAX_PERCENT:85}
   startup-grace-seconds: ${ALERT_STARTUP_GRACE_SECONDS:120}
+  # 记忆提取的两条告警（2026-09-18 加）：提取跑在后台，出问题时用户完全感觉不到，所以让它主动报
+  # 连续失败几次告警（0=不检查）；单次失败会自己重试，连续两次才是真问题（多半是思考吃满额度导致解析失败）
+  memory-failure-streak: ${ALERT_MEMORY_FAILURE_STREAK:2}
+  # 当天提取花费超过多少元告警（0=不检查）；正常量级 0.3~0.4 元/天
+  memory-daily-cost-yuan: ${ALERT_MEMORY_DAILY_COST_YUAN:2.0}
 
 management:
   access:

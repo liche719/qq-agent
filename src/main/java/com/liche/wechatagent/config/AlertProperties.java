@@ -20,6 +20,14 @@ public class AlertProperties {
     private int heapUsedMaxPercent = 85;
     /** 启动后多久才开始检查（避免重启瞬间网关还没连上就误报） */
     private int startupGraceSeconds = 120;
+    /**
+     * 记忆提取连续失败几次就告警（2026-09-18 加）。默认 2 —— 单次失败会自己重试，连续两次说明真出问题了
+     * （最常见是"思考把 max_tokens 吃满 → 正文空 → JSON 解析失败"，面板里记 PARSE_FAILED）。
+     * 0 = 不检查这条。
+     */
+    private int memoryFailureStreak = 2;
+    /** 记忆提取**当天**累计花费超过多少元就告警（0 = 不检查）。默认 2 元；正常量级是 0.3~0.4 元/天 */
+    private double memoryDailyCostYuan = 2.0d;
 
     public boolean isEnabled() {
         return enabled;
@@ -75,5 +83,21 @@ public class AlertProperties {
 
     public void setStartupGraceSeconds(int startupGraceSeconds) {
         this.startupGraceSeconds = Math.max(0, startupGraceSeconds);
+    }
+
+    public int getMemoryFailureStreak() {
+        return memoryFailureStreak;
+    }
+
+    public void setMemoryFailureStreak(int memoryFailureStreak) {
+        this.memoryFailureStreak = Math.max(0, memoryFailureStreak);
+    }
+
+    public double getMemoryDailyCostYuan() {
+        return memoryDailyCostYuan;
+    }
+
+    public void setMemoryDailyCostYuan(double memoryDailyCostYuan) {
+        this.memoryDailyCostYuan = Math.max(0d, memoryDailyCostYuan);
     }
 }

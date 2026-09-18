@@ -180,6 +180,9 @@ services:
       ALERT_ENABLED: ${ALERT_ENABLED:-false}
       ALERT_QQ_OPENID: ${ALERT_QQ_OPENID:-}
       ALERT_REPEAT_MINUTES: ${ALERT_REPEAT_MINUTES:-30}
+      # 记忆提取告警（2026-09-18）：连续失败几次、当天花费超多少元就报（0 = 各自关闭）
+      ALERT_MEMORY_FAILURE_STREAK: ${ALERT_MEMORY_FAILURE_STREAK:-2}
+      ALERT_MEMORY_DAILY_COST_YUAN: ${ALERT_MEMORY_DAILY_COST_YUAN:-2.0}
       # ICP 备案号（备案通过后填这里，页面底部会显示并链接工信部；留空则完全不显示）
       SITE_ICP: ${SITE_ICP:-}
       # 定时任务（到点执行并把结果发回）

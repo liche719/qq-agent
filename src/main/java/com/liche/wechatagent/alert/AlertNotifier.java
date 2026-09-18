@@ -13,6 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -181,7 +182,71 @@ public class AlertNotifier {
         if (percent >= properties.getHeapUsedMaxPercent()) {
             problems.put("heap", "堆内存占用过高：" + percent + "%");
         }
+
+        collectMemoryExtractionProblems(problems);
         return problems;
+    }
+
+    /**
+     * 记忆提取的两条告警（2026-09-18 按用户要求加）。
+     *
+     * <p>为什么需要：提取跑在后台，出问题（模型输出被思考吃满 → JSON 解析失败、或费用异常）时
+     * **用户完全感觉不到**——面板能看到 `PARSE_FAILED` 和今日花费，但没人会天天去看。
+     *
+     * <p>两条规则：
+     * <ol>
+     *   <li><b>连续失败</b>：最近 {@code alert.memory-failure-streak}（默认 2）次都是失败 → 告警。
+     *       单次失败自己会重试，连续两次才是真问题。</li>
+     *   <li><b>当天花费</b>：今日累计超过 {@code alert.memory-daily-cost-yuan}（默认 2 元）→ 告警。
+     *       正常量级 0.3~0.4 元/天，超了多半是提取次数或窗口失控。</li>
+     * </ol>
+     * 任何查询异常都静默跳过（告警系统自己不能把主流程带崩）。
+     */
+    private void collectMemoryExtractionProblems(Map<String, String> problems) {
+        if (properties.getMemoryFailureStreak() > 0) {
+            try {
+                List<Map<String, Object>> recent = jdbc.queryForList(
+                        "select skip_reason from memory_extraction_run order by created_at desc limit ?",
+                        properties.getMemoryFailureStreak());
+                if (recent.size() >= properties.getMemoryFailureStreak()) {
+                    String lastReason = null;
+                    boolean allFailed = true;
+                    for (Map<String, Object> row : recent) {
+                        Object reason = row.get("skip_reason");
+                        String text = reason == null ? "" : reason.toString();
+                        if (!"FAILED".equals(text) && !"PARSE_FAILED".equals(text)) {
+                            allFailed = false;
+                            break;
+                        }
+                        if (lastReason == null) {
+                            lastReason = text;
+                        }
+                    }
+                    if (allFailed) {
+                        problems.put("memory-extract-fail", "记忆提取连续 " + recent.size() + " 次失败（最近："
+                                + ("PARSE_FAILED".equals(lastReason) ? "模型输出没解析出来（多半是思考吃满额度）" : "调用失败")
+                                + "），去面板「记忆」页的提取记录看看");
+                    }
+                }
+            } catch (RuntimeException exception) {
+                log.debug("记忆提取失败检查跳过：{}", exception.toString());
+            }
+        }
+        if (properties.getMemoryDailyCostYuan() > 0) {
+            try {
+                LocalDateTime todayStart = LocalDate.now(zone).atStartOfDay();
+                Double cost = jdbc.queryForObject(
+                        "select coalesce(sum(cost_yuan), 0) from memory_extraction_run where created_at >= ?",
+                        Double.class, todayStart);
+                double total = cost == null ? 0d : cost;
+                if (total > properties.getMemoryDailyCostYuan()) {
+                    problems.put("memory-cost", String.format("记忆提取今日已花 %.2f 元（阈值 %.2f 元）",
+                            total, properties.getMemoryDailyCostYuan()));
+                }
+            } catch (RuntimeException exception) {
+                log.debug("记忆提取花费检查跳过：{}", exception.toString());
+            }
+        }
     }
 
     private boolean deliver(String text) {
