@@ -170,7 +170,15 @@ public class ConversationMemoryService {
         }
         int total = 0;
         for (String userId : vectorStore.userIdsWithMissing("conversation_memory")) {
-            total += reindexMissing(userId, 500);
+            // 一个用户可能远超一批（生产机主 678 条对话正文）：**补到没有为止**，否则剩下的要等下次重启才可见。
+            // 20 批 = 1 万条上限；每批"补不满一批"就跳出，失败返回 0 也跳出，不会死循环。
+            for (int pass = 0; pass < 20; pass++) {
+                int done = reindexMissing(userId, 500);
+                total += done;
+                if (done < 500) {
+                    break;
+                }
+            }
         }
         if (total > 0) {
             log.info("对话证据向量补齐完成：{} 条", total);
