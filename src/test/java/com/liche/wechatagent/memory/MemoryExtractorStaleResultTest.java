@@ -23,7 +23,6 @@ class MemoryExtractorStaleResultTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         AtomicBoolean current = new AtomicBoolean(true);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(new ContextTurn("user", "我要考南京理工大学研究生")));
         when(workMemoryService.listActive("u1")).thenReturn(List.of());
@@ -33,7 +32,7 @@ class MemoryExtractorStaleResultTest {
             return "{\"newWorkItems\":[],\"coreCandidates\":[{\"content\":\"用户计划考南京理工大学研究生\"}],\"coreUpdates\":[],\"workConflicts\":[],\"completedWorkItems\":[],\"duplicates\":[]}";
         });
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20);
+                coreMemoryService, new ObjectMapper(), 20);
 
         extractor.extract("u1", current::get);
 

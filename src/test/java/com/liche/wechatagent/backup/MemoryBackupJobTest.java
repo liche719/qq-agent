@@ -7,7 +7,6 @@ import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import com.liche.wechatagent.memory.EpisodicMemory;
 import com.liche.wechatagent.memory.EpisodicMemoryRepository;
 import com.liche.wechatagent.memory.MemoryProvenance;
-import com.liche.wechatagent.memory.MemoryArchiveRepository;
 import com.liche.wechatagent.memory.MemoryChangeLog;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.UserCoreMemory;
@@ -47,21 +46,19 @@ class MemoryBackupJobTest {
         UserProfileRepository profiles = mock(UserProfileRepository.class);
         UserCoreMemoryRepository cores = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository work = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archives = mock(MemoryArchiveRepository.class);
         MemoryChangeLogRepository changeLogs = mock(MemoryChangeLogRepository.class);
         ReminderTaskRepository reminders = mock(ReminderTaskRepository.class);
         StoredMediaRepository media = mock(StoredMediaRepository.class);
         when(profiles.findAll()).thenReturn(List.of(profile));
         when(profiles.findById(userId)).thenReturn(Optional.of(profile));
         when(cores.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of());
-        when(work.findByUserIdAndArchivedFalse(userId)).thenReturn(List.of());
-        when(archives.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of());
+        when(work.findByUserId(userId)).thenReturn(List.of());
         when(changeLogs.findByUserIdOrderByCreatedAtDesc(any(), any())).thenReturn(List.of());
         when(reminders.findByUserIdAndStatus(userId, "PENDING")).thenReturn(List.of());
         when(media.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of());
 
         Path backupRoot = tempDirectory.resolve("backup");
-        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, archives, changeLogs, reminders, media,
+        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, changeLogs, reminders, media,
                 new ObjectMapper().findAndRegisterModules(), backupRoot.toString(), 30,
                 tempDirectory.resolve("stored-media").toString());
 
@@ -90,21 +87,19 @@ class MemoryBackupJobTest {
         UserProfileRepository profiles = mock(UserProfileRepository.class);
         UserCoreMemoryRepository cores = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository work = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archives = mock(MemoryArchiveRepository.class);
         MemoryChangeLogRepository changeLogs = mock(MemoryChangeLogRepository.class);
         ReminderTaskRepository reminders = mock(ReminderTaskRepository.class);
         StoredMediaRepository media = mock(StoredMediaRepository.class);
         when(profiles.findAll()).thenReturn(List.of(profile));
         when(profiles.findById(userId)).thenReturn(Optional.of(profile));
         when(cores.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of(core));
-        when(work.findByUserIdAndArchivedFalse(userId)).thenReturn(List.of());
-        when(archives.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of());
+        when(work.findByUserId(userId)).thenReturn(List.of());
         when(changeLogs.findByUserIdOrderByCreatedAtDesc(any(), any())).thenReturn(List.of(change));
         when(reminders.findByUserIdAndStatus(userId, "PENDING")).thenReturn(List.of());
         when(media.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of());
         Path backupRoot = tempDirectory.resolve("privacy-backup");
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, archives, changeLogs, reminders, media,
+        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, changeLogs, reminders, media,
                 mapper, backupRoot.toString(), 30, tempDirectory.resolve("stored-media").toString());
 
         job.backupAll();
@@ -137,7 +132,6 @@ class MemoryBackupJobTest {
         UserProfileRepository profiles = mock(UserProfileRepository.class);
         UserCoreMemoryRepository cores = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository work = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archives = mock(MemoryArchiveRepository.class);
         MemoryChangeLogRepository changeLogs = mock(MemoryChangeLogRepository.class);
         ReminderTaskRepository reminders = mock(ReminderTaskRepository.class);
         StoredMediaRepository media = mock(StoredMediaRepository.class);
@@ -146,8 +140,7 @@ class MemoryBackupJobTest {
         when(profiles.findById(userId)).thenReturn(Optional.of(owner));
         when(profiles.findById(otherUserId)).thenReturn(Optional.of(other));
         when(cores.findByUserIdOrderByCreatedAtAsc(any())).thenReturn(List.of());
-        when(work.findByUserIdAndArchivedFalse(any())).thenReturn(List.of());
-        when(archives.findByUserIdOrderByCreatedAtDesc(any())).thenReturn(List.of());
+        when(work.findByUserId(any())).thenReturn(List.of());
         when(changeLogs.findByUserIdOrderByCreatedAtDesc(any(), any())).thenReturn(List.of());
         when(reminders.findByUserIdAndStatus(any(), eq("PENDING"))).thenReturn(List.of());
         when(media.findByUserIdOrderByCreatedAtAsc(any())).thenReturn(List.of());
@@ -155,7 +148,7 @@ class MemoryBackupJobTest {
         when(conversations.findByUserIdOrderByCreatedAtDesc(eq(otherUserId), any())).thenReturn(List.of(foreignEvidence));
         Path backupRoot = tempDirectory.resolve("conversation-backup");
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, archives, changeLogs, reminders, media,
+        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, changeLogs, reminders, media,
                 conversations, mapper, backupRoot.toString(), 30, 1000,
                 tempDirectory.resolve("stored-media").toString());
 
@@ -204,7 +197,6 @@ class MemoryBackupJobTest {
         UserProfileRepository profiles = mock(UserProfileRepository.class);
         UserCoreMemoryRepository cores = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository work = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archives = mock(MemoryArchiveRepository.class);
         MemoryChangeLogRepository changeLogs = mock(MemoryChangeLogRepository.class);
         ReminderTaskRepository reminders = mock(ReminderTaskRepository.class);
         StoredMediaRepository media = mock(StoredMediaRepository.class);
@@ -216,8 +208,7 @@ class MemoryBackupJobTest {
         when(profiles.findAll()).thenReturn(List.of(profile));
         when(profiles.findById(userId)).thenReturn(Optional.of(profile));
         when(cores.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of());
-        when(work.findByUserIdAndArchivedFalse(userId)).thenReturn(List.of());
-        when(archives.findByUserIdOrderByCreatedAtDesc(userId)).thenReturn(List.of());
+        when(work.findByUserId(userId)).thenReturn(List.of());
         when(changeLogs.findByUserIdOrderByCreatedAtDesc(any(), any())).thenReturn(List.of());
         when(reminders.findByUserIdAndStatus(userId, "PENDING")).thenReturn(List.of());
         when(media.findByUserIdOrderByCreatedAtAsc(userId)).thenReturn(List.of());
@@ -225,7 +216,7 @@ class MemoryBackupJobTest {
         when(episodes.findByUserIdOrderByOccurredAtDesc(userId)).thenReturn(List.of(episode));
         Path backupRoot = tempDirectory.resolve("episode-backup");
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, archives, changeLogs, reminders, media,
+        MemoryBackupJob job = new MemoryBackupJob(profiles, cores, work, changeLogs, reminders, media,
                 conversations, episodes, mapper, backupRoot.toString(), 30, 1000,
                 tempDirectory.resolve("stored-media").toString());
 

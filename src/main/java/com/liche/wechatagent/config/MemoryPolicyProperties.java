@@ -27,9 +27,6 @@ public class MemoryPolicyProperties {
     public static final int DEFAULT_LINKED_MEDIA_MAX_PER_MEMORY = 3;
     public static final int DEFAULT_LINKED_MEDIA_SUMMARY_MAX_CHARS = 80;
     public static final int DEFAULT_HISTORICAL_ITEM_MAX_CHARS = 1_200;
-    public static final int DEFAULT_ARCHIVE_SUMMARY_TARGET_CHARS = 100;
-    public static final int DEFAULT_ARCHIVE_SUMMARY_MAX_CHARS = 1_000;
-    public static final int DEFAULT_ARCHIVE_SUMMARY_CONFIDENCE = 70;
     public static final int DEFAULT_EXTRACTION_RECENT_TURNS = 20;
     public static final int DEFAULT_MIN_CONFIDENCE = 60;
     public static final int DEFAULT_WORK_PRIORITY = 3;
@@ -55,9 +52,6 @@ public class MemoryPolicyProperties {
     private int linkedMediaMaxPerMemory = DEFAULT_LINKED_MEDIA_MAX_PER_MEMORY;
     private int linkedMediaSummaryMaxChars = DEFAULT_LINKED_MEDIA_SUMMARY_MAX_CHARS;
     private int historicalItemMaxChars = DEFAULT_HISTORICAL_ITEM_MAX_CHARS;
-    private int archiveSummaryTargetChars = DEFAULT_ARCHIVE_SUMMARY_TARGET_CHARS;
-    private int archiveSummaryMaxChars = DEFAULT_ARCHIVE_SUMMARY_MAX_CHARS;
-    private int archiveSummaryConfidence = DEFAULT_ARCHIVE_SUMMARY_CONFIDENCE;
     private int extractionRecentTurns = DEFAULT_EXTRACTION_RECENT_TURNS;
     private int minConfidence = DEFAULT_MIN_CONFIDENCE;
     private int defaultWorkPriority = DEFAULT_WORK_PRIORITY;
@@ -163,29 +157,8 @@ public class MemoryPolicyProperties {
         this.historicalItemMaxChars = historicalItemMaxChars;
     }
 
-    public int getArchiveSummaryTargetChars() {
-        return archiveSummaryTargetChars;
-    }
 
-    public void setArchiveSummaryTargetChars(int archiveSummaryTargetChars) {
-        this.archiveSummaryTargetChars = archiveSummaryTargetChars;
-    }
 
-    public int getArchiveSummaryMaxChars() {
-        return archiveSummaryMaxChars;
-    }
-
-    public void setArchiveSummaryMaxChars(int archiveSummaryMaxChars) {
-        this.archiveSummaryMaxChars = archiveSummaryMaxChars;
-    }
-
-    public int getArchiveSummaryConfidence() {
-        return archiveSummaryConfidence;
-    }
-
-    public void setArchiveSummaryConfidence(int archiveSummaryConfidence) {
-        this.archiveSummaryConfidence = archiveSummaryConfidence;
-    }
 
     public int getExtractionRecentTurns() {
         return extractionRecentTurns;

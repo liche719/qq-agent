@@ -159,7 +159,7 @@ public class MemoryManagementService {
         MemoryForgetService.ForgetOutcome outcome = memoryForgetService.forget(userId, layer, id);
         String text = "已彻底遗忘该记忆：它不会再作为长期记忆或关联短期上下文提供给 Agent；审计记录不保留正文。";
         if (outcome.removedRecordCount() > 1) {
-            text += "同时清理了 " + (outcome.removedRecordCount() - 1) + " 条关联归档记录。";
+            text += "同时清理了 " + (outcome.removedRecordCount() - 1) + " 条关联记录。";
         }
         if (outcome.legacyContextReset()) {
             text += "这条旧记忆没有来源标记，为避免它被重新提取，当前短期会话上下文也已清理。";

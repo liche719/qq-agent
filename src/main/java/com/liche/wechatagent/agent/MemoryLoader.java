@@ -154,7 +154,7 @@ public class MemoryLoader {
         List<com.liche.wechatagent.memory.UserCoreMemory> coreCandidates = withinBudget(cores,
                 com.liche.wechatagent.memory.UserCoreMemory::getContent, coreMaxLoad, coreMaxChars);
 
-        List<UserWorkMemory> active = new ArrayList<>(workRepository.findByUserIdAndArchivedFalse(userId).stream()
+        List<UserWorkMemory> active = new ArrayList<>(workRepository.findByUserId(userId).stream()
                 .filter(memory -> userId != null && userId.equals(memory.getUserId()))
                 .filter(memory -> WorkMemoryService.isActive(memory, now))
                 .toList());

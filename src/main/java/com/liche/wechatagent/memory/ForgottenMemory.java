@@ -12,7 +12,4 @@ public record ForgottenMemory(String layer, Long id, String content, String sour
         sourceMessageIds = sourceMessageIds == null ? List.of() : List.copyOf(sourceMessageIds);
     }
 
-    public boolean isArchiveSummary() {
-        return "WORK".equals(layer) && "archive_summary".equalsIgnoreCase(source);
-    }
 }

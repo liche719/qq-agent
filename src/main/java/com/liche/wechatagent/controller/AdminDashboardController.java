@@ -96,9 +96,8 @@ public class AdminDashboardController {
         collect(out, moduleErrors, "conversations", conversations::count);
         collect(out, moduleErrors, "episodes", episodes::count);
         collect(out, moduleErrors, "coreMemories", core::count);
-        // 工作记忆只统计"仍然生效"的：已归档的会单独给一个数字，避免总览和用户页口径不一致
-        collect(out, moduleErrors, "workMemories", work::countByArchivedFalse);
-        collect(out, moduleErrors, "workMemoriesArchived", () -> Math.max(0L, work.count() - work.countByArchivedFalse()));
+        // 工作记忆统计全部（归档机制 2026-09-18 已删除，不存在"已归档"这一档）
+        collect(out, moduleErrors, "workMemories", work::count);
         collect(out, moduleErrors, "reminders", reminders::count);
         collect(out, moduleErrors, "tasks", this::taskSummary);
         Map<String, String> dependencies = dependencyHealth();
@@ -175,7 +174,7 @@ public class AdminDashboardController {
             out.put("createdAt", String.valueOf(u.getCreatedAt()));
             out.put("messageCount", conversations.countByUserId(u.getUserId()));
             out.put("taskCount", taskCountByUser.getOrDefault(u.getUserId(), 0L));
-            out.put("memoryCount", core.countByUserId(u.getUserId()) + work.countByUserIdAndArchivedFalse(u.getUserId()) + episodes.countByUserId(u.getUserId()));
+            out.put("memoryCount", core.countByUserId(u.getUserId()) + work.countByUserId(u.getUserId()) + episodes.countByUserId(u.getUserId()));
             out.put("reminderCount", reminders.countByUserId(u.getUserId())); return out;
         }).toList();
     }
@@ -268,7 +267,7 @@ public class AdminDashboardController {
     private Map<String,Object> safeUser(UserProfile value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("userId", mask(value.getUserId())); m.put("memoryEnabled", value.getMemoryEnabled()); m.put("lastChannel", value.getLastChannel()); m.put("lastSeenAt", value.getLastSeenAt()); m.put("createdAt", value.getCreatedAt()); m.put("updatedAt", value.getUpdatedAt()); m.put("persona", limit(value.getPersona(), 2000)); return m; }
     private Map<String,Object> safeConversation(com.liche.wechatagent.memory.ConversationMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("role", value.getRole()); m.put("content", limit(value.getContent(), 4000)); m.put("createdAt", value.getCreatedAt()); m.put("expiresAt", value.getExpiresAt()); return m; }
     private Map<String,Object> safeCore(com.liche.wechatagent.memory.UserCoreMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 4000)); m.put("status", value.getStatus()); m.put("importance", value.getImportance()); m.put("updatedAt", value.getUpdatedAt()); return m; }
-    private Map<String,Object> safeWork(com.liche.wechatagent.memory.UserWorkMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("status", value.getStatus()); m.put("priority", value.getPriority()); m.put("archived", value.getArchived()); m.put("updatedAt", value.getUpdatedAt()); return m; }
+    private Map<String,Object> safeWork(com.liche.wechatagent.memory.UserWorkMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("status", value.getStatus()); m.put("priority", value.getPriority()); m.put("updatedAt", value.getUpdatedAt()); return m; }
     private Map<String,Object> safeEpisode(com.liche.wechatagent.memory.EpisodicMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("title", limit(value.getTitle(), 200)); m.put("summary", limit(value.getSummary(), 4000)); m.put("status", value.getStatus()); m.put("occurredAt", value.getOccurredAt()); return m; }
     private Map<String,Object> safeReminder(com.liche.wechatagent.reminder.ReminderTask value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("triggerAt", value.getTriggerAt()); m.put("cron", value.getCron()); m.put("status", value.getStatus()); return m; }
     private String limit(String value, int max) { if (value == null) return null; return value.length() <= max ? value : value.substring(0, max) + "…"; }

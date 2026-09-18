@@ -53,7 +53,6 @@ public class BuiltinScheduleService {
     private final long careScanMs;
     private final long maimemoPushScanMs;
     private final long reminderRecoveryMs;
-    private final long memoryArchiveSweepMs;
     private final long memoryLifecycleMs;
     private final long dashboardSampleMs;
 
@@ -67,7 +66,6 @@ public class BuiltinScheduleService {
                                   @Value("${care.scan-interval-ms:60000}") long careScanMs,
                                   @Value("${maimemo.push-scan-interval-ms:60000}") long maimemoPushScanMs,
                                   @Value("${reminder.recovery-scan-interval-ms:300000}") long reminderRecoveryMs,
-                                  @Value("${memory.archive-sweep-interval-ms:600000}") long memoryArchiveSweepMs,
                                   @Value("${memory.lifecycle-scan-interval-ms:3600000}") long memoryLifecycleMs,
                                   @Value("${management.dashboard.metrics-sample-ms:10000}") long dashboardSampleMs,
                                   @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
@@ -81,7 +79,6 @@ public class BuiltinScheduleService {
         this.careScanMs = careScanMs;
         this.maimemoPushScanMs = maimemoPushScanMs;
         this.reminderRecoveryMs = reminderRecoveryMs;
-        this.memoryArchiveSweepMs = memoryArchiveSweepMs;
         this.memoryLifecycleMs = memoryLifecycleMs;
         this.dashboardSampleMs = dashboardSampleMs;
         this.zone = parseZone(timeZoneId);
@@ -102,7 +99,6 @@ public class BuiltinScheduleService {
         rows.add(interval("主动关怀扫描", "到点给开启了关怀的用户发复盘邀请", careScanMs));
         rows.add(interval("背单词推送扫描", "检查是否到点该发今日背单词进度", maimemoPushScanMs));
         rows.add(interval("提醒恢复扫描", "补齐丢失的提醒调度（重启后自愈）", reminderRecoveryMs));
-        rows.add(interval("记忆归档扫描", "把过量的工作记忆压缩归档，避免上下文膨胀", memoryArchiveSweepMs));
         rows.add(interval("记忆生命周期扫描", "清理过期上下文与失效记忆", memoryLifecycleMs));
         rows.add(interval("面板指标采样", "给总览页的趋势图取样", dashboardSampleMs));
         rows.sort(Comparator.comparing(row -> String.valueOf(row.get("group"))));

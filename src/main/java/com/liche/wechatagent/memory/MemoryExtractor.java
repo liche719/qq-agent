@@ -47,7 +47,6 @@ public class MemoryExtractor {
     private final ContextStore contextStore;
     private final WorkMemoryService workMemoryService;
     private final CoreMemoryService coreMemoryService;
-    private final MemoryArchiveService archiveService;
     private final ObjectMapper objectMapper;
     private final int recentTurns;
     private final StoredMediaRepository storedMediaRepository;
@@ -170,7 +169,6 @@ public class MemoryExtractor {
                            ContextStore contextStore,
                            WorkMemoryService workMemoryService,
                            CoreMemoryService coreMemoryService,
-                           MemoryArchiveService archiveService,
                            ObjectMapper objectMapper,
                            @Value("${memory.extraction-recent-turns:40}") int recentTurns,
                            StoredMediaRepository storedMediaRepository,
@@ -184,7 +182,6 @@ public class MemoryExtractor {
         this.contextStore = contextStore;
         this.workMemoryService = workMemoryService;
         this.coreMemoryService = coreMemoryService;
-        this.archiveService = archiveService;
         this.objectMapper = objectMapper;
         this.storedMediaRepository = storedMediaRepository;
         this.mutationLock = mutationLock;
@@ -225,7 +222,6 @@ public class MemoryExtractor {
                     ContextStore contextStore,
                     WorkMemoryService workMemoryService,
                     CoreMemoryService coreMemoryService,
-                    MemoryArchiveService archiveService,
                     ObjectMapper objectMapper,
                     int recentTurns,
                     StoredMediaRepository storedMediaRepository,
@@ -234,7 +230,7 @@ public class MemoryExtractor {
                     int minConfidence,
                     MemoryPolicyProperties policyProperties,
                     String timeZoneId) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
+        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
                 recentTurns, storedMediaRepository, mutationLock, conversationMemoryService, null,
                 minConfidence, policyProperties, timeZoneId);
     }
@@ -243,12 +239,11 @@ public class MemoryExtractor {
                            ContextStore contextStore,
                            WorkMemoryService workMemoryService,
                            CoreMemoryService coreMemoryService,
-                           MemoryArchiveService archiveService,
                            ObjectMapper objectMapper,
                            int recentTurns,
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
+        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
                 recentTurns, storedMediaRepository, mutationLock, null, null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
@@ -257,10 +252,9 @@ public class MemoryExtractor {
                            ContextStore contextStore,
                            WorkMemoryService workMemoryService,
                            CoreMemoryService coreMemoryService,
-                           MemoryArchiveService archiveService,
                            ObjectMapper objectMapper,
                            int recentTurns) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, archiveService, objectMapper,
+        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
                 recentTurns, null, new MemoryMutationLock(), null, null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
@@ -510,7 +504,6 @@ public class MemoryExtractor {
         applyWorkCompletions(userId, result, allowedSourceIds);
         applyFacts(userId, result);
         runSafely(userId, "过期工作记忆", workMemoryService::expireDueMemories);
-        runSafely(userId, "归档工作记忆", () -> archiveService.compressIfNeeded(userId));
     }
 
     /**
@@ -690,7 +683,7 @@ public class MemoryExtractor {
         }
     }
 
-    // Marks completed work memories and then lets lifecycle services expire and archive due entries.
+    // Marks completed work memories and then lets lifecycle services expire due entries.
     private void applyWorkCompletions(String userId, ExtractionResult result, Set<String> allowedSourceIds) {
         for (WorkCompletion completion : safeList(result.completedWork())) {
             if (completion == null) {

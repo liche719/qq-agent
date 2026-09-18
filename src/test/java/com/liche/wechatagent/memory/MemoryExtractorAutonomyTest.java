@@ -30,7 +30,6 @@ class MemoryExtractorAutonomyTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "我要考南京理工大学研究生"),
                 new ContextTurn("assistant", "那我替你决定考北京大学")));
@@ -41,7 +40,7 @@ class MemoryExtractorAutonomyTest {
                  "coreUpdates":[],"workConflicts":[],"duplicates":[]}
                 """);
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20);
+                coreMemoryService, new ObjectMapper(), 20);
 
         extractor.extract("u1");
 
@@ -60,7 +59,6 @@ class MemoryExtractorAutonomyTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "我可能下个月换工作")));
         when(workMemoryService.listActive("u1")).thenReturn(List.of());
@@ -70,7 +68,7 @@ class MemoryExtractorAutonomyTest {
                  "coreCandidates":[],"coreUpdates":[],"workConflicts":[],"completedWorkItems":[],"duplicates":[]}
                 """);
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20);
+                coreMemoryService, new ObjectMapper(), 20);
 
         extractor.extract("u1");
 
@@ -86,7 +84,6 @@ class MemoryExtractorAutonomyTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "这周完成实验报告，同时我长期目标是考南京理工大学研究生", List.of("msg-1"))));
         when(workMemoryService.listActive("u1")).thenReturn(List.of());
@@ -102,7 +99,7 @@ class MemoryExtractorAutonomyTest {
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(MemoryProvenance.class),
                 org.mockito.ArgumentMatchers.any());
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20);
+                coreMemoryService, new ObjectMapper(), 20);
 
         assertTrue(extractor.extract("u1"));
 
@@ -117,7 +114,6 @@ class MemoryExtractorAutonomyTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(new ContextTurn("user", "我有一个长期目标")));
         when(workMemoryService.listActive("u1")).thenReturn(List.of());
         when(coreMemoryService.listActive("u1")).thenReturn(List.of());
@@ -133,7 +129,7 @@ class MemoryExtractorAutonomyTest {
         policies.setExtractionDefaultConfidence(77);
         policies.setDedupThreshold(0.9d);
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20, null, new MemoryMutationLock(),
+                coreMemoryService, new ObjectMapper(), 20, null, new MemoryMutationLock(),
                 null, 60, policies, "UTC");
 
         assertTrue(extractor.extract("u1"));

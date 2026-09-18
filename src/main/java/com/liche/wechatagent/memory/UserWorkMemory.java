@@ -13,7 +13,7 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/** 第二层：中期工作记忆（长期留存，超阈值自动归档压缩，原始记录永不删除） */
+/** 第二层：中期工作记忆（长期留存，只有用户主动遗忘才会删除） */
 @Entity
 @Table(name = "user_work_memory", indexes = @Index(name = "idx_work_user", columnList = "userId"))
 @Getter
@@ -34,10 +34,7 @@ public class UserWorkMemory {
     /** 优先级 1-5，默认 3，越大越优先加载 */
     private Integer priority = 3;
 
-    /** 归档标记：归档仅标记，不删除 */
-    private Boolean archived = false;
-
-    /** 来源：extraction=自动提取 / confirm=用户确认 / archive_summary=归档摘要 */
+    /** 来源：extraction=自动提取 / confirm=用户确认 */
     @Column(length = 32)
     private String source = "extraction";
 

@@ -110,7 +110,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - 独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，hash 路由），构建产物写进 `src/main/resources/static/`（已 gitignore），**改完必须 `npm run build`**（或走 Dockerfile 的 node 阶段）才会进 jar。**改视觉只动 `web/src/style.css`**（两套主题的 token 都在 `:root` 与 `:root[data-theme="dark"]` 里，组件里不要写死颜色）。
 - 8 个页签：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
-- **数字口径（别改回去）**：总览「工作记忆」只算**未归档**（`countByArchivedFalse`），已归档单独一行显示；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
+- **数字口径**：总览「工作记忆」＝全部（`count`）——**归档机制 2026-09-18 已整块删除**（`memory_archive` 表、`user_work_memory.archived` 列、面板的「已归档」数字与筛选都没了，存量 34 行恢复成活跃；详见 `docs/memory-vector-plan.md` §17）；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
 - **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
 - **验证工具**：`tools/ui-verify/verify_spa.py`（真实 Chromium 跑登录/各页签/聊天视图/手机端 390×844/黑白主题，`SPA_BASE` 指面板地址；`INSECURE = BASE.startswith("https")` 所以 https 下自动忽略证书名不匹配）。**已入库（`tools/ui-verify/`，只提交脚本、png 截图不入库）**，但它会随着前端行为变更失效：最近一次是 `remember` 改成默认不勾之后，脚本必须自己 `page.check("#remember")`，否则 localStorage 持久化断言和手机端（新建 context 只带 localStorage）都会失败。
 

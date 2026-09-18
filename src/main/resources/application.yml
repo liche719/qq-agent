@@ -86,10 +86,10 @@ llm:
   # 深度思考**不再按场景开关**（2026-09-14 按用户要求整块删除：全部场景都用模型默认的思考）。
   # 原实现与实测数据保留在 docs/llm-call-modes.md（结论：这个模型默认就在思考，唯一有效的关闭方式是
   # thinking:{"type":"disabled"}；只有对话省电档能省到用户的等待时间，其余场景省的只是后台 token）。
-  # 场景见 LlmScenario：dialog / dialog_deep / extract / reflect / reminder_parse / schedule_parse / archive
+  # 场景见 LlmScenario：dialog / dialog_deep / extract / reflect / reminder_parse / schedule_parse
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
-  # （extract,reflect,reminder_parse,schedule_parse,archive）
-  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse,archive}
+  # （extract,reflect,reminder_parse,schedule_parse）
+  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse}
   # 每个场景的**思考档位**（请求体的 reasoning_effort，取值 low/medium/high；没配的场景不传、用上游默认）。
   # 2026-09-18 用户要求：对话 / 提醒解析 / 定时任务解析 / 反思 都 low，只有**记忆提取 high**（质量优先、后台跑）。
   # 实测：low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。
@@ -292,10 +292,6 @@ memory:
   core-max-chars: ${MEMORY_CORE_MAX_CHARS:2200}
   work-max-load: ${MEMORY_WORK_MAX_LOAD:15}
   work-max-chars: ${MEMORY_WORK_MAX_CHARS:1500}
-  work-archive-threshold: ${MEMORY_WORK_ARCHIVE_THRESHOLD:20}
-  work-archive-batch: ${MEMORY_WORK_ARCHIVE_BATCH:10}
-  archive-sweep-interval-ms: ${MEMORY_ARCHIVE_SWEEP_INTERVAL_MS:600000}
-  archive-sweep-initial-delay-ms: ${MEMORY_ARCHIVE_SWEEP_INITIAL_DELAY_MS:300000}
   # 记忆提取的触发节奏（**2026-09-18 换成轮次驱动**，见 MemoryExtractionScheduler 的类注释）：
   # 上一次提取之后机主又说了 rounds 条 → 跑；待提取窗口最老那条放了 max-idle-hours 小时 → 兜底跑。
   # 到点后再等 coalesce-seconds 合并同一串消息。旧参数 window/max-delay 已删除；
@@ -352,9 +348,6 @@ memory:
   linked-media-max-per-memory: ${MEMORY_LINKED_MEDIA_MAX_PER_MEMORY:3}
   linked-media-summary-max-chars: ${MEMORY_LINKED_MEDIA_SUMMARY_MAX_CHARS:80}
   historical-item-max-chars: ${MEMORY_HISTORICAL_ITEM_MAX_CHARS:1200}
-  archive-summary-target-chars: ${MEMORY_ARCHIVE_SUMMARY_TARGET_CHARS:100}
-  archive-summary-max-chars: ${MEMORY_ARCHIVE_SUMMARY_MAX_CHARS:1000}
-  archive-summary-confidence: ${MEMORY_ARCHIVE_SUMMARY_CONFIDENCE:70}
   # 自主模块（「它自己那一侧」）：总开关 + 预算 + 归属人。
   # 归属人留空时模块**整体不工作**（fail-closed：别人的对话不会污染它，它也不会把机主的事带到别人那里）。
   self-enabled: ${MEMORY_SELF_ENABLED:true}

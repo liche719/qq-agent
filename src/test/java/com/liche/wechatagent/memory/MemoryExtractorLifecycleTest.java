@@ -24,7 +24,6 @@ class MemoryExtractorLifecycleTest {
         ContextStore contextStore = mock(ContextStore.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         UserWorkMemory previous = new UserWorkMemory("u1", "完成课程报告", 4, "extraction");
         previous.setId(12L);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
@@ -38,7 +37,7 @@ class MemoryExtractorLifecycleTest {
                 "completedWorkItems":[{"existingId":12,"reason":"用户明确表示课程报告已经交了","sourceMessageIds":["msg-77"]}],"duplicates":[]}
                 """);
         MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, archiveService, new ObjectMapper(), 20);
+                coreMemoryService, new ObjectMapper(), 20);
 
         extractor.extract("u1");
 

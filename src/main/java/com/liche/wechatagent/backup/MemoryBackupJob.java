@@ -10,7 +10,6 @@ import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
 import com.liche.wechatagent.memory.EpisodicMemory;
 import com.liche.wechatagent.memory.EpisodicMemoryRepository;
-import com.liche.wechatagent.memory.MemoryArchiveRepository;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
 import com.liche.wechatagent.memory.UserWorkMemoryRepository;
@@ -69,7 +68,6 @@ public class MemoryBackupJob {
     private final UserProfileRepository userProfileRepository;
     private final UserCoreMemoryRepository coreRepository;
     private final UserWorkMemoryRepository workRepository;
-    private final MemoryArchiveRepository archiveRepository;
     private final MemoryChangeLogRepository changeLogRepository;
     private final ReminderTaskRepository reminderRepository;
     private final StoredMediaRepository storedMediaRepository;
@@ -94,7 +92,6 @@ public class MemoryBackupJob {
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
                            UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            MemoryChangeLogRepository changeLogRepository,
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
@@ -107,7 +104,7 @@ public class MemoryBackupJob {
                             @Value("${media.storage.root:stored-media}") String mediaRoot,
                             @Value("${backup.change-log-limit:5000}") int changeLogLimit,
                             @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
-        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
                 reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
                 objectMapper, backupDir,
                 retentionDays, conversationBackupLimit, mediaRoot, changeLogLimit, timeZoneId, true);
@@ -117,7 +114,6 @@ public class MemoryBackupJob {
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
                            UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            MemoryChangeLogRepository changeLogRepository,
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
@@ -125,7 +121,7 @@ public class MemoryBackupJob {
                            String backupDir,
                            int retentionDays,
                            String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
                 reminderRepository, storedMediaRepository, null, null, objectMapper, backupDir, retentionDays,
                 DEFAULT_CONVERSATION_BACKUP_LIMIT, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId());
     }
@@ -134,7 +130,6 @@ public class MemoryBackupJob {
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
                            UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            MemoryChangeLogRepository changeLogRepository,
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
@@ -144,7 +139,7 @@ public class MemoryBackupJob {
                            int retentionDays,
                            int conversationBackupLimit,
                            String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
                 reminderRepository, storedMediaRepository, conversationMemoryRepository, null, objectMapper,
                 backupDir, retentionDays, conversationBackupLimit, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT,
                 DEFAULT_ZONE.getId());
@@ -154,7 +149,6 @@ public class MemoryBackupJob {
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
                            UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            MemoryChangeLogRepository changeLogRepository,
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
@@ -165,7 +159,7 @@ public class MemoryBackupJob {
                            int retentionDays,
                            int conversationBackupLimit,
                            String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, archiveRepository, changeLogRepository,
+        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
                 reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
                 objectMapper, backupDir, retentionDays, conversationBackupLimit, mediaRoot,
                 DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId(), true);
@@ -174,7 +168,6 @@ public class MemoryBackupJob {
     private MemoryBackupJob(UserProfileRepository userProfileRepository,
                             UserCoreMemoryRepository coreRepository,
                             UserWorkMemoryRepository workRepository,
-                            MemoryArchiveRepository archiveRepository,
                             MemoryChangeLogRepository changeLogRepository,
                             ReminderTaskRepository reminderRepository,
                             StoredMediaRepository storedMediaRepository,
@@ -191,7 +184,6 @@ public class MemoryBackupJob {
         this.userProfileRepository = userProfileRepository;
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
-        this.archiveRepository = archiveRepository;
         this.changeLogRepository = changeLogRepository;
         this.reminderRepository = reminderRepository;
         this.storedMediaRepository = storedMediaRepository;
@@ -411,8 +403,7 @@ public class MemoryBackupJob {
         node.put("userId", userId);
         node.set("profile", objectMapper.valueToTree(userProfileRepository.findById(userId).orElse(null)));
         node.set("coreMemories", objectMapper.valueToTree(coreRepository.findByUserIdOrderByCreatedAtAsc(userId)));
-        node.set("workMemories", objectMapper.valueToTree(workRepository.findByUserIdAndArchivedFalse(userId)));
-        node.set("archives", objectMapper.valueToTree(archiveRepository.findByUserIdOrderByCreatedAtDesc(userId)));
+        node.set("workMemories", objectMapper.valueToTree(workRepository.findByUserId(userId)));
         node.set("changeLogs", objectMapper.valueToTree(
                 changeLogRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, changeLogLimit))));
         node.set("conversationMemories", objectMapper.valueToTree(conversations));
@@ -518,12 +509,6 @@ public class MemoryBackupJob {
         ObjectNode state = readOwnedState(stateFile, userId);
         boolean changed = removeMemoryRecord(state, layer, targetId);
         changed |= redactChangeLogs(state, layer, targetId);
-        if ("WORK".equals(layer)) {
-            for (Long archiveId : removeArchivesReferencingWork(state, targetId)) {
-                changed = true;
-                changed |= redactChangeLogs(state, "ARCHIVE", archiveId);
-            }
-        }
         if (changed) {
             writeAtomically(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state));
         }
@@ -705,40 +690,6 @@ public class MemoryBackupJob {
         return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("[\\p{P}\\p{Z}\\s]+", "")
                 .trim();
-    }
-
-    private List<Long> removeArchivesReferencingWork(ObjectNode state, Long workId) {
-        ArrayNode archives = array(state, "archives");
-        if (archives == null) {
-            return List.of();
-        }
-        List<Long> removedArchiveIds = new java.util.ArrayList<>();
-        for (int index = archives.size() - 1; index >= 0; index--) {
-            JsonNode archive = archives.get(index);
-            if (!archiveReferencesWork(archive, workId)) {
-                continue;
-            }
-            long archiveId = archive.path("id").asLong();
-            if (archiveId > 0) {
-                removedArchiveIds.add(archiveId);
-            }
-            archives.remove(index);
-        }
-        return removedArchiveIds;
-    }
-
-    private boolean archiveReferencesWork(JsonNode archive, Long workId) {
-        try {
-            JsonNode originalIds = objectMapper.readTree(archive.path("originalIds").asText("[]"));
-            for (JsonNode id : originalIds) {
-                if (workId.equals(id.asLong())) {
-                    return true;
-                }
-            }
-        } catch (Exception ignored) {
-            // A malformed archive is left untouched rather than risking unrelated data removal.
-        }
-        return false;
     }
 
     private ArrayNode array(ObjectNode state, String field) {

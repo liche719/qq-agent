@@ -525,3 +525,17 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 | 第 1 次提取（当时还没有任何卡片 → 不带清单） | 走老路；2 条事实 `依据=新增`；同批第 2 条触发 1 次小调用（首轮一次性，可忽略） |
 | 第 2 次：`第一周周二晚数学课的教室改成506了，另外这门课是周三交作业` | **1 次调用**（prompt 1577 / completion 1268）；`303 → SUPERSEDED(26)`、`506 ACTIVE`、`教师` 不动；`交作业时间=周三` 新增；日志 `依据=主调用判定：同一属性被改写` |
 | 第 3 次：`周二晚上数学课的老师换成李老师了`（**换了说法、没提"第一周"**） | **1 次调用**；落库 subject 仍是 `第一周·周二晚·数学课`（照抄了卡片名）；`王老师 → SUPERSEDED(28)`、`李老师 ACTIVE` |
+
+## 17. 归档机制整块删除（2026-09-18，用户决定；已上线）
+
+**决定**：把"工作记忆堆积到阈值 → 把最老的一批压成一条摘要"这套（`MemoryArchiveService` / `memory_archive` 表 / `user_work_memory.archived` 列 / 提取里的归档步骤 / 面板的归档数字与筛选 / 告警与配置项）**全部删掉**，存量"已归档"的工作记忆**恢复成活跃**。
+
+**为什么**：实测它早就休眠了——`memory_archive` 只有 3 行、最后一次 2026-09-13；用户现在要的是「事实层 + 提取」这一套，归档这条老路只会让"这条记忆到底还算不算数"变得模糊。
+
+**改了什么（代码）**：删 `MemoryArchive{,Repository,Service}`（含单测）；`UserWorkMemory.archived` 字段消失，仓库方法收敛成 `findByUserId*`（不再有任何 archived 条件）；`MemoryRetrievalService` 去掉归档候选块（只保留历史条目的 `ARCHIVED` 文案映射，那是给存量数据看的）；`MemoryBackupJob` 的快照不再有 `archives` 字段，遗忘时也不再清理"引用该工作记忆的归档记录"；面板总览去掉「工作记忆·已归档」一行、用户页去掉「· 已归档」。
+
+**迁移**：`deploy/postgres/V13__drop_archive.sql`——`update user_work_memory set archived=false where archived=true;`（本次 34 行）→ `drop column archived` → `drop table memory_archive`。执行前把 `memory_archive` 的 3 行原文另存到服务器文件。**必须先跑迁移再部署新镜像**（`ddl-auto: validate` 只管实体映射的列在不在，列多不影响启动，但这次的目标是删干净）。
+
+**回滚**：`alter table user_work_memory add column archived boolean not null default false;`——记忆行一条没删，只是标记没了。
+
+**本地验证（rehearsal pg + 假向量服务，真 DeepSeek）**：生产 profile（validate）冷启动 16.2s、0 ERROR；手动提取 `core=2 work=1` 落库正常、重复事实走 `确认（同值，不新增）`；拿历史 `ARCHIVE` 变更日志里的 target_id 去问（`东莞理工学生工作办公室电话`）模型答出 `0769-22863932`——**证明恢复成活跃的行真的进了检索**；`/memory forget W63` 删除成功、变更日志正文已脱敏；备份任务产出 `20260918.zip`（40 个用户）且 `state.json` 里**没有 `archives` 字段**、被遗忘的那条已不在 `workMemories` 里。

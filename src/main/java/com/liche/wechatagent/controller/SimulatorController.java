@@ -6,8 +6,6 @@ import com.liche.wechatagent.channel.InboundMessage;
 import com.liche.wechatagent.channel.OutboundMessage;
 import com.liche.wechatagent.channel.SimulatorChannel;
 import com.liche.wechatagent.exception.BizException;
-import com.liche.wechatagent.memory.MemoryArchiveRepository;
-import com.liche.wechatagent.memory.MemoryArchiveService;
 import com.liche.wechatagent.memory.UserCoreMemory;
 import com.liche.wechatagent.memory.UserCoreMemoryRepository;
 import com.liche.wechatagent.memory.UserWorkMemory;
@@ -30,7 +28,6 @@ import java.util.UUID;
  * POST /api/sim/send    发送一条模拟微信消息（同步返回回复）
  * GET  /api/sim/replies 查询该用户被推送的出站消息
  * GET  /api/sim/memories 查看该用户三层记忆
- * POST /api/sim/archive  手动触发归档压缩
  *
  * <p>{@code matchIfMissing} 必须是 false：以前"没配 mode"也算 simulator，于是任何漏传
  * `WECHAT_CHANNEL_MODE` 的部署（本机 java -jar、以后新增的服务）都会注册这组接口——
@@ -45,21 +42,15 @@ public class SimulatorController {
     private final SimulatorChannel simulatorChannel;
     private final UserCoreMemoryRepository coreRepository;
     private final UserWorkMemoryRepository workRepository;
-    private final MemoryArchiveRepository archiveRepository;
-    private final MemoryArchiveService archiveService;
 
     public SimulatorController(AgentOrchestrator orchestrator,
                                SimulatorChannel simulatorChannel,
                                UserCoreMemoryRepository coreRepository,
-                               UserWorkMemoryRepository workRepository,
-                               MemoryArchiveRepository archiveRepository,
-                               MemoryArchiveService archiveService) {
+                               UserWorkMemoryRepository workRepository) {
         this.orchestrator = orchestrator;
         this.simulatorChannel = simulatorChannel;
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
-        this.archiveRepository = archiveRepository;
-        this.archiveService = archiveService;
     }
 
     @PostMapping("/send")
@@ -113,18 +104,11 @@ public class SimulatorController {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("core", coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
                 .map(UserCoreMemory::getContent).toList());
-        map.put("work", workRepository.findByUserIdAndArchivedFalse(userId).stream()
+        map.put("work", workRepository.findByUserId(userId).stream()
                 .map(w -> "[" + w.getPriority() + "] " + w.getContent()).toList());
-        map.put("archives", archiveRepository.findByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(a -> a.getSummary() + " (原始IDs: " + a.getOriginalIds() + ")").toList());
         return map;
     }
 
-    @PostMapping("/archive")
-    public Map<String, String> archive(@RequestParam String userId) {
-        archiveService.compressIfNeeded(userId);
-        return Map.of("status", "done");
-    }
 
     private String textValue(Map<String, Object> body, String key) {
         Object value = body.get(key);

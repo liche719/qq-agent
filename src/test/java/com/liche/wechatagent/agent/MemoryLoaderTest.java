@@ -29,7 +29,7 @@ class MemoryLoaderTest {
         UserWorkMemory androidProject = memory("我正在做 Android 课程项目", 3);
         UserWorkMemory photography = memory("我喜欢摄影和风景照片", 5);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
-        when(workRepository.findByUserIdAndArchivedFalse("u1")).thenReturn(List.of(photography, androidProject));
+        when(workRepository.findByUserId("u1")).thenReturn(List.of(photography, androidProject));
 
         MemoryLoader loader = new MemoryLoader(coreRepository, workRepository, 1, 200);
         MemoryLoader.LoadedMemory loaded = loader.load("u1", "Android 项目现在进展怎么样？");
@@ -52,7 +52,7 @@ class MemoryLoaderTest {
         schedule.setFileName("第5周课程表.png");
         schedule.setSummary("第5周课程与教室安排");
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of(goal));
-        when(workRepository.findByUserIdAndArchivedFalse("u1")).thenReturn(List.of());
+        when(workRepository.findByUserId("u1")).thenReturn(List.of());
         when(mediaRepository.findByUserIdAndIdInAndStatus("u1", List.of(42L), StoredMedia.ACTIVE))
                 .thenReturn(List.of(schedule));
         MemoryLoader loader = new MemoryLoader(coreRepository, workRepository, mediaRepository,

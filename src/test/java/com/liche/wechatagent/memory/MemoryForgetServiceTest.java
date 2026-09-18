@@ -21,7 +21,6 @@ class MemoryForgetServiceTest {
     void cancelsExtractionThenDeletesMemoryAndPurgesAssociatedData() {
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
         ContextStore contextStore = mock(ContextStore.class);
         MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
@@ -30,7 +29,7 @@ class MemoryForgetServiceTest {
         when(contextStore.removeMemoryEvidence("u1", List.of("m-5"), "用户的私密长期目标")).thenReturn(true);
         when(backupJob.purgeForgottenMemory("u1", "CORE", 5L))
                 .thenReturn(new MemoryBackupJob.PurgeResult(2, true));
-        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService, archiveService,
+        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService,
                 extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
 
         MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "CORE", 5L);
@@ -50,7 +49,6 @@ class MemoryForgetServiceTest {
     void clearsShortContextWhenLegacyMemoryHasNoSourceMessageProvenance() {
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
         ContextStore contextStore = mock(ContextStore.class);
         MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
@@ -59,7 +57,7 @@ class MemoryForgetServiceTest {
         when(contextStore.clearForMemoryForget("u1")).thenReturn(true);
         when(backupJob.purgeForgottenMemory("u1", "CORE", 6L))
                 .thenReturn(new MemoryBackupJob.PurgeResult(0, true));
-        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService, archiveService,
+        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService,
                 extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
 
         MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "CORE", 6L);
@@ -74,7 +72,6 @@ class MemoryForgetServiceTest {
     void purgesConversationSnapshotsAlongsideDurableEvidence() {
         CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
         WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        MemoryArchiveService archiveService = mock(MemoryArchiveService.class);
         MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
         ContextStore contextStore = mock(ContextStore.class);
         MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
@@ -86,7 +83,7 @@ class MemoryForgetServiceTest {
                 .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
         when(backupJob.purgeForgottenConversationEvidence("u1", List.of("m-8"), "用户的私密长期目标"))
                 .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
-        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService, archiveService,
+        MemoryForgetService service = new MemoryForgetService(coreMemoryService, workMemoryService,
                 extractionScheduler, contextStore, new MemoryMutationLock(), backupJob, conversations);
 
         MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "CORE", 8L);

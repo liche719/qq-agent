@@ -19,7 +19,6 @@ class MemoryRetrievalServiceTest {
     void recallsDurableConversationOutsideTheShortContextWindow() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
         List<ConversationMemory> records = new ArrayList<>();
         for (int index = 0; index < 30; index++) {
@@ -29,10 +28,9 @@ class MemoryRetrievalServiceTest {
         }
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
         when(conversationService.recentForRetrieval("u1")).thenReturn(records);
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, null);
+                conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前说过的南京理工考试计划",
                 4, 1000, 4, 1000);
@@ -44,16 +42,14 @@ class MemoryRetrievalServiceTest {
     void neverRendersEvidenceReturnedForAnotherUser() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
         ConversationMemory foreign = new ConversationMemory("u2", "user", "event-2", "其他用户的秘密",
                 List.of(), LocalDateTime.now(), null);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
         when(conversationService.recentForRetrieval("u1")).thenReturn(List.of(foreign));
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, null);
+                conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的秘密",
                 4, 1000, 4, 1000);
@@ -62,44 +58,42 @@ class MemoryRetrievalServiceTest {
     }
 
     @Test
-    void makesArchivedWorkAvailableOnlyAsHistoricalContext() {
+    void expiredWorkMemoryIsOfferedOnlyAsHistoricalContext() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
-        UserWorkMemory archived = new UserWorkMemory("u1", "南京理工大学考研旧复习安排", 3, "extraction");
-        archived.setId(7L);
-        archived.setArchived(true);
+        UserWorkMemory expired = new UserWorkMemory("u1", "南京理工大学考研旧复习安排", 3, "extraction");
+        expired.setId(7L);
+        // 2026-09-18：没有 archived 这回事了（归档机制整块删除、存量已恢复活跃），
+        // 用"已完成"来表达"只在历史上下文里出现"
+        expired.setStatus(MemoryStatus.COMPLETED.name());
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
-        when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of(archived));
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
+        when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of(expired));
         when(conversationService.relevantForRetrieval("u1", "之前的南京理工复习安排"))
                 .thenReturn(List.of());
         when(conversationService.recentForRetrieval("u1")).thenReturn(List.of());
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, null);
+                conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的南京理工复习安排",
                 4, 1000, 4, 1000);
 
-        assertTrue(result.workSection().contains("[已归档] 南京理工大学考研旧复习安排"));
+        assertTrue(result.workSection().contains("南京理工大学考研旧复习安排"));
     }
 
     @Test
     void capsHistoricalTextWithinTheWorkMemoryBudget() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
         ConversationMemory evidence = new ConversationMemory("u1", "user", "old",
                 "南京理工".repeat(200), List.of(), LocalDateTime.now().minusMonths(1), null);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
         when(conversationService.relevantForRetrieval("u1", "之前的南京理工"))
                 .thenReturn(List.of(evidence));
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, null);
+                conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "之前的南京理工",
                 4, 1000, 4, 180);
@@ -112,15 +106,13 @@ class MemoryRetrievalServiceTest {
     void avoidsInjectingOldConversationWhenAnActiveMemoryAlreadyAnswersTheCurrentQuestion() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
         UserCoreMemory goal = new UserCoreMemory("u1", "用户的长期目标是考南京理工大学研究生");
         goal.setId(1L);
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of(goal));
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, null);
+                conversationService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "南京理工考研目标",
                 4, 1000, 4, 1000);
@@ -133,7 +125,6 @@ class MemoryRetrievalServiceTest {
     void retrievesRelevantEpisodeWithoutLeakingAnotherUsersExperience() {
         UserCoreMemoryRepository coreRepository = mock(UserCoreMemoryRepository.class);
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
-        MemoryArchiveRepository archiveRepository = mock(MemoryArchiveRepository.class);
         ConversationMemoryService conversationService = mock(ConversationMemoryService.class);
         EpisodicMemoryService episodicService = mock(EpisodicMemoryService.class);
         EpisodicMemory owned = new EpisodicMemory("u1", "申请表提醒失误",
@@ -143,10 +134,9 @@ class MemoryRetrievalServiceTest {
                 "EXPERIENCE", 5, 90, LocalDateTime.now(), MemoryProvenance.userExplicit(List.of("m2"), List.of()));
         when(coreRepository.findByUserIdOrderByCreatedAtAsc("u1")).thenReturn(List.of());
         when(workRepository.findByUserIdOrderByUpdatedAtDesc("u1")).thenReturn(List.of());
-        when(archiveRepository.findByUserIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
         when(episodicService.listActive("u1")).thenReturn(List.of(owned, foreign));
         MemoryRetrievalService service = new MemoryRetrievalService(coreRepository, workRepository,
-                archiveRepository, conversationService, episodicService, null);
+                conversationService, episodicService, null);
 
         MemoryRetrievalService.RetrievedMemory result = service.retrieve("u1", "上次打印申请表为什么着急",
                 4, 1000, 4, 1000);

@@ -34,7 +34,6 @@ const countRows = computed(() => {
     ['对话证据', fmtNum(props.overview?.conversations)],
     ['核心记忆', fmtNum(props.overview?.coreMemories)],
     ['工作记忆', fmtNum(props.overview?.workMemories)],
-    ['工作记忆·已归档', fmtNum(props.overview?.workMemoriesArchived)],
     ['情景记忆', fmtNum(props.overview?.episodes)],
     ['提醒任务', fmtNum(props.overview?.reminders)],
     ['任务·运行中', fmtNum(tasks.RUNNING)],

@@ -30,8 +30,7 @@ const DICTIONARY = {
   // 长期记忆（core/work）的 MemoryStatus 取值
   memory: {
     ACTIVE: '生效中',
-    ARCHIVED: '已归档',
-    SUPERSEDED: '已被取代',
+      SUPERSEDED: '已被取代',
     PENDING: '待生效',
     EXPIRED: '已过期',
     DELETED: '已删除',
@@ -46,8 +45,7 @@ const DICTIONARY = {
     extract: '记忆提取',
     reminder_parse: '提醒解析',
     schedule_parse: '定时任务解析',
-    archive: '归档摘要'
-  }
+    }
 }
 
 export function zh(group, value) {

@@ -29,7 +29,7 @@ public class LlmConfig {
                 dialogDeepMaxTokens, reflectMaxTokens, reasoningEffortScenarios);
     }
 
-    /** 非流式模型：记忆提取 / 提醒解析 / 归档摘要等一次性调用 */
+    /** 非流式模型：记忆提取 / 反思 / 提醒解析 / 排程解析等一次性调用 */
     @Bean
     public ChatModel chatModel(@Value("${llm.base-url}") String baseUrl,
                                @Value("${llm.api-key}") String apiKey,

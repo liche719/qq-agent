@@ -94,7 +94,7 @@ const memorySections = computed(() => {
     metaRight: fmtTime(item.updatedAt)
   }))
   pushList('workMemories', '工作记忆', source.workMemories, item => ({
-    meta: '优先级 ' + (item.priority ?? '—') + (item.archived ? ' · 已归档' : ''),
+    meta: '优先级 ' + (item.priority ?? '—'),
     text: item.content,
     metaRight: fmtTime(item.updatedAt)
   }))

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** 第二层中期工作记忆：系统归档只标记，用户主动遗忘会永久删除并脱敏历史正文。 */
+/** 第二层中期工作记忆：用户主动遗忘会永久删除并脱敏历史正文，其他情况一直保留。 */
 @Service
 public class WorkMemoryService {
 
@@ -73,7 +73,7 @@ public class WorkMemoryService {
         String normalized = normalizeContent(content);
         LocalDateTime now = LocalDateTime.now();
         MemoryAttributes normalizedAttributes = attributes == null ? workDefaults() : attributes;
-        List<UserWorkMemory> existingRecords = workRepository.findByUserIdAndArchivedFalse(userId);
+        List<UserWorkMemory> existingRecords = workRepository.findByUserId(userId);
         UserWorkMemory existing = (existingRecords == null ? List.<UserWorkMemory>of() : existingRecords).stream()
                 .filter(Objects::nonNull)
                 .filter(memory -> userId.equals(memory.getUserId()))
@@ -101,7 +101,7 @@ public class WorkMemoryService {
         applyAttributes(mem, normalizedAttributes);
         workRepository.save(mem);
         changeLogRepository.save(new MemoryChangeLog(userId, "ADD", "WORK", mem.getId(), null, normalized,
-                "archive_summary".equals(source) ? "归档摘要回填" : "自动记忆提取", operator));
+                "自动记忆提取", operator));
         return mem;
     }
 
@@ -125,7 +125,7 @@ public class WorkMemoryService {
             return List.of();
         }
         LocalDateTime now = LocalDateTime.now();
-        List<UserWorkMemory> records = workRepository.findByUserIdAndArchivedFalse(userId);
+        List<UserWorkMemory> records = workRepository.findByUserId(userId);
         if (records == null) {
             return List.of();
         }
@@ -146,7 +146,6 @@ public class WorkMemoryService {
         }
         return records.stream().filter(memory -> memory != null && userId != null
                         && userId.equals(memory.getUserId()))
-                .filter(memory -> !Boolean.TRUE.equals(memory.getArchived()))
                 .filter(memory -> !isActive(memory, now))
                 .toList();
     }
@@ -291,29 +290,6 @@ public class WorkMemoryService {
         return forgotten;
     }
 
-    /** 归档：仅标记 is_archived=1，不删除原始记录 */
-    @Transactional
-    public void markArchived(String userId, List<Long> ids, Long archiveId) {
-        if (!validUserId(userId) || ids == null || ids.isEmpty()) {
-            return;
-        }
-        for (Long id : ids) {
-            if (id == null) {
-                continue;
-            }
-            workRepository.findById(id).ifPresent(mem -> {
-                if (mem == null || !userId.equals(mem.getUserId())) {
-                    return;
-                }
-                mem.setArchived(true);
-                mem.setUpdatedAt(LocalDateTime.now());
-                workRepository.save(mem);
-                changeLogRepository.save(new MemoryChangeLog(userId, "ARCHIVE", "WORK", id, mem.getContent(), null,
-                        "归档到记录#" + archiveId, "SYSTEM"));
-            });
-        }
-    }
-
     @Transactional
     public void markCompleted(String userId, Long workId, String reason, MemoryProvenance provenance) {
         requireUserId(userId);
@@ -342,7 +318,7 @@ public class WorkMemoryService {
     public int expireDueMemories() {
         LocalDateTime now = LocalDateTime.now();
         int changed = 0;
-        List<UserWorkMemory> due = workRepository.findByArchivedFalseAndValidUntilBefore(now);
+        List<UserWorkMemory> due = workRepository.findByValidUntilBefore(now);
         if (due == null) {
             return 0;
         }
@@ -362,7 +338,7 @@ public class WorkMemoryService {
     }
 
     public static boolean isActive(UserWorkMemory memory, LocalDateTime now) {
-        if (memory == null || Boolean.TRUE.equals(memory.getArchived()) || !isStoredActive(memory)) {
+        if (memory == null || !isStoredActive(memory)) {
             return false;
         }
         LocalDateTime effectiveNow = now == null ? LocalDateTime.now() : now;

@@ -26,7 +26,7 @@ class MemoryLifecycleServiceTest {
         completed.setId(9L);
         completed.setValidUntil(LocalDateTime.now().minusMinutes(1));
         completed.setStatus(MemoryStatus.COMPLETED.name());
-        when(workRepository.findByArchivedFalseAndValidUntilBefore(any(LocalDateTime.class)))
+        when(workRepository.findByValidUntilBefore(any(LocalDateTime.class)))
                 .thenReturn(List.of(overdue, completed));
 
         WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);

@@ -20,7 +20,7 @@ class WorkMemoryServiceTest {
     void addsNewMemoryWhenNoActiveEquivalentExists() {
         UserWorkMemoryRepository workRepository = mock(UserWorkMemoryRepository.class);
         MemoryChangeLogRepository changeLogRepository = mock(MemoryChangeLogRepository.class);
-        when(workRepository.findByUserIdAndArchivedFalse("u1")).thenReturn(java.util.List.of());
+        when(workRepository.findByUserId("u1")).thenReturn(java.util.List.of());
         when(workRepository.save(any(UserWorkMemory.class))).thenAnswer(invocation -> {
             UserWorkMemory memory = invocation.getArgument(0);
             memory.setId(1L);
@@ -32,7 +32,7 @@ class WorkMemoryServiceTest {
 
         assertEquals("本周完成 Android 项目原型", saved.getContent());
         assertEquals(5, saved.getPriority());
-        verify(workRepository).findByUserIdAndArchivedFalse("u1");
+        verify(workRepository).findByUserId("u1");
         verify(changeLogRepository).save(any(MemoryChangeLog.class));
     }
 
@@ -44,7 +44,7 @@ class WorkMemoryServiceTest {
         existing.setId(11L);
         existing.setSourceMessageIds("message-old");
         existing.setSourceMediaIds("5");
-        when(workRepository.findByUserIdAndArchivedFalse("u1")).thenReturn(java.util.List.of(existing));
+        when(workRepository.findByUserId("u1")).thenReturn(java.util.List.of(existing));
         when(workRepository.save(any(UserWorkMemory.class))).thenAnswer(invocation -> invocation.getArgument(0));
         WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);
 
@@ -63,7 +63,6 @@ class WorkMemoryServiceTest {
         MemoryChangeLogRepository changeLogRepository = mock(MemoryChangeLogRepository.class);
         UserWorkMemory memory = new UserWorkMemory("u1", "下周完成私密项目", 3, "extraction");
         memory.setId(12L);
-        memory.setArchived(true);
         memory.setSourceMessageIds("message-12");
         when(workRepository.findById(12L)).thenReturn(Optional.of(memory));
         WorkMemoryService service = new WorkMemoryService(workRepository, changeLogRepository);

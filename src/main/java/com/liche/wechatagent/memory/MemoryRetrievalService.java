@@ -27,7 +27,6 @@ public class MemoryRetrievalService {
     private static final Pattern HAN_OR_WORD = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
     private final UserCoreMemoryRepository coreRepository;
     private final UserWorkMemoryRepository workRepository;
-    private final MemoryArchiveRepository archiveRepository;
     private final ConversationMemoryService conversationMemoryService;
     private final EpisodicMemoryService episodicMemoryService;
     private final StoredMediaRepository storedMediaRepository;
@@ -41,7 +40,6 @@ public class MemoryRetrievalService {
     @Autowired
     public MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
                                   UserWorkMemoryRepository workRepository,
-                                  MemoryArchiveRepository archiveRepository,
                                   ConversationMemoryService conversationMemoryService,
                                   EpisodicMemoryService episodicMemoryService,
                                   StoredMediaRepository storedMediaRepository,
@@ -50,7 +48,6 @@ public class MemoryRetrievalService {
                                   @Value("${memory.historical-min-score:3}") int minimumHistoricalScore) {
         this.coreRepository = coreRepository;
         this.workRepository = workRepository;
-        this.archiveRepository = archiveRepository;
         this.conversationMemoryService = conversationMemoryService;
         this.episodicMemoryService = episodicMemoryService;
         this.storedMediaRepository = storedMediaRepository;
@@ -68,20 +65,18 @@ public class MemoryRetrievalService {
 
     MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            ConversationMemoryService conversationMemoryService,
                            StoredMediaRepository storedMediaRepository) {
-        this(coreRepository, workRepository, archiveRepository, conversationMemoryService,
+        this(coreRepository, workRepository, conversationMemoryService,
                 null, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
     }
 
     MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
                            UserWorkMemoryRepository workRepository,
-                           MemoryArchiveRepository archiveRepository,
                            ConversationMemoryService conversationMemoryService,
                            EpisodicMemoryService episodicMemoryService,
                            StoredMediaRepository storedMediaRepository) {
-        this(coreRepository, workRepository, archiveRepository, conversationMemoryService,
+        this(coreRepository, workRepository, conversationMemoryService,
                 episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), 8, 3);
     }
 
@@ -225,24 +220,12 @@ public class MemoryRetrievalService {
             if (memory == null || !ownedBy(memory.getUserId(), userId)) {
                 continue;
             }
-            if (WorkMemoryService.isActive(memory, now) && !Boolean.TRUE.equals(memory.getArchived())) {
+            if (WorkMemoryService.isActive(memory, now)) {
                 continue;
             }
-            String status = Boolean.TRUE.equals(memory.getArchived()) ? "ARCHIVED" : memory.getStatus();
+            String status = memory.getStatus();
             addHistorical(candidates, seen, memory.getContent(), status,
                     score(memory.getContent(), memory.getKeywords(), query), historicalQuery, memory.getUpdatedAt());
-        }
-        if (archiveRepository != null) {
-            try {
-                for (MemoryArchive archive : archiveRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
-                    if (archive == null || !ownedBy(archive.getUserId(), userId)) {
-                        continue;
-                    }
-                    addHistorical(candidates, seen, archive.getSummary(), "ARCHIVED",
-                            score(archive.getSummary(), "", query), historicalQuery, archive.getCreatedAt());
-                }
-            } catch (Exception ignored) {
-            }
         }
         if (conversationMemoryService != null && (historicalQuery || !hasRelevantActiveMemory)) {
             List<ConversationMemory> records = conversationMemoryService.relevantForRetrieval(userId, query);
@@ -437,7 +420,7 @@ public class MemoryRetrievalService {
                     && ownedBy(memory.getUserId(), userId)).toList();
         } catch (Exception ignored) {
             try {
-                List<UserWorkMemory> result = workRepository.findByUserIdAndArchivedFalse(userId);
+                List<UserWorkMemory> result = workRepository.findByUserId(userId);
                 return result == null ? List.of() : result.stream().filter(memory -> memory != null
                         && ownedBy(memory.getUserId(), userId)).toList();
             } catch (Exception ignoredAgain) {

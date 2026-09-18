@@ -36,9 +36,7 @@ public enum LlmScenario {
     /** 提醒解析 */
     REMINDER_PARSE,
     /** 定时任务解析（自然语言 → cron） */
-    SCHEDULE_PARSE,
-    /** 归档摘要 */
-    ARCHIVE;
+    SCHEDULE_PARSE;
 
     private static final ThreadLocal<LlmScenario> CURRENT = new ThreadLocal<>();
 
@@ -62,7 +60,7 @@ public enum LlmScenario {
         }
     }
 
-    /** 配置里用小写下划线（extract / reminder_parse / schedule_parse / archive / dialog），认不出来就当 DIALOG */
+    /** 配置里用小写下划线（extract / reminder_parse / schedule_parse / dialog），认不出来就当 DIALOG */
     public static LlmScenario of(String name) {
         if (name == null || name.isBlank()) {
             return DIALOG;

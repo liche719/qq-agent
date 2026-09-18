@@ -23,7 +23,6 @@ public class MemoryForgetService {
 
     private final CoreMemoryService coreMemoryService;
     private final WorkMemoryService workMemoryService;
-    private final MemoryArchiveService archiveService;
     private final MemoryExtractionScheduler extractionScheduler;
     private final ContextStore contextStore;
     private final MemoryMutationLock mutationLock;
@@ -34,7 +33,6 @@ public class MemoryForgetService {
     @Autowired
     public MemoryForgetService(CoreMemoryService coreMemoryService,
                                WorkMemoryService workMemoryService,
-                               MemoryArchiveService archiveService,
                                MemoryExtractionScheduler extractionScheduler,
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
@@ -43,7 +41,6 @@ public class MemoryForgetService {
                                EpisodicMemoryService episodicMemoryService) {
         this.coreMemoryService = coreMemoryService;
         this.workMemoryService = workMemoryService;
-        this.archiveService = archiveService;
         this.extractionScheduler = extractionScheduler;
         this.contextStore = contextStore;
         this.mutationLock = mutationLock;
@@ -54,24 +51,22 @@ public class MemoryForgetService {
 
     public MemoryForgetService(CoreMemoryService coreMemoryService,
                                WorkMemoryService workMemoryService,
-                               MemoryArchiveService archiveService,
                                MemoryExtractionScheduler extractionScheduler,
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob,
                                ConversationMemoryService conversationMemoryService) {
-        this(coreMemoryService, workMemoryService, archiveService, extractionScheduler, contextStore,
+        this(coreMemoryService, workMemoryService, extractionScheduler, contextStore,
                 mutationLock, backupJob, conversationMemoryService, null);
     }
 
     public MemoryForgetService(CoreMemoryService coreMemoryService,
                                WorkMemoryService workMemoryService,
-                               MemoryArchiveService archiveService,
                                MemoryExtractionScheduler extractionScheduler,
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob) {
-        this(coreMemoryService, workMemoryService, archiveService, extractionScheduler, contextStore,
+        this(coreMemoryService, workMemoryService, extractionScheduler, contextStore,
                 mutationLock, backupJob, null, null);
     }
 
@@ -107,11 +102,6 @@ public class MemoryForgetService {
             forgotten.addAll(coreMemoryService.forgetSupersededHistory(userId, primary.id()));
         } else if ("WORK".equals(primary.layer())) {
             forgotten.addAll(workMemoryService.forgetSupersededHistory(userId, primary.id()));
-        }
-        if (primary.isArchiveSummary()) {
-            forgotten.addAll(archiveService.forgetSummary(userId, primary.content()));
-        } else if ("WORK".equals(primary.layer())) {
-            forgotten.addAll(archiveService.forgetSourceMemory(userId, primary.id()));
         }
         boolean contextCleared = false;
         boolean legacyContextReset = false;
