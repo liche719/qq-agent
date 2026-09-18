@@ -17,6 +17,9 @@ public record MemoryProvenance(String sourceType, int confidence, List<String> s
 
     public static MemoryProvenance automatic(String source) {
         String normalized = source == null ? "" : source.trim();
+        // 归档机制 2026-09-18 已删除，但没有产生者 ≠ 可以删：`user_work_memory.source` 里还有历史行
+        // 写着 `archive_summary`，而 {@code WorkMemoryService} 会拿存量 source 重新推导来源，
+        // 删掉这一支会让那些行被降级成 USER_DERIVED。**保留。**
         if ("archive_summary".equalsIgnoreCase(normalized)) {
             return new MemoryProvenance("SYSTEM_SUMMARY", 70, List.of(), List.of());
         }

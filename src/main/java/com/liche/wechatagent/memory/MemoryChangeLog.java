@@ -28,7 +28,7 @@ public class MemoryChangeLog {
     @Column(length = 128)
     private String userId;
 
-    /** ADD / UPDATE / SUPERSEDE / ARCHIVE / ARCHIVE_CREATE / CONFIRM_REJECT */
+    /** ADD / UPDATE / SUPERSEDE / ARCHIVE / ARCHIVE_CREATE / CONFIRM_REJECT（ARCHIVE* 自 2026-09-18 起只是历史值） */
     @Column(length = 32)
     private String action;
 
