@@ -141,8 +141,15 @@ public class MemoryFactService {
                         userId, target, candidate.predicate(), MemoryFact.STATUS_ACTIVE)
                 .orElse(null);
         if (existing == null) {
-            // 模型提到的目标不在"当前有效事实"里（可能已被取代）→ 当新建，并沿用它的说法
-            return persist(userId, candidate, List.of(), "新增（未找到合并目标）");
+            // 模型说要合并、但按它给的名字+属性**精确查不到**目标（多半是它没照抄卡片的写法）。
+            // **不做字面/相似度之类的猜测**（用户 2026-09-18 明确否掉：那是硬编码阈值）——
+            // 直接退回"向量召回 + 让模型判关系"那条路，由模型自己决定是同一件事还是新的一件事。
+            log.info("主调用给的合并目标查不到（subject={} predicate={}），退回召回+判定 user={}",
+                    target, candidate.predicate(), userId);
+            MemoryFactCandidate plain = new MemoryFactCandidate(candidate.subject(), candidate.predicate(),
+                    candidate.object(), candidate.content(), candidate.source(), candidate.confidence(),
+                    candidate.docMediaId(), candidate.keywords(), candidate.sourceMessageIds());
+            return writeOne(userId, plain);
         }
         if (MemoryFact.RELATION_SAME.equals(relation)) {
             touch(userId, existing, candidate, "主调用判定：同一个值");

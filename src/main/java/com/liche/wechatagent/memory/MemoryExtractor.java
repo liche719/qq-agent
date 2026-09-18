@@ -941,7 +941,9 @@ public class MemoryExtractor {
                         + "它们每周都在变，但事实层会按「同一件事的同一个属性」自动用新值取代旧值，所以**写进来是安全的、也是必须的**"
                         + "——不写就永远想不起来。每件事每次只写**当前有效**的那个值，不要写「以前是…后来改成…」。\n")
                 .append("13. 【facts 的写法】subject=这件事的名字（同一件事每次必须用**完全一样**的 subject，例：第一周·周二晚·数学课）；"
-                        + "predicate=属性（教室 / 时间 / 教师 / 周次）；object=值（303 / 周二 19:00）；content=一句完整事实；"
+                        + "predicate=属性（教室 / 时间 / 教师 / 周次）；object=值；content=一句完整事实；"
+                        + "**object 必须是「能被另一个值替换掉」的具体值**（303 / 周二 19:00 / 王老师）；"
+                        + "「有课」「体育课」这种只是状态、没有信息量、也替换不了的，不要单独记一条；"
                         + "source=USER 表示用户自己说的，source=DOC 表示你是从用户发来的图片或文件里看到的（只看你确实看到的，图里没有的不要补）。"
                         + "课表图这类信息请**逐条拆开**写，不要写成一句话塞很多件事。\n")
                 .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
@@ -955,7 +957,8 @@ public class MemoryExtractor {
                     .append("    - SUPERSEDES：同一件事的**同一个属性**、新值取代旧值（教室 303→305）→ targetSubject 抄那张卡片的名字。\n")
                     .append("    - SUPPLEMENT：同一件事的**另一个属性**或额外细节（已有教室，新的是教师）→ targetSubject 抄那张卡片的名字。\n")
                     .append("    - SAME：同一件事的**同一个值**（只是换了说法）→ targetSubject 抄那张卡片的名字，不要重复记一条。\n")
-                    .append("    targetSubject 必须**逐字照抄**卡片里冒号前面的那个名字，不要自己改写或缩写（改了就会被当成新的一件事）。\n");
+                    .append("    targetSubject 必须**逐字照抄**卡片里冒号前面的那个名字；**同一个属性时 predicate 也照抄卡片的写法**"
+                            + "（卡片写「教师」就别写成「老师」——写成别的会被当成另一件事，卡片上就会出现两个矛盾值）。\n");
         }
         prompt.append("\n已存在的核心记忆：\n");
         if (cores.isEmpty()) {
@@ -1014,7 +1017,8 @@ public class MemoryExtractor {
                 .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
                 .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"relation\":\"NEW\",\"targetSubject\":\"\"}],")
                 .append("\"duplicates\":[]}\n")
-                .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []）");
+                .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []；"
+                        + "**facts 不需要 keywords**——事实层靠向量召回和 subject 聚合，关键词没人读）");
         return prompt.toString();
     }
 
@@ -1147,7 +1151,8 @@ public class MemoryExtractor {
                     node.path("object").asText(""), node.path("content").asText(""),
                     node.path("source").asText("USER"),
                     boundedInt(node.path("confidence").asInt(defaultConfidence), 0, 100), docMediaId,
-                    stringList(node.path("keywords"), maxKeywords), sourceMessageIds(node.path("sourceMessageIds")),
+                    // facts 不要 keywords：事实层是向量召回 + subject 聚合，关键词写了也没人读（2026-09-18 去掉）
+                    List.of(), sourceMessageIds(node.path("sourceMessageIds")),
                     node.path("relation").asText(null), node.path("targetSubject").asText(null)));
         }
         return values;
