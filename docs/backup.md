@@ -117,8 +117,8 @@ Dockerfile 的 `postgresql-client` **没钉版本**，基础镜像换到 Ubuntu 
 ## 把数据全部拿走（2026-09-20，服务器到期场景）
 
 「有备份」不等于「能把数据拿出来」——卷和备份都在同一台机器上。所以除日常两份备份外，
-另有一个**自包含导出包**（`/root/wechat-agent-full-export-20260920.tar.gz`，9.0 MB，
-本地另存一份 `C:\Users\33721\Desktop\wechat-agent\`），内容：
+另有一个**自包含导出包**（`/root/wechat-agent-full-export-20260920.tar.gz`，8.8 MB、
+sha256 `afd53e0b…`，本地另存一份 `C:\Users\33721\Desktop\wechat-agent\`），内容：
 
 | 成员 | 说明 |
 |---|---|
@@ -131,11 +131,46 @@ Dockerfile 的 `postgresql-client` **没钉版本**，基础镜像换到 Ubuntu 
 | `README-restore.md` | 恢复步骤 |
 
 **闭环验证（已做，不是推测）**：把包里的 `db/<day>.sql.gz` 灌进一个干净库（本地 `wa-pg-rehearsal`），
-`ON_ERROR_STOP=1` 零报错、**39 张表逐表行数与 `counts.tsv` 零差异**，抽样 `memory` 113（PROFILE 29 /
-TASK 65 / EXPERIENCE 19）、`conversation_memory` 1332 行 4 个用户、`memory_fact` 10、`exam_plan` 1。
+`ON_ERROR_STOP=1` 零报错、**39 张表逐表行数与 `counts.tsv` 零差异**，抽样 `memory` 109（PROFILE 29 /
+TASK 65 / EXPERIENCE 15）、`conversation_memory` 1332 行 4 个用户、`memory_fact` 10、`exam_plan` 1，
+`memory` 里 `sim-%` 行数 0；媒体 9 个原始文件 + 7 个共享 blob + 3 份 legacy sql 都在包里。
 **换机器恢复只要 PostgreSQL 16 + pgvector**；服务器 `.env`（口令）只有「想把服务原样跑起来」时才需要，
 只要数据不需要它。
+
+**包里那份 dump 的来历**：刻意用**服务端自己**的 `pg_dump`（postgres 容器里的 16.14）现打，
+参数与 `DatabaseDumpService` 一致（`--no-owner --no-privileges`），所以不会带客户端比服务端新产生的
+`SET transaction_timeout` 那类兼容问题。日常 03:00 那份仍由镜像里的客户端打（已加 GUC 过滤兜住）。
 
 **两个口径**：① 逻辑备份的 `state.json` 按 `user_profile` 遍历，所以**没建档的账号不在这份里**
 （库里那 4 条 `sim-iv-check`/`sim-iv-check2` 的测试经历就是这种），**全库 dump 才是无遗漏的**；
 ② 机主 `memories=109` 与库里 113 的差额就是那 4 条，不是备份丢数据。
+
+那 4 条测试账号的残留已在 2026-09-20 清掉（连 7 条变更日志一起，事务内删除；undo 在服务器
+`/root/wechat-agent-memory-cleanup-undo-20260920.sql`，1.5 MB，服务端 16.14 的 `pg_dump --data-only`
+打的、可直接回灌），清完 `memory` = **109（PROFILE 29 / TASK 65 / EXPERIENCE 15）**，与备份完全一致。
+`memory_change_log` 里还剩 12 条、`operation_log` 里 7 条属于更早的 `sim-*` 测试账号——那些是审计/变更
+日志、不是记忆，且面板按机主 user_id 过滤看不到，留着没影响。
+
+---
+
+## 备份新鲜度告警（2026-09-20 加）
+
+**为什么**：备份每天 03:00 由应用**自己**跑（`MemoryBackupJob`），跑失败只写一行 ERROR 进日志。
+这个项目部署很频繁，03:00 那一刻如果容器正在重建，那天就**一份备份都没有**——而它是「用户长期记忆
+不丢失」的最后一道防线，却没有任何人会被告知。所以补一条主动判定：
+
+- `BackupFreshnessChecker`：看 `backup/` 下形如 `<yyyyMMdd>.zip`（逻辑备份）与 `<yyyyMMdd>.sql.gz`
+  （库级备份）的文件里**最新那份**的 mtime，距今超过 `backup.max-age-hours`（`BACKUP_MAX_AGE_HOURS`，
+  默认 **26** 小时；`0` = 不检查）就算不新鲜。目录不存在、或一个备份包都没有，同样算不新鲜。
+  只认这两种文件名，`.backup-xxx.zip.tmp` 这类临时文件不会被当成备份。检查自身出错一律当正常（不误报）。
+- 两个出口：`AlertNotifier` 推 QQ 告警（问题出现与恢复各一条，走既有的 `repeat-minutes` 去重）；
+  `AdminDashboardController.overview()` 把同一条塞进 `alerts` → 面板 `status` 变 **DEGRADED**（前端早就会渲染）。
+- **实测（2026-09-20 01:56）**：把 `backup/` 下所有备份包的 mtime 改成 3 天前 → 日志出现
+  「已推送运维告警：备份已 72 小时没更新（最近 …，阈值 26 小时）」，面板 `status=DEGRADED` 且 `alerts`
+  带同一条；把 mtime 原样还原 → 75 秒后推「运维恢复」，面板回 `UP`、`alerts` 空。
+- **局限（要说清）**：这条检查跑在被监控的同一个进程里。**应用整个挂掉时它不会响**——那种情况要靠外部
+  探活。它能抓的是「应用活着、但备份那天没跑成」，也就是最容易被忽略的那种。
+
+**保留期**：`.env` 已显式写 `BACKUP_RETENTION_DAYS=30`（此前是 compose 的隐式默认值，值一样）。
+注意 `docker compose up -d agent` 那次**没有重建容器**——compose 比的是**渲染后**的服务配置，
+显式写 30 与默认 30 渲染结果相同，所以不触发重建；容器里 `BACKUP_RETENTION_DAYS=30` 是准的。
