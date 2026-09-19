@@ -24,6 +24,8 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`
+- **下一步计划（用户 2026-09-20 口头定，尚未开工）**：① 整理文档（本文件已超 64 KB 上限、尾部会被截断）；
+  ② 整理 / 优化工具集（现 72 个）。记在 `docs/todo.md`，**动手前先给方案等确认**。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
 
@@ -61,7 +63,7 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 
 - 服务器：`120.25.170.92`，root SSH（密码由用户提供，不写进文件）。
 - 目录 `/opt/wechat-agent-infra`：
-  - `docker-compose.yml` —— 基础设施三件套
+  - `docker-compose.yml` —— **2026-09-20 已改名 `docker-compose.localdev-unused.txt`**：那是 09-11 从本地开发版拷过来的残留（里面 mysql 口令还是 `root`），4 个容器其实全来自下面那份；留着它会让"不加 `-f` 的 `docker compose up -d`"用同名容器顶掉运行中的 redis/searxng。
   - `docker-compose.remote.yml` —— 含 agent 服务，CI 使用
   - `.env`（权限 600，服务器侧凭据，不入库、CI 也不传）
   - `docker/searxng/settings.yml`
