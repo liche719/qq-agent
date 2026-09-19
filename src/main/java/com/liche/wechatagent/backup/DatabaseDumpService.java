@@ -5,17 +5,27 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPOutputStream;
@@ -84,7 +94,7 @@ public class DatabaseDumpService {
             Process process = builder.start();
             try (InputStream source = process.getInputStream();
                  OutputStream sink = new GZIPOutputStream(Files.newOutputStream(temporary))) {
-                source.transferTo(sink);
+                transferDump(parsed.postgres(), source, sink);
             }
             String error = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
             int code = process.waitFor();
@@ -113,8 +123,83 @@ public class DatabaseDumpService {
         }
     }
 
-    private void safeDelete(Path path) {
-        if (path == null) {
+    /**
+     * 把 dump 从 pg_dump 的 stdout 搬到 gzip 文件里，顺手**丢掉服务端不认识的语句**。
+     *
+     * <p>为什么需要（2026-09-19 实测踩到）：镜像里的 `pg_dump` 版本**跟着基础镜像走**，可能比数据库新
+     * （当时是客户端 18.6 / 服务端 16.14）。pg_dump 会把**自己版本**的默认设置写进 dump 头，于是 PG16
+     * 恢复时第一行就 `ERROR: unrecognized configuration parameter "transaction_timeout"`；psql 18 还会写
+     * `restrict` / `unrestrict` 这类 16 的 psql 不认的反斜杠元命令。**严格模式（`-v ON_ERROR_STOP=1`）直接失败**——
+     * 备份"在"但恢复不了，等于没有。
+     *
+     * <p>处理办法不是硬编码某几个名字，而是**问服务端自己**：`select name from pg_settings` 拿它认识的参数集合，
+     * 头部里 `SET` 了不在集合里的就丢掉。COPY 数据块内一律不动（只在"不在数据块里"时过滤）。
+     */
+    private void transferDump(boolean postgres, InputStream source, OutputStream sink) throws IOException {
+        if (!postgres) {
+            // mysqldump 没有这个问题
+            source.transferTo(sink);
+            return;
+        }
+        Set<String> known = knownSettings();
+        BufferedReader reader = new BufferedReader(new InputStreamReader(source, StandardCharsets.UTF_8));
+        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(sink, StandardCharsets.UTF_8));
+        boolean inCopyData = false;
+        int droppedSettings = 0;
+        int droppedMeta = 0;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (inCopyData) {
+                if ("\\.".equals(line.trim())) {
+                    inCopyData = false;
+                }
+            } else if (line.startsWith("COPY ") && line.trim().endsWith("FROM stdin;")) {
+                inCopyData = true;
+            } else if (line.startsWith("\\restrict") || line.startsWith("\\unrestrict")) {
+                droppedMeta++;
+                continue;
+            } else if (known != null && unknownSetting(line, known)) {
+                droppedSettings++;
+                continue;
+            }
+            writer.write(line);
+            writer.write('\n');
+        }
+        writer.flush();
+        if (droppedSettings > 0 || droppedMeta > 0) {
+            log.info("库级备份：丢弃 {} 条服务端不认识的 SET + {} 条 psql 元命令（客户端比服务端新时的兼容处理）",
+                    droppedSettings, droppedMeta);
+        }
+    }
+
+    private boolean unknownSetting(String line, Set<String> known) {
+        if (!line.startsWith("SET ")) {
+            return false;
+        }
+        int equals = line.indexOf(" = ");
+        if (equals <= 4) {
+            return false;
+        }
+        return !known.contains(line.substring(4, equals).trim());
+    }
+
+    /** 服务端认识的参数名；查不到就返回 null（表示不过滤，宁可留下也不误删） */
+    private Set<String> knownSettings() {
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, username, password);
+             Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery("select name from pg_settings")) {
+            Set<String> names = new HashSet<>();
+            while (rows.next()) {
+                names.add(rows.getString(1));
+            }
+            return names;
+        } catch (Exception exception) {
+            log.warn("查 pg_settings 失败（本次不做 SET 过滤）：{}", exception.getMessage());
+            return null;
+        }
+    }
+
+    private void safeDelete(Path path) {        if (path == null) {
             return;
         }
         try {
