@@ -53,6 +53,14 @@ wechat-deploy alert-notify                                # stdin = KEY=... / MS
 重启 searxng（配置是挂载进去的、不热加载）→ `docker image prune -f` →
 **按 image id 保留「当前容器镜像 + 次新镜像」的全部 tag** → 删除镜像包 → 打印容器与镜像状态。
 
+**一个会让人误判的现象（2026-09-20 巡检时差点当成 bug）**：`docker images | grep wechat-agent`
+有时会列出**三行** tag。原因是清理逻辑按 **image id** 排除，而**两次内容完全相同的构建会产生同一个
+image id、只是各带一个 tag**（实测 `wechat-agent:6c16fd2…` 与 `wechat-agent:b682f77b…` 的
+`{{.ID}}` 都是 `sha256:33b2025e…`）。所以那是**同一个镜像的别名 tag，不是多一代**：
+磁盘 0 开销、回滚用哪个 tag 都一样。真要消掉，`docker rmi -f <多余tag>`（镜像仍被另一个 tag 引用，不会删）。
+判断方法：`docker images --no-trunc --format '{{.Repository}}:{{.Tag}} -> {{.ID}}' --filter 'reference=wechat-agent:*'`。
+顺带：`docker images --format` 支持 `{{.CreatedAt}}` 与 `{{.CreatedSince}}`（本机 docker 26.1.3 实测都可用）。
+
 ## 4. 运维
 
 - **改远端部署逻辑**：改 `deploy/server/wechat-deploy` → 用 base64 装到服务器
