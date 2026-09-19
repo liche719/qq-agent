@@ -13,10 +13,10 @@ import java.util.Set;
 import java.util.StringJoiner;
 
 /**
- * pgvector 的通用读写（2026-09-18，P3）：给"也想要向量"的记忆表用（`conversation_memory` / `episodic_memory`）。
+ * pgvector 的通用读写（2026-09-18，P3）：给"也想要向量"的记忆表用（`conversation_memory` / `memory`）。
  *
  * <p>为什么要通用版：{@link MemoryFactVectorStore}（事实层，2026-09-18 上）与
- * {@link WorkMemoryVectorStore}（工作记忆，P2）已经把同一套 SQL 写过两遍，P3 再要两张表就是四遍。
+ * 原工作记忆向量库（P2）已经把同一套 SQL 写过两遍，P3 再要两张表就是四遍。
  * **这两条已验证的路径这次不动**（能跑就别碰），新的两张表统一走这里；
  * 以后要合并的话，把那两个类改成委托本类即可（纯机械改动）。
  *
@@ -29,7 +29,7 @@ public class PgVectorStore {
     private static final Logger log = LoggerFactory.getLogger(PgVectorStore.class);
 
     /** 允许操作的表（白名单，防止表名被当成注入点） */
-    private static final Set<String> TABLES = Set.of("conversation_memory", "episodic_memory");
+    private static final Set<String> TABLES = Set.of("conversation_memory", "memory");
 
     private final JdbcTemplate jdbcTemplate;
 

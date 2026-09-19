@@ -32,63 +32,58 @@ public class MemoryManagementService {
     private static final int MIN_DISTINCTIVE_ANCHOR_LENGTH = 4;
     private static final int MIN_SHARED_BIGRAMS = 3;
     private static final double MIN_FUZZY_SIMILARITY = 0.55d;
+    /** 三表合并（2026-09-18）后编号统一成 M&lt;编号&gt;；C/W 只作旧编号的提示 */
+    private static final String MEMORY_REFERENCE = "(?i)M\\s*\\d+";
+    private static final String LEGACY_REFERENCE = "(?i)[CW]\\s*\\d+";
+    private static final String RENUMBERED_HINT =
+            "编号形式已改：原来按 C（核心）/W（工作）区分，现在记忆合并成一张表、统一用 M 编号。请发送 /memory 查看新的 M 编号。";
 
     private final UserService userService;
-    private final CoreMemoryService coreMemoryService;
-    private final WorkMemoryService workMemoryService;
+    private final MemoryService memoryService;
     private final StoredMediaRepository storedMediaRepository;
     private final MemoryContentSimilarity contentSimilarity;
     private final MemoryForgetService memoryForgetService;
 
     @Autowired
     public MemoryManagementService(UserService userService,
-                                   CoreMemoryService coreMemoryService,
-                                   WorkMemoryService workMemoryService,
+                                   MemoryService memoryService,
                                    StoredMediaRepository storedMediaRepository,
                                    MemoryContentSimilarity contentSimilarity,
                                    MemoryForgetService memoryForgetService) {
         this.userService = userService;
-        this.coreMemoryService = coreMemoryService;
-        this.workMemoryService = workMemoryService;
+        this.memoryService = memoryService;
         this.storedMediaRepository = storedMediaRepository;
         this.contentSimilarity = contentSimilarity;
         this.memoryForgetService = memoryForgetService;
     }
 
     public String overview(String userId) {
-        List<UserCoreMemory> core = coreMemoryService.listActive(userId);
-        List<UserWorkMemory> work = workMemoryService.listActive(userId).stream()
-                .sorted(Comparator.comparing(UserWorkMemory::getUpdatedAt).reversed())
-                .toList();
-        List<UserWorkMemory> inactive = workMemoryService.listInactive(userId).stream()
-                .sorted(Comparator.comparing(UserWorkMemory::getUpdatedAt,
+        List<Memory> profile = sortedActive(userId, Memory.KIND_PROFILE);
+        List<Memory> task = sortedActive(userId, Memory.KIND_TASK);
+        List<Memory> experience = sortedActive(userId, Memory.KIND_EXPERIENCE);
+        // "近期已结束/过期"原来只指中期事项（core/episode 没有结束这一说），这里保持同一口径
+        List<Memory> inactive = memoryService.listInactive(userId).stream()
+                .filter(memory -> Memory.KIND_TASK.equals(memory.getKind()))
+                .sorted(Comparator.comparing(Memory::getUpdatedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(10)
                 .toList();
-        Map<Long, StoredMedia> linkedMedia = linkedMedia(userId, core, work, inactive);
+        Map<Long, StoredMedia> linkedMedia = linkedMedia(userId, profile, task, experience, inactive);
         StringBuilder text = new StringBuilder("自动记忆：")
                 .append(userService.isMemoryEnabled(userId) ? "开启" : "关闭")
-                .append("\n\n【核心记忆】\n");
-        if (core.isEmpty()) {
-            text.append("（暂无）\n");
-        } else {
-            core.forEach(memory -> text.append("C").append(memory.getId()).append("：").append(memory.getContent())
-                    .append(metadata(memory, linkedMedia)).append("\n"));
-        }
-        text.append("\n【工作记忆】\n");
-        if (work.isEmpty()) {
-            text.append("（暂无）\n");
-        } else {
-            work.forEach(memory -> text.append("W").append(memory.getId()).append("：").append(memory.getContent())
-                    .append(metadata(memory, linkedMedia)).append("\n"));
-        }
+                .append("\n\n【长期设定】\n");
+        appendSection(text, profile, linkedMedia);
+        text.append("\n【中期事项】\n");
+        appendSection(text, task, linkedMedia);
+        text.append("\n【经历】\n");
+        appendSection(text, experience, linkedMedia);
         if (!inactive.isEmpty()) {
-            text.append("\n【近期已结束/过期的工作记忆】\n");
-            inactive.forEach(memory -> text.append("W").append(memory.getId()).append("（")
+            text.append("\n【近期已结束/过期】\n");
+            inactive.forEach(memory -> text.append("M").append(memory.getId()).append("（")
                     .append(displayStatus(memory)).append("）：").append(memory.getContent())
                     .append("\n"));
         }
-        text.append("\n用法：/memory on|off；/memory forget C编号 或 W编号");
+        text.append("\n用法：/memory on|off；/memory forget M编号");
         return text.toString().trim();
     }
 
@@ -109,7 +104,7 @@ public class MemoryManagementService {
         if (reference != null) {
             return forget(userId, reference);
         }
-        return "用法：/memory 查看；/memory on|off；/memory forget 关键词。也可以使用 C3、W12 这样的编号。记忆由系统自动提取，无需手动添加。";
+        return "用法：/memory 查看；/memory on|off；/memory forget 关键词。也可以使用 M3、M12 这样的编号。记忆由系统自动提取，无需手动添加。";
     }
 
     private String forget(String userId, String reference) {
@@ -117,23 +112,19 @@ public class MemoryManagementService {
             throw new BizException("请说清要删除哪条，例如：/memory forget 关键词");
         }
         String normalized = reference.strip();
-        if (!normalized.matches("(?i)[CW]\\s*\\d+")) {
+        if (normalized.matches(LEGACY_REFERENCE)) {
+            return RENUMBERED_HINT;
+        }
+        if (!normalized.matches(MEMORY_REFERENCE)) {
             return forgetByContent(userId, normalized);
         }
-        String type = normalized.substring(0, 1).toUpperCase();
         Long id;
         try {
             id = Long.parseLong(normalized.substring(1).trim());
         } catch (NumberFormatException exception) {
-            throw new BizException("编号格式不正确，例如：/memory forget C3");
+            throw new BizException("编号格式不正确，例如：/memory forget M3");
         }
-        if ("C".equals(type)) {
-            return forgetMemory(userId, "CORE", id);
-        } else if ("W".equals(type)) {
-            return forgetMemory(userId, "WORK", id);
-        } else {
-            throw new BizException("编号应以 C（核心）或 W（工作）开头");
-        }
+        return forgetMemory(userId, "M", id);
     }
 
     private String forgetByContent(String userId, String keyword) {
@@ -152,11 +143,11 @@ public class MemoryManagementService {
             return text.toString();
         }
         MemoryMatch match = matches.get(0);
-        return forgetMemory(userId, "C".equals(match.type()) ? "CORE" : "WORK", match.id());
+        return forgetMemory(userId, "M", match.id());
     }
 
-    private String forgetMemory(String userId, String layer, Long id) {
-        MemoryForgetService.ForgetOutcome outcome = memoryForgetService.forget(userId, layer, id);
+    private String forgetMemory(String userId, String referenceType, Long id) {
+        MemoryForgetService.ForgetOutcome outcome = memoryForgetService.forget(userId, referenceType, id);
         String text = "已彻底遗忘该记忆：它不会再作为长期记忆或关联短期上下文提供给 Agent；审计记录不保留正文。";
         if (outcome.removedRecordCount() > 1) {
             text += "同时清理了 " + (outcome.removedRecordCount() - 1) + " 条关联记录。";
@@ -185,12 +176,9 @@ public class MemoryManagementService {
 
     private List<MemoryMatch> findMatches(String userId, String keyword, MemoryReferenceMatcher matcher) {
         List<MemoryMatch> matches = new ArrayList<>();
-        coreMemoryService.list(userId).stream()
+        memoryService.list(userId).stream()
                 .filter(memory -> matcher.matches(keyword, memory.getContent()))
-                .forEach(memory -> matches.add(new MemoryMatch("C", memory.getId(), memory.getContent())));
-        allWork(userId).stream()
-                .filter(memory -> matcher.matches(keyword, memory.getContent()))
-                .forEach(memory -> matches.add(new MemoryMatch("W", memory.getId(), memory.getContent())));
+                .forEach(memory -> matches.add(new MemoryMatch("M", memory.getId(), memory.getContent())));
         return matches;
     }
 
@@ -263,22 +251,25 @@ public class MemoryManagementService {
         boolean matches(String reference, String content);
     }
 
-    private List<UserWorkMemory> allWork(String userId) {
-        List<UserWorkMemory> result = new java.util.ArrayList<>(workMemoryService.listActive(userId));
-        result.addAll(workMemoryService.listInactive(userId));
-        return result;
+    private List<Memory> sortedActive(String userId, String kind) {
+        return memoryService.listActive(userId, kind).stream()
+                .sorted(Comparator.comparing(Memory::getUpdatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
     }
 
-    private String metadata(UserCoreMemory memory, Map<Long, StoredMedia> linkedMedia) {
-        StringBuilder result = new StringBuilder("（来源=").append(blank(memory.getSourceType(), "USER_EXPLICIT"))
-                .append("，最后确认=").append(format(memory.getLastConfirmedAt()));
-        appendMediaLabels(result, memory.getSourceMediaIds(), linkedMedia);
-        return result.append('）').toString();
+    private void appendSection(StringBuilder text, List<Memory> memories, Map<Long, StoredMedia> linkedMedia) {
+        if (memories.isEmpty()) {
+            text.append("（暂无）\n");
+            return;
+        }
+        memories.forEach(memory -> text.append("M").append(memory.getId()).append("：").append(memory.getContent())
+                .append(metadata(memory, linkedMedia)).append("\n"));
     }
 
-    private String metadata(UserWorkMemory memory, Map<Long, StoredMedia> linkedMedia) {
+    private String metadata(Memory memory, Map<Long, StoredMedia> linkedMedia) {
         StringBuilder result = new StringBuilder("（");
-        if (memory.getValidUntil() != null) {
+        if (Memory.KIND_TASK.equals(memory.getKind()) && memory.getValidUntil() != null) {
             result.append("有效至=").append(format(memory.getValidUntil())).append("，");
         }
         result.append("来源=").append(blank(memory.getSourceType(), "USER_EXPLICIT"))
@@ -287,14 +278,15 @@ public class MemoryManagementService {
         return result.append('）').toString();
     }
 
-    private Map<Long, StoredMedia> linkedMedia(String userId, List<UserCoreMemory> core,
-                                                List<UserWorkMemory> work, List<UserWorkMemory> inactive) {
+    private Map<Long, StoredMedia> linkedMedia(String userId, List<Memory> profile, List<Memory> task,
+                                                List<Memory> experience, List<Memory> inactive) {
         if (storedMediaRepository == null) {
             return Map.of();
         }
         Set<Long> mediaIds = new LinkedHashSet<>();
-        core.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
-        work.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        profile.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        task.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
+        experience.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
         inactive.forEach(memory -> mediaIds.addAll(mediaIds(memory.getSourceMediaIds())));
         if (mediaIds.isEmpty()) {
             return Map.of();
@@ -325,7 +317,7 @@ public class MemoryManagementService {
         return MemoryProvenance.fromStored("USER_EXPLICIT", 100, "", sourceMediaIds).sourceMediaIds();
     }
 
-    private String displayStatus(UserWorkMemory memory) {
+    private String displayStatus(Memory memory) {
         if (memory.getStatus() == null || memory.getStatus().isBlank()) {
             return memory.getValidUntil() != null && memory.getValidUntil().isBefore(LocalDateTime.now()) ? "已过期" : "已结束";
         }

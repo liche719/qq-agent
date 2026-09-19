@@ -88,19 +88,22 @@ const memorySections = computed(() => {
     })
   }
 
-  pushList('coreMemories', '核心记忆', source.coreMemories, item => ({
+  // 2026-09-18：记忆三张表合并成一张（memory），后端只返回一个 memories 数组，按 kind 分组展示
+  const memories = Array.isArray(source.memories) ? source.memories : []
+  const byKind = (kind) => memories.filter(item => item.kind === kind)
+  pushList('profileMemories', '长期设定', byKind('PROFILE'), item => ({
     meta: '重要度 ' + (item.importance ?? '—') + ' · ' + zh('memory', item.status),
     text: item.content,
     metaRight: fmtTime(item.updatedAt)
   }))
-  pushList('workMemories', '工作记忆', source.workMemories, item => ({
-    meta: '优先级 ' + (item.priority ?? '—'),
+  pushList('taskMemories', '中期事项', byKind('TASK'), item => ({
+    meta: '优先级 ' + (item.priority ?? '—') + (item.validUntil ? ' · 有效至 ' + fmtTime(item.validUntil) : ''),
     text: item.content,
     metaRight: fmtTime(item.updatedAt)
   }))
-  pushList('episodicMemories', '情景记忆', source.episodicMemories, item => ({
-    meta: (item.title || '情景') + (item.status ? ' · ' + zh('episodic', item.status) : ''),
-    text: item.summary,
+  pushList('experienceMemories', '经历', byKind('EXPERIENCE'), item => ({
+    meta: (item.title || '经历') + (item.status ? ' · ' + zh('memory', item.status) : ''),
+    text: item.content,
     metaRight: fmtTime(item.occurredAt)
   }))
   pushList('media', '媒体文件', source.media, item => ({

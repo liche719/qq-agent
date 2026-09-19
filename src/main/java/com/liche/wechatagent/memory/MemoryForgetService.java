@@ -2,7 +2,6 @@ package com.liche.wechatagent.memory;
 
 import com.liche.wechatagent.agent.ContextStore;
 import com.liche.wechatagent.backup.MemoryBackupJob;
-import com.liche.wechatagent.exception.BizException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,58 +20,45 @@ public class MemoryForgetService {
                                 boolean legacyContextReset) {
     }
 
-    private final CoreMemoryService coreMemoryService;
-    private final WorkMemoryService workMemoryService;
+    private final MemoryService memoryService;
     private final MemoryExtractionScheduler extractionScheduler;
     private final ContextStore contextStore;
     private final MemoryMutationLock mutationLock;
     private final MemoryBackupJob backupJob;
     private final ConversationMemoryService conversationMemoryService;
-    private final EpisodicMemoryService episodicMemoryService;
 
     @Autowired
-    public MemoryForgetService(CoreMemoryService coreMemoryService,
-                               WorkMemoryService workMemoryService,
-                               MemoryExtractionScheduler extractionScheduler,
-                               ContextStore contextStore,
-                               MemoryMutationLock mutationLock,
-                               MemoryBackupJob backupJob,
-                               ConversationMemoryService conversationMemoryService,
-                               EpisodicMemoryService episodicMemoryService) {
-        this.coreMemoryService = coreMemoryService;
-        this.workMemoryService = workMemoryService;
-        this.extractionScheduler = extractionScheduler;
-        this.contextStore = contextStore;
-        this.mutationLock = mutationLock;
-        this.backupJob = backupJob;
-        this.conversationMemoryService = conversationMemoryService;
-        this.episodicMemoryService = episodicMemoryService;
-    }
-
-    public MemoryForgetService(CoreMemoryService coreMemoryService,
-                               WorkMemoryService workMemoryService,
+    public MemoryForgetService(MemoryService memoryService,
                                MemoryExtractionScheduler extractionScheduler,
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob,
                                ConversationMemoryService conversationMemoryService) {
-        this(coreMemoryService, workMemoryService, extractionScheduler, contextStore,
-                mutationLock, backupJob, conversationMemoryService, null);
+        this.memoryService = memoryService;
+        this.extractionScheduler = extractionScheduler;
+        this.contextStore = contextStore;
+        this.mutationLock = mutationLock;
+        this.backupJob = backupJob;
+        this.conversationMemoryService = conversationMemoryService;
     }
 
-    public MemoryForgetService(CoreMemoryService coreMemoryService,
-                               WorkMemoryService workMemoryService,
+    public MemoryForgetService(MemoryService memoryService,
                                MemoryExtractionScheduler extractionScheduler,
                                ContextStore contextStore,
                                MemoryMutationLock mutationLock,
                                MemoryBackupJob backupJob) {
-        this(coreMemoryService, workMemoryService, extractionScheduler, contextStore,
-                mutationLock, backupJob, null, null);
+        this(memoryService, extractionScheduler, contextStore, mutationLock, backupJob, null);
     }
 
-    public ForgetOutcome forget(String userId, String layer, Long memoryId) {
+    /**
+     * 遗忘一条记忆。
+     *
+     * <p>三表合并（2026-09-18）后不再需要 layer：编号本身就是全局唯一的 M 编号，
+     * {@link MemoryService#forget} 拿到 id 会自己校验归属。第二个参数保留只是为了不改动调用方签名。
+     */
+    public ForgetOutcome forget(String userId, String ignoredLayer, Long memoryId) {
         extractionScheduler.cancelPending(userId);
-        ForgetState state = mutationLock.callExclusive(userId, () -> forgetDurableState(userId, layer, memoryId));
+        ForgetState state = mutationLock.callExclusive(userId, () -> forgetDurableState(userId, memoryId));
         boolean backupsComplete = true;
         for (ForgottenMemory forgotten : state.forgotten()) {
             MemoryBackupJob.PurgeResult result = backupJob.purgeForgottenMemory(userId, forgotten.layer(), forgotten.id());
@@ -84,31 +70,27 @@ public class MemoryForgetService {
             }
         }
         if (!backupsComplete) {
-            log.warn("记忆已遗忘，但历史本机备份未完全清理 user={} layer={} targetId={}", userId, layer, memoryId);
+            log.warn("记忆已遗忘，但历史本机备份未完全清理 user={} targetId={}", userId, memoryId);
         }
         return new ForgetOutcome(state.contextCleared(), backupsComplete, state.forgotten().size(),
                 state.legacyContextReset());
     }
 
-    private ForgetState forgetDurableState(String userId, String layer, Long memoryId) {
-        ForgottenMemory primary = switch (layer) {
-            case "CORE" -> coreMemoryService.delete(userId, memoryId);
-            case "WORK" -> workMemoryService.forget(userId, memoryId);
-            default -> throw new BizException("编号应以 C（核心）或 W（工作）开头");
-        };
+    private ForgetState forgetDurableState(String userId, Long memoryId) {
         List<ForgottenMemory> forgotten = new ArrayList<>();
-        forgotten.add(primary);
-        if ("CORE".equals(primary.layer())) {
-            forgotten.addAll(coreMemoryService.forgetSupersededHistory(userId, primary.id()));
-        } else if ("WORK".equals(primary.layer())) {
-            forgotten.addAll(workMemoryService.forgetSupersededHistory(userId, primary.id()));
+        ForgottenMemory primary = memoryService.forget(userId, memoryId);
+        if (primary == null) {
+            // 不存在、或不属于这个用户：什么都不做（也不能往下面按 null 取 layer）
+            return new ForgetState(List.of(), false, false);
         }
+        forgotten.add(primary);
+        // 用户要的是"这件事彻底消失"：把它替代链上的历史版本一起忘掉
+        forgotten.addAll(memoryService.forgetSupersededHistory(userId, primary.id()));
         boolean contextCleared = false;
         boolean legacyContextReset = false;
         for (ForgottenMemory item : forgotten) {
-            if (episodicMemoryService != null) {
-                episodicMemoryService.forgetEvidence(userId, item.sourceMessageIds(), item.content());
-            }
+            // 经历类记忆也要按"证据来源"清掉由同一段对话推出来的那些
+            memoryService.forgetEvidence(userId, item.sourceMessageIds(), item.content());
             if (item.sourceMessageIds().isEmpty()) {
                 if (conversationMemoryService != null) {
                     conversationMemoryService.forgetContent(userId, item.content());

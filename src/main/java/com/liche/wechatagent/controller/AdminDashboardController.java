@@ -6,9 +6,9 @@ import com.liche.wechatagent.channel.qq.QqChannel;
 import com.liche.wechatagent.log.OperationLog;
 import com.liche.wechatagent.log.OperationLogRepository;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
-import com.liche.wechatagent.memory.EpisodicMemoryRepository;
-import com.liche.wechatagent.memory.UserCoreMemoryRepository;
-import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import com.liche.wechatagent.memory.Memory;
+import com.liche.wechatagent.memory.MemoryRepository;
+import com.liche.wechatagent.memory.MemoryService;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
 import com.liche.wechatagent.reminder.ReminderTaskRepository;
@@ -40,9 +40,8 @@ public class AdminDashboardController {
     private final AgentOrchestrator orchestrator;
     private final UserProfileRepository users;
     private final ConversationMemoryRepository conversations;
-    private final EpisodicMemoryRepository episodes;
-    private final UserCoreMemoryRepository core;
-    private final UserWorkMemoryRepository work;
+    private final MemoryService memoryService;
+    private final MemoryRepository memoryRepository;
     private final ReminderTaskRepository reminders;
     private final OperationLogRepository logs;
     private final ObjectProvider<QqChannel> qq;
@@ -56,22 +55,22 @@ public class AdminDashboardController {
     @Autowired
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
             UserProfileRepository users, ConversationMemoryRepository conversations,
-            EpisodicMemoryRepository episodes, UserCoreMemoryRepository core,
-            UserWorkMemoryRepository work, ReminderTaskRepository reminders,
+            MemoryService memoryService, MemoryRepository memoryRepository, ReminderTaskRepository reminders,
             OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis, Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history,
             @Value("${logging.file.path:logs}") String logDirectory) {
         this.history = history;
         this.logDirectory = Path.of(logDirectory).toAbsolutePath().normalize();
         this.health=health; this.tasks=tasks; this.orchestrator=orchestrator; this.users=users; this.conversations=conversations;
-        this.episodes=episodes; this.core=core; this.work=work; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler; this.media=media;
+        this.memoryService=memoryService; this.memoryRepository=memoryRepository; this.reminders=reminders; this.logs=logs; this.qq=qq; this.jdbc=jdbc; this.redis=redis; this.scheduler=scheduler; this.media=media;
     }
 
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
-            UserProfileRepository users, ConversationMemoryRepository conversations, EpisodicMemoryRepository episodes,
-            UserCoreMemoryRepository core, UserWorkMemoryRepository work, ReminderTaskRepository reminders,
+            UserProfileRepository users, ConversationMemoryRepository conversations,
+            MemoryService memoryService, MemoryRepository memoryRepository, ReminderTaskRepository reminders,
             OperationLogRepository logs, ObjectProvider<QqChannel> qq, JdbcTemplate jdbc, StringRedisTemplate redis,
             Scheduler scheduler, StoredMediaRepository media, DashboardMetricHistory history) {
-        this(health, tasks, orchestrator, users, conversations, episodes, core, work, reminders, logs, qq, jdbc, redis, scheduler, media, history, "logs");
+        this(health, tasks, orchestrator, users, conversations, memoryService, memoryRepository, reminders, logs, qq,
+                jdbc, redis, scheduler, media, history, "logs");
     }
 
     @GetMapping("/overview")
@@ -94,10 +93,13 @@ public class AdminDashboardController {
         Map<String, String> moduleErrors = new LinkedHashMap<>();
         collect(out, moduleErrors, "users", users::count);
         collect(out, moduleErrors, "conversations", conversations::count);
-        collect(out, moduleErrors, "episodes", episodes::count);
-        collect(out, moduleErrors, "coreMemories", core::count);
-        // 工作记忆统计全部（归档机制 2026-09-18 已删除，不存在"已归档"这一档）
-        collect(out, moduleErrors, "workMemories", work::count);
+        // 记忆三张表合并成一张（2026-09-18）：总数走全库口径，另按 kind 分开给（面板分「设定/事项/经历」显示）
+        collect(out, moduleErrors, "memories", memoryRepository::count);
+        Map<String, Long> memoryKinds = new LinkedHashMap<>();
+        memoryKinds.put(Memory.KIND_PROFILE, countMemoryKind(Memory.KIND_PROFILE));
+        memoryKinds.put(Memory.KIND_TASK, countMemoryKind(Memory.KIND_TASK));
+        memoryKinds.put(Memory.KIND_EXPERIENCE, countMemoryKind(Memory.KIND_EXPERIENCE));
+        out.put("memoryKinds", memoryKinds);
         collect(out, moduleErrors, "reminders", reminders::count);
         collect(out, moduleErrors, "tasks", this::taskSummary);
         Map<String, String> dependencies = dependencyHealth();
@@ -174,7 +176,7 @@ public class AdminDashboardController {
             out.put("createdAt", String.valueOf(u.getCreatedAt()));
             out.put("messageCount", conversations.countByUserId(u.getUserId()));
             out.put("taskCount", taskCountByUser.getOrDefault(u.getUserId(), 0L));
-            out.put("memoryCount", core.countByUserId(u.getUserId()) + work.countByUserId(u.getUserId()) + episodes.countByUserId(u.getUserId()));
+            out.put("memoryCount", memoryService.count(u.getUserId()));
             out.put("reminderCount", reminders.countByUserId(u.getUserId())); return out;
         }).toList();
     }
@@ -186,9 +188,13 @@ public class AdminDashboardController {
         Map<String,Object> out = new LinkedHashMap<>();
         out.put("userId", mask(userId)); out.put("profile", users.findById(userId).map(this::safeUser).orElse(null));
         out.put("conversations", conversations.findByUserIdOrderByCreatedAtDesc(userId, detailPage).stream().map(this::safeConversation).toList());
-        out.put("coreMemories", core.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeCore).toList());
-        out.put("workMemories", work.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeWork).toList());
-        out.put("episodicMemories", episodes.findByUserIdOrderByCreatedAtDesc(userId, detailPage).stream().map(this::safeEpisode).toList());
+        // 记忆三张表合并成一张（2026-09-18）：只返回一个 memories 数组，前端按 kind 分组
+        // （合并前是 core/work/episodes 三个数组各自分页，现在把三页合并成一页，与合并前各路的分页口径一致）
+        List<Memory> memories = new ArrayList<>();
+        memories.addAll(memoryRepository.findByUserIdAndKindOrderByUpdatedAtDesc(userId, Memory.KIND_PROFILE, detailPage));
+        memories.addAll(memoryRepository.findByUserIdAndKindOrderByUpdatedAtDesc(userId, Memory.KIND_TASK, detailPage));
+        memories.addAll(memoryRepository.findByUserIdAndKindOrderByUpdatedAtDesc(userId, Memory.KIND_EXPERIENCE, detailPage));
+        out.put("memories", memories);
         out.put("media", media.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, StoredMedia.ACTIVE, detailPage).stream().map(this::safeMedia).toList());
         out.put("reminders", reminders.findByUserIdOrderByUpdatedAtDesc(userId, detailPage).stream().map(this::safeReminder).toList());
         out.put("page", boundedPage); out.put("pageSize", detailPage.getPageSize());
@@ -241,6 +247,14 @@ public class AdminDashboardController {
             errors.put(name, "数据源暂不可用");
         }
     }
+    /** 按 kind 计数（全库口径）；单个 kind 查不动时给 0，别把整个总览带崩 */
+    private long countMemoryKind(String kind) {
+        try {
+            return memoryService.countByKind(null, kind);
+        } catch (RuntimeException exception) {
+            return 0L;
+        }
+    }
     private Map<String,String> dependencyHealth() {
         Map<String,String> result = new LinkedHashMap<>();
         try {
@@ -266,9 +280,6 @@ public class AdminDashboardController {
     private Map<String,Object> safeMedia(StoredMedia value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id",value.getId()); m.put("fileName",value.getFileName()); m.put("contentType",value.getContentType()); m.put("sizeBytes",value.getSizeBytes()); m.put("summary",value.getSummary()); m.put("createdAt",value.getCreatedAt()); return m; }
     private Map<String,Object> safeUser(UserProfile value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("userId", mask(value.getUserId())); m.put("memoryEnabled", value.getMemoryEnabled()); m.put("lastChannel", value.getLastChannel()); m.put("lastSeenAt", value.getLastSeenAt()); m.put("createdAt", value.getCreatedAt()); m.put("updatedAt", value.getUpdatedAt()); m.put("persona", limit(value.getPersona(), 2000)); return m; }
     private Map<String,Object> safeConversation(com.liche.wechatagent.memory.ConversationMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("role", value.getRole()); m.put("content", limit(value.getContent(), 4000)); m.put("createdAt", value.getCreatedAt()); m.put("expiresAt", value.getExpiresAt()); return m; }
-    private Map<String,Object> safeCore(com.liche.wechatagent.memory.UserCoreMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 4000)); m.put("status", value.getStatus()); m.put("importance", value.getImportance()); m.put("updatedAt", value.getUpdatedAt()); return m; }
-    private Map<String,Object> safeWork(com.liche.wechatagent.memory.UserWorkMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("status", value.getStatus()); m.put("priority", value.getPriority()); m.put("updatedAt", value.getUpdatedAt()); return m; }
-    private Map<String,Object> safeEpisode(com.liche.wechatagent.memory.EpisodicMemory value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("title", limit(value.getTitle(), 200)); m.put("summary", limit(value.getSummary(), 4000)); m.put("status", value.getStatus()); m.put("occurredAt", value.getOccurredAt()); return m; }
     private Map<String,Object> safeReminder(com.liche.wechatagent.reminder.ReminderTask value) { Map<String,Object> m=new LinkedHashMap<>(); m.put("id", value.getId()); m.put("content", limit(value.getContent(), 2000)); m.put("triggerAt", value.getTriggerAt()); m.put("cron", value.getCron()); m.put("status", value.getStatus()); return m; }
     private String limit(String value, int max) { if (value == null) return null; return value.length() <= max ? value : value.substring(0, max) + "…"; }
     private List<String> readTail(Path file, int maxLines) throws java.io.IOException {

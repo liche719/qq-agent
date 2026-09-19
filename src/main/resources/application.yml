@@ -294,7 +294,7 @@ memory:
   work-max-chars: ${MEMORY_WORK_MAX_CHARS:1500}
   # 工作记忆的注入资格（P2，2026-09-18）：只看**当前这句**的向量相似度，低于 work-vector-floor 的一律不注入
   # （不再按字面关键词把名额填满——实测那样每轮有 600~1300 字纯陪跑）。**没有字面兜底这条路**：
-  # 算不出向量的缓存行不注入，写路径与启动补齐负责让活跃行都有向量（WorkMemoryService.backfillVectorsOnStartup）。
+  # 算不出向量的缓存行不注入，写路径与启动补齐负责让活跃行都有向量（MemoryService.backfillVectorsOnStartup）。
   #
   # 0.45 是**用真模型在真数据上量出来的**（qwen3.7-text-embedding-flash，49 行工作记忆，7 个探针）：
   #   相关行 0.48~0.74（"办公室电话"0.74、"教务系统"0.70/0.67、"明天带什么"0.68/0.63、"女友专业"0.58/0.48）；

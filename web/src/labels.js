@@ -36,8 +36,6 @@ const DICTIONARY = {
     DELETED: '已删除',
     COMPLETED: '已完成'
   },
-  // 情景记忆的 MemoryStatus 取值
-  episodic: { ACTIVE: '生效中', ARCHIVED: '已归档', SUPERSEDED: '已被取代' },
   // LLM 调用场景（面板「模型与搜索」的按场景表格）
   scenario: {
     dialog: '对话（默认档）',

@@ -18,25 +18,33 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
-import java.util.Locale;
 
+/**
+ * 每轮对话"该给模型看哪些记忆"的组装（2026-09-18 三表合并后：所有散文记忆都从 {@code memory} 表来）。
+ *
+ * <p>四路来源、四条预算：
+ * <ol>
+ *   <li><b>长期设定</b>（{@code kind=PROFILE} 且 {@code always_inject}）：无条件注入，按字面相关度 + 重要度 + 最近确认排序；</li>
+ *   <li><b>中期事项</b>（{@code kind=TASK}）：按**当前这句的向量**挑，过不了门槛就不注入（见 docs/memory-vector-plan.md §18）；</li>
+ *   <li><b>经历</b>（{@code kind=EXPERIENCE}）：同样按向量挑，和事项共用工作记忆那 1500 字预算（最多分 600 字）；</li>
+ *   <li><b>历史兜底</b>：已经结束/过期/被替代的记忆 + 语义最相关的原始对话（§19），只在"没有活跃记忆能回答"或用户明确问"之前/上次"时才去捞。</li>
+ * </ol>
+ */
 @Component
 public class MemoryRetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryRetrievalService.class);
 
     private static final Pattern HAN_OR_WORD = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
-    private final UserCoreMemoryRepository coreRepository;
-    private final UserWorkMemoryRepository workRepository;
+    private final MemoryService memoryService;
     private final ConversationMemoryService conversationMemoryService;
-    private final EpisodicMemoryService episodicMemoryService;
     private final StoredMediaRepository storedMediaRepository;
     private final EmbeddingClient embeddingClient;
-    private final WorkMemoryVectorStore workVectorStore;
     private final double workVectorFloor;
     private final double episodeVectorFloor;
     private final double conversationVectorFloor;
@@ -49,27 +57,21 @@ public class MemoryRetrievalService {
     private final int historicalItemMaxChars;
 
     @Autowired
-    public MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
-                                  UserWorkMemoryRepository workRepository,
+    public MemoryRetrievalService(MemoryService memoryService,
                                   ConversationMemoryService conversationMemoryService,
-                                  EpisodicMemoryService episodicMemoryService,
                                   StoredMediaRepository storedMediaRepository,
                                   MemoryPolicyProperties policyProperties,
                                   EmbeddingClient embeddingClient,
-                                  WorkMemoryVectorStore workVectorStore,
                                   @Value("${memory.historical-retrieval-limit:8}") int historicalLimit,
                                   @Value("${memory.historical-min-score:3}") int minimumHistoricalScore,
                                   @Value("${memory.work-vector-floor:0.45}") double workVectorFloor,
                                   @Value("${memory.episode-vector-floor:0.45}") double episodeVectorFloor,
                                   @Value("${memory.conversation-vector-floor:0.45}") double conversationVectorFloor,
                                   @Value("${memory.conversation-recall-limit:6}") int conversationRecallLimit) {
-        this.coreRepository = coreRepository;
-        this.workRepository = workRepository;
+        this.memoryService = memoryService;
         this.conversationMemoryService = conversationMemoryService;
-        this.episodicMemoryService = episodicMemoryService;
         this.storedMediaRepository = storedMediaRepository;
         this.embeddingClient = embeddingClient;
-        this.workVectorStore = workVectorStore;
         this.workVectorFloor = workVectorFloor <= 0 ? 0d : Math.min(1d, workVectorFloor);
         this.episodeVectorFloor = episodeVectorFloor <= 0 ? 0d : Math.min(1d, episodeVectorFloor);
         this.conversationVectorFloor = conversationVectorFloor <= 0 ? 0d : Math.min(1d, conversationVectorFloor);
@@ -86,22 +88,24 @@ public class MemoryRetrievalService {
                 MemoryPolicyProperties.DEFAULT_HISTORICAL_ITEM_MAX_CHARS);
     }
 
-    MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
+    MemoryRetrievalService(MemoryService memoryService,
                            ConversationMemoryService conversationMemoryService,
                            StoredMediaRepository storedMediaRepository) {
-        this(coreRepository, workRepository, conversationMemoryService,
-                null, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d, 0.5d, 0.5d, 6);
+        this(memoryService, conversationMemoryService, storedMediaRepository, new MemoryPolicyProperties(),
+                null, 8, 3, 0.45d, 0.45d, 0.45d, 6);
     }
 
-    MemoryRetrievalService(UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
+    MemoryRetrievalService(MemoryService memoryService,
                            ConversationMemoryService conversationMemoryService,
-                           EpisodicMemoryService episodicMemoryService,
-                           StoredMediaRepository storedMediaRepository) {
-        this(coreRepository, workRepository, conversationMemoryService,
-                episodicMemoryService, storedMediaRepository, new MemoryPolicyProperties(), null, null, 8, 3, 0.5d, 0.5d,
-                0.5d, 6);
+                           StoredMediaRepository storedMediaRepository,
+                           EmbeddingClient embeddingClient,
+                           double workVectorFloor,
+                           double episodeVectorFloor,
+                           double conversationVectorFloor,
+                           int conversationRecallLimit) {
+        this(memoryService, conversationMemoryService, storedMediaRepository, new MemoryPolicyProperties(),
+                embeddingClient, 8, 3, workVectorFloor, episodeVectorFloor, conversationVectorFloor,
+                conversationRecallLimit);
     }
 
     @Transactional
@@ -110,9 +114,7 @@ public class MemoryRetrievalService {
         return retrieve(userId, query, coreMaxLoad, coreMaxChars, workMaxLoad, workMaxChars, 15);
     }
 
-    /**
-     * 事务边界放在最外层入口：内部的使用时间刷新走 @Modifying 定向更新，需要事务。
-     */
+    /** 事务边界放在最外层入口：内部的使用时间刷新走 @Modifying 定向更新，需要事务。 */
     @Transactional
     public RetrievedMemory retrieve(String userId, String query, int coreMaxLoad, int coreMaxChars,
                                     int workMaxLoad, int workMaxChars, int usageTouchIntervalMinutes) {
@@ -123,50 +125,42 @@ public class MemoryRetrievalService {
         String normalizedQuery = normalize(query);
         boolean historicalQuery = containsHistoryMarker(normalizedQuery);
         Map<Long, StoredMedia> linkedMedia = linkedMedia(userId);
-        // 一次算好"当前这句"的向量，工作记忆 / 情景记忆 / 历史对话三处共用（省调用，也保证口径一致）
+        // 一次算好"当前这句"的向量，中期事项 / 经历 / 历史对话三处共用（省调用，也保证口径一致）
         float[] queryVector = embedQuery(userId, normalizedQuery);
 
-        List<UserCoreMemory> cores = activeCoreCandidates(userId, normalizedQuery);
-        List<UserCoreMemory> selectedCores = select(cores, UserCoreMemory::getContent,
+        // ① 长期设定：无条件注入，按字面相关度 + 重要度 + 最近确认排序（没有向量门槛）
+        List<Memory> profiles = profileCandidates(userId, normalizedQuery);
+        List<Memory> selectedProfiles = select(profiles, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, coreMaxLoad), Math.max(1, coreMaxChars));
 
-        List<EpisodicMemory> episodeCandidates = activeEpisodeCandidates(userId, queryVector);
+        // ②③ 中期事项 + 经历：都按向量挑，共用 workMaxChars 预算
+        List<Memory> experiences = rankByVector(userId, queryVector, episodeVectorFloor, Memory.KIND_EXPERIENCE);
         int totalWorkBudget = Math.max(1, workMaxChars);
-        int episodeBudget = episodeCandidates.isEmpty() ? 0
+        int episodeBudget = experiences.isEmpty() ? 0
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
         int activeWorkBudget = Math.max(1, totalWorkBudget - episodeBudget);
-        List<UserWorkMemory> activeWork = activeWorkCandidates(userId, normalizedQuery, now);
-        // P2（2026-09-18）：注入资格**只看当前这句的向量相似度**——过不了门槛就不注入，
-        // 不再"排完序一律填到上限"（实测那会带来 600~1300 字纯陪跑）。**没有字面关键词兜底这条路**：
-        // 算不出向量的行就是不注入，所以写路径 + 启动补齐要保证活跃行都有向量。
-        // 为什么不用"最近几轮拼成窗口"：实测过（3 轮）会把语义摊平——注入回涨到 13~15 条，连
-        // "今天心情不错"都能捞出一堆课表，故窗口整块不做（详见 docs/memory-vector-plan.md §18）。
-        List<UserWorkMemory> relevantWork = rankWorkByRelevance(userId, normalizedQuery, queryVector, activeWork);
-        List<UserWorkMemory> selectedWork = select(relevantWork, UserWorkMemory::getContent,
+        List<Memory> tasks = rankByVector(userId, queryVector, workVectorFloor, Memory.KIND_TASK);
+        List<Memory> selectedTasks = select(tasks, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, workMaxLoad), activeWorkBudget);
-        touchUsage(now, selectedCores, selectedWork, usageTouchIntervalMinutes);
+        touchUsage(now, selectedProfiles, selectedTasks, experiences, usageTouchIntervalMinutes);
 
-        List<EpisodicMemory> selectedEpisodes = select(episodeCandidates,
-                EpisodicMemory::getSummary, this::formatEpisode,
-                historicalLimit, episodeBudget);
-        if (episodicMemoryService != null && !selectedEpisodes.isEmpty()) {
-            episodicMemoryService.touch(selectedEpisodes, now, usageTouchIntervalMinutes);
-        }
+        List<Memory> selectedExperiences = select(experiences,
+                Memory::getContent, this::formatEpisode, historicalLimit, episodeBudget);
 
-        boolean hasRelevantActiveMemory = !relevantWork.isEmpty()
-                || cores.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
+        boolean hasRelevantActiveMemory = !tasks.isEmpty()
+                || profiles.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
                         >= minimumHistoricalScore)
-                || !episodeCandidates.isEmpty();
+                || !experiences.isEmpty();
         List<HistoricalItem> historical = historicalItems(userId, normalizedQuery, historicalQuery,
                 hasRelevantActiveMemory, now, queryVector);
-        String coreSection = format(selectedCores, memory -> "- " + memory.getContent()
+        String coreSection = format(selectedProfiles, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
-        String workSection = format(selectedWork, memory -> "- " + memory.getContent()
+        String workSection = format(selectedTasks, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
-        if (!selectedEpisodes.isEmpty()) {
-            String episodes = "【相关经历】\n" + format(selectedEpisodes, this::formatEpisode);
+        if (!selectedExperiences.isEmpty()) {
+            String episodes = "【相关经历】\n" + format(selectedExperiences, this::formatEpisode);
             workSection = "（暂无）".equals(workSection) ? episodes : workSection + "\n\n" + episodes;
             workSection = truncate(workSection, Math.max(1, workMaxChars));
         }
@@ -180,111 +174,60 @@ public class MemoryRetrievalService {
         return new RetrievedMemory(coreSection, workSection);
     }
 
-    /**
-     * 情景记忆的候选（2026-09-18，P3）：改用**向量相似度**筛，和"换了说法也能找回来"一致。
-     * 原来按字面关键词打分，换个说法就完全找不到。
-     */
-    private List<EpisodicMemory> activeEpisodeCandidates(String userId, float[] queryVector) {
-        if (episodicMemoryService == null || queryVector == null) {
+    /** 长期设定：活跃 + 显式来源，按字面相关度排序（和合并前 core 的行为一致） */
+    private List<Memory> profileCandidates(String userId, String normalizedQuery) {
+        List<Memory> profiles;
+        try {
+            profiles = memoryService == null ? List.of() : memoryService.listAlwaysInject(userId);
+        } catch (Exception e) {
+            log.warn("读取长期设定失败 user={} reason={}", userId, e.getClass().getSimpleName());
             return List.of();
         }
-        return episodicMemoryService.rankByVector(userId, queryVector, episodeVectorFloor).stream()
+        return profiles.stream()
                 .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
-                .toList();
-    }
-
-    private String formatEpisode(EpisodicMemory memory) {
-        String date = memory.getOccurredAt() == null ? "时间未知" : memory.getOccurredAt().toLocalDate().toString();
-        return "- [" + date + "] " + memory.getTitle() + "：" + memory.getSummary();
-    }
-
-    // Selects active, explicit core memories ordered by query relevance and recency.
-    private List<UserCoreMemory> activeCoreCandidates(String userId, String normalizedQuery) {
-        return safeCore(userId).stream()
-                .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
-                .filter(CoreMemoryService::isActive)
-                .filter(CoreMemoryService::isExplicit)
                 .sorted(Comparator
-                        .comparingInt((UserCoreMemory memory) -> score(memory.getContent(), memory.getKeywords(), normalizedQuery))
+                        .comparingInt((Memory memory) -> score(memory.getContent(), memory.getKeywords(), normalizedQuery))
                         .reversed()
-                        .thenComparing(Comparator.comparing(UserCoreMemory::getImportance,
+                        .thenComparing(Comparator.comparing(Memory::getImportance,
                                 Comparator.nullsLast(Comparator.reverseOrder())))
-                        .thenComparing(UserCoreMemory::getLastConfirmedAt,
+                        .thenComparing(Memory::getLastConfirmedAt,
                                 Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(UserCoreMemory::getUpdatedAt,
+                        .thenComparing(Memory::getUpdatedAt,
                                 Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
     }
 
-    // Selects active work memories ordered by query relevance, importance, and priority.
-    private List<UserWorkMemory> activeWorkCandidates(String userId, String normalizedQuery, LocalDateTime now) {
-        return safeWork(userId).stream()
-                .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
-                .filter(memory -> WorkMemoryService.isActive(memory, now))
-                .sorted(Comparator
-                        .comparingInt((UserWorkMemory memory) -> score(memory.getContent(), memory.getKeywords(), normalizedQuery))
-                        .reversed()
-                        .thenComparing(Comparator.comparing(UserWorkMemory::getImportance,
-                                Comparator.nullsLast(Comparator.reverseOrder())))
-                        .thenComparing(Comparator.comparing(UserWorkMemory::getPriority,
-                                Comparator.nullsLast(Comparator.reverseOrder())))
-                        .thenComparing(UserWorkMemory::getUpdatedAt,
-                                Comparator.nullsLast(Comparator.reverseOrder())))
-                .toList();
+    /** 按向量挑 TASK / EXPERIENCE：过不了门槛就不返回（没有字面兜底） */
+    private List<Memory> rankByVector(String userId, float[] queryVector, double floor, String kind) {
+        if (memoryService == null || queryVector == null) {
+            return List.of();
+        }
+        try {
+            return memoryService.rankByVector(userId, queryVector, floor, kind).stream()
+                    .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
+                    .toList();
+        } catch (Exception e) {
+            log.warn("按向量挑记忆失败 user={} kind={} reason={}", userId, kind, e.getClass().getSimpleName());
+            return List.of();
+        }
     }
 
-    /**
-     * 用向量给活跃工作记忆打分并筛出够像的那些（2026-09-18，P2）。
-     *
-     * <p>一次 {@code embedOne(query)} + 一条 SQL 拿回全部候选的余弦相似度；低于
-     * {@code memory.work-vector-floor} 的一律丢弃——**不再用字面关键词把名额填满**。
-     * 字面得分只留作同分时的次序（"都要做，结果一样就好"）。
-     */
-    private List<UserWorkMemory> rankWorkByRelevance(String userId, String normalizedQuery, float[] queryVector,
-                                                     List<UserWorkMemory> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
-            return List.of();
-        }
-        if (queryVector == null) {
-            log.warn("没有可用的问题向量，本轮不注入工作记忆 user={}", userId);
-            return List.of();
-        }
-        Map<Long, Double> similarities = workVectorStore.scores(userId, queryVector);
-        List<UserWorkMemory> ranked = new ArrayList<>();
-        for (UserWorkMemory memory : candidates) {
-            if (memory == null || memory.getId() == null) {
-                continue;
-            }
-            Double similarity = similarities.get(memory.getId());
-            if (similarity == null || similarity < workVectorFloor) {
-                continue;
-            }
-            ranked.add(memory);
-        }
-        ranked.sort(Comparator
-                .comparingDouble((UserWorkMemory memory) -> similarities.getOrDefault(memory.getId(), 0d))
-                .reversed()
-                .thenComparing(Comparator.comparingInt((UserWorkMemory memory) ->
-                        score(memory.getContent(), memory.getKeywords(), normalizedQuery)).reversed())
-                .thenComparing(Comparator.comparing(UserWorkMemory::getImportance,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .thenComparing(Comparator.comparing(UserWorkMemory::getPriority,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .thenComparing(UserWorkMemory::getUpdatedAt,
-                        Comparator.nullsLast(Comparator.reverseOrder())));
-        return ranked;
+    private String formatEpisode(Memory memory) {
+        String date = memory.getOccurredAt() == null ? "时间未知" : memory.getOccurredAt().toLocalDate().toString();
+        String title = memory.getTitle() == null ? "" : memory.getTitle();
+        return "- [" + date + "] " + title + "：" + memory.getContent();
     }
 
     public record RetrievedMemory(String coreSection, String workSection) {
     }
 
     /**
-     * 算"当前这句"的向量（工作记忆 / 情景记忆 / 历史对话三处共用）。
+     * 算"当前这句"的向量（三处共用）。
      *
      * <p>拿不到就返回 null——调用方按"这次没有可用的向量"处理（**不做字面兜底**，用户 2026-09-18 明确要求）。
      */
     private float[] embedQuery(String userId, String normalizedQuery) {
-        if (embeddingClient == null || workVectorStore == null || !embeddingClient.isEnabled()
+        if (embeddingClient == null || memoryService == null || !embeddingClient.isEnabled()
                 || normalizedQuery == null || normalizedQuery.isBlank()) {
             log.warn("没有可用的向量（embedding.api-key 未配？），本轮不注入向量相关的记忆 user={}", userId);
             return null;
@@ -304,19 +247,17 @@ public class MemoryRetrievalService {
         }
         List<HistoricalItem> candidates = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        for (UserWorkMemory memory : safeWork(userId)) {
+        for (Memory memory : safeMemories(userId)) {
             if (memory == null || !ownedBy(memory.getUserId(), userId)) {
                 continue;
             }
-            if (WorkMemoryService.isActive(memory, now)) {
+            if (MemoryService.isActive(memory, now)) {
                 continue;
             }
-            String status = memory.getStatus();
-            addHistorical(candidates, seen, memory.getContent(), status,
+            addHistorical(candidates, seen, memory.getContent(), memory.getStatus(),
                     score(memory.getContent(), memory.getKeywords(), query), historicalQuery, memory.getUpdatedAt());
         }
-        // 2026-09-18（P3）：原来的"最近窗口 + 字面词 LIKE"整块删掉——那条路对无关问题也会塞满 1500 字旧对话。
-        // 现在按向量取 top-K、过门槛才进；字数上限由调用方按预算压（见 retrieve）。
+        // 历史兜底对话证据：按向量取 top-K、过门槛才进（2026-09-18 P3 把字面 LIKE 那条路整块删了）
         if (conversationMemoryService != null && queryVector != null
                 && (historicalQuery || !hasRelevantActiveMemory)) {
             List<ConversationMemoryService.ConversationHit> records = conversationMemoryService.searchByVector(
@@ -331,7 +272,7 @@ public class MemoryRetrievalService {
                     case "system" -> "工具执行记录";
                     default -> "用户曾说";
                 };
-                // 分数只是"排序用"：对话证据是余弦（0~1 → 0~100），工作记忆历史是字面分，两者不同尺度
+                // 分数只是"排序用"：对话证据是余弦（0~1 → 0~100），记忆历史是字面分，两者不同尺度
                 addHistorical(candidates, seen, label + "：" + record.getContent(), "CONVERSATION",
                         (int) Math.round(hit.score() * 100), historicalQuery, record.getCreatedAt());
             }
@@ -379,7 +320,7 @@ public class MemoryRetrievalService {
     }
 
     private String displayStatus(String status) {
-        return switch (status == null ? "" : status.toUpperCase()) {
+        return switch (status == null ? "" : status.toUpperCase(Locale.ROOT)) {
             case "COMPLETED" -> "已完成";
             case "EXPIRED" -> "已过期";
             case "SUPERSEDED" -> "已被替代";
@@ -418,7 +359,8 @@ public class MemoryRetrievalService {
         if (values == null || values.isEmpty()) {
             return "（暂无）";
         }
-        return values.stream().map(renderer).toList().stream().reduce((left, right) -> left + "\n" + right).orElse("（暂无）");
+        return values.stream().map(renderer).toList().stream()
+                .reduce((left, right) -> left + "\n" + right).orElse("（暂无）");
     }
 
     private int score(String content, String keywords, String normalizedQuery) {
@@ -482,35 +424,17 @@ public class MemoryRetrievalService {
                 .trim();
     }
 
-    private List<UserCoreMemory> safeCore(String userId) {
-        if (!validUserId(userId)) {
+    private List<Memory> safeMemories(String userId) {
+        if (!validUserId(userId) || memoryService == null) {
             return List.of();
         }
         try {
-            List<UserCoreMemory> result = coreRepository.findByUserIdOrderByCreatedAtAsc(userId);
-            return result == null ? List.of() : result.stream().filter(memory -> memory != null
-                    && ownedBy(memory.getUserId(), userId)).toList();
+            List<Memory> result = memoryService.list(userId);
+            return result == null ? List.of() : result.stream()
+                    .filter(memory -> memory != null && ownedBy(memory.getUserId(), userId))
+                    .toList();
         } catch (Exception ignored) {
             return List.of();
-        }
-    }
-
-    private List<UserWorkMemory> safeWork(String userId) {
-        if (!validUserId(userId)) {
-            return List.of();
-        }
-        try {
-            List<UserWorkMemory> result = workRepository.findByUserIdOrderByUpdatedAtDesc(userId);
-            return result == null ? List.of() : result.stream().filter(memory -> memory != null
-                    && ownedBy(memory.getUserId(), userId)).toList();
-        } catch (Exception ignored) {
-            try {
-                List<UserWorkMemory> result = workRepository.findByUserId(userId);
-                return result == null ? List.of() : result.stream().filter(memory -> memory != null
-                        && ownedBy(memory.getUserId(), userId)).toList();
-            } catch (Exception ignoredAgain) {
-                return List.of();
-            }
         }
     }
 
@@ -519,14 +443,14 @@ public class MemoryRetrievalService {
             return Map.of();
         }
         Set<Long> ids = new LinkedHashSet<>();
-        safeCore(userId).forEach(memory -> ids.addAll(mediaIds(memory.getSourceMediaIds())));
-        safeWork(userId).forEach(memory -> ids.addAll(mediaIds(memory.getSourceMediaIds())));
+        safeMemories(userId).forEach(memory -> ids.addAll(mediaIds(memory.getSourceMediaIds())));
         if (ids.isEmpty()) {
             return Map.of();
         }
         Map<Long, StoredMedia> result = new HashMap<>();
         try {
-            List<StoredMedia> media = storedMediaRepository.findByUserIdAndIdInAndStatus(userId, List.copyOf(ids), StoredMedia.ACTIVE);
+            List<StoredMedia> media = storedMediaRepository.findByUserIdAndIdInAndStatus(userId, List.copyOf(ids),
+                    StoredMedia.ACTIVE);
             if (media != null) {
                 media.stream().filter(item -> item != null && ownedBy(item.getUserId(), userId))
                         .forEach(item -> result.put(item.getId(), item));
@@ -584,31 +508,26 @@ public class MemoryRetrievalService {
         return value < minimum || value > maximum ? fallback : value;
     }
 
-    private void touchUsage(LocalDateTime now, List<UserCoreMemory> cores, List<UserWorkMemory> work,
+    /** 只刷"最近被用过"这一列（面板反查"这轮注入了什么"就靠它）；定向 UPDATE，避免整行回写 */
+    private void touchUsage(LocalDateTime now, List<Memory> profiles, List<Memory> tasks, List<Memory> experiences,
                             int usageTouchIntervalMinutes) {
-        LocalDateTime refreshBefore = now.minusMinutes(Math.max(1, usageTouchIntervalMinutes));
-        List<Long> coreUpdates = cores.stream()
-                .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .map(UserCoreMemory::getId)
-                .filter(id -> id != null)
-                .toList();
-        if (!coreUpdates.isEmpty()) {
-            try {
-                // 定向更新一列：整实体回写会用内存旧快照覆盖掉别处刚改过的状态列
-                coreRepository.updateLastUsedAt(coreUpdates, now);
-            } catch (Exception ignored) {
-            }
+        if (memoryService == null) {
+            return;
         }
-        List<Long> workUpdates = work.stream()
-                .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .map(UserWorkMemory::getId)
-                .filter(id -> id != null)
-                .toList();
-        if (!workUpdates.isEmpty()) {
-            try {
-                workRepository.updateLastUsedAt(workUpdates, now);
-            } catch (Exception ignored) {
-            }
+        List<Memory> touched = new ArrayList<>();
+        if (profiles != null) {
+            touched.addAll(profiles);
+        }
+        if (tasks != null) {
+            touched.addAll(tasks);
+        }
+        if (experiences != null) {
+            touched.addAll(experiences);
+        }
+        try {
+            memoryService.touch(touched, now, usageTouchIntervalMinutes);
+        } catch (Exception e) {
+            log.warn("刷新记忆使用时间失败: {}", e.getMessage());
         }
     }
 }

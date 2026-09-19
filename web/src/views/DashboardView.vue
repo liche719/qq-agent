@@ -89,9 +89,13 @@ async function loadPanels() {
 
 const status = computed(() => overview.value?.status || '')
 const qqStatus = computed(() => overview.value?.qq || '')
-const memoryCount = computed(() => ['coreMemories', 'workMemories', 'episodes']
-  .map(key => Number(overview.value?.[key]) || 0)
-  .reduce((left, right) => left + right, 0))
+// 2026-09-18：记忆三张表合并成一张，总览按 kind 给计数（长期设定 / 中期事项 / 经历）
+const memoryCount = computed(() => {
+  const kinds = overview.value?.memoryKinds || {}
+  return ['PROFILE', 'TASK', 'EXPERIENCE']
+    .map(key => Number(kinds[key]) || 0)
+    .reduce((left, right) => left + right, 0)
+})
 const unknownTasks = computed(() => Number(overview.value?.tasks?.UNKNOWN_RESULT) || 0)
 
 const activeTab = computed(() => tabs.value.find(item => item.key === tab.value) || null)

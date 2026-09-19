@@ -29,12 +29,14 @@ const runtimeRows = computed(() => {
 
 const countRows = computed(() => {
   const tasks = props.overview?.tasks || {}
+  const kinds = props.overview?.memoryKinds || {}
   return [
     ['用户', fmtNum(props.overview?.users)],
     ['对话证据', fmtNum(props.overview?.conversations)],
-    ['核心记忆', fmtNum(props.overview?.coreMemories)],
-    ['工作记忆', fmtNum(props.overview?.workMemories)],
-    ['情景记忆', fmtNum(props.overview?.episodes)],
+    // 2026-09-18：记忆三张表合并成一张，按 kind 分开显示（设定 / 事项 / 经历）
+    ['记忆·长期设定', fmtNum(kinds.PROFILE)],
+    ['记忆·中期事项', fmtNum(kinds.TASK)],
+    ['记忆·经历', fmtNum(kinds.EXPERIENCE)],
     ['提醒任务', fmtNum(props.overview?.reminders)],
     ['任务·运行中', fmtNum(tasks.RUNNING)],
     ['任务·失败', fmtNum(tasks.FAILED)],

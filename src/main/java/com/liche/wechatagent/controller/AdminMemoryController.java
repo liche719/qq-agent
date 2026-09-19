@@ -283,6 +283,10 @@ public class AdminMemoryController {
 
     private String layer(String raw) {
         return switch (raw == null ? "" : raw) {
+            case "PROFILE" -> "长期设定";
+            case "TASK" -> "中期事项";
+            case "EXPERIENCE" -> "经历";
+            // 三表合并（2026-09-18）前的历史行还在库里，旧值保留映射
             case "CORE" -> "核心";
             case "WORK" -> "中期";
             case "FACT" -> "事实";

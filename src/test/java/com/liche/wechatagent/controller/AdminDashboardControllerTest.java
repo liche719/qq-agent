@@ -34,8 +34,8 @@ class AdminDashboardControllerTest {
     private AdminDashboardController controller() {
         ObjectProvider<QqChannel> channels = mock(ObjectProvider.class);
         return new AdminDashboardController(new HealthController("UTC"), tasks, mock(AgentOrchestrator.class),
-                users, mock(ConversationMemoryRepository.class), mock(EpisodicMemoryRepository.class),
-                mock(UserCoreMemoryRepository.class), mock(UserWorkMemoryRepository.class),
+                users, mock(ConversationMemoryRepository.class), mock(MemoryService.class),
+                mock(MemoryRepository.class),
                 mock(ReminderTaskRepository.class), mock(OperationLogRepository.class), channels, jdbc, redis,
                 scheduler, mock(StoredMediaRepository.class), history);
     }

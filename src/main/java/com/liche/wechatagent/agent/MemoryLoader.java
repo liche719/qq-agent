@@ -1,13 +1,10 @@
 package com.liche.wechatagent.agent;
 
-import com.liche.wechatagent.memory.UserCoreMemoryRepository;
-import com.liche.wechatagent.memory.CoreMemoryService;
+import com.liche.wechatagent.memory.Memory;
+import com.liche.wechatagent.memory.MemoryService;
 import com.liche.wechatagent.config.MemoryPolicyProperties;
 import com.liche.wechatagent.memory.MemoryProvenance;
 import com.liche.wechatagent.memory.MemoryRetrievalService;
-import com.liche.wechatagent.memory.UserWorkMemory;
-import com.liche.wechatagent.memory.UserWorkMemoryRepository;
-import com.liche.wechatagent.memory.WorkMemoryService;
 import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,8 +34,7 @@ public class MemoryLoader {
     public record LoadedMemory(String coreSection, String workSection) {
     }
 
-    private final UserCoreMemoryRepository coreRepository;
-    private final UserWorkMemoryRepository workRepository;
+    private final MemoryService memoryService;
     private final StoredMediaRepository storedMediaRepository;
     private final MemoryRetrievalService retrievalService;
     private final int workMaxLoad;
@@ -50,8 +46,7 @@ public class MemoryLoader {
     private final int linkedMediaSummaryMaxChars;
 
     @Autowired
-    public MemoryLoader(UserCoreMemoryRepository coreRepository,
-                        UserWorkMemoryRepository workRepository,
+    public MemoryLoader(MemoryService memoryService,
                         StoredMediaRepository storedMediaRepository,
                         MemoryRetrievalService retrievalService,
                         MemoryPolicyProperties policyProperties,
@@ -60,12 +55,11 @@ public class MemoryLoader {
                         @Value("${memory.core-max-load:16}") int coreMaxLoad,
                         @Value("${memory.core-max-chars:2200}") int coreMaxChars,
                         @Value("${memory.usage-touch-interval-minutes:15}") int usageTouchIntervalMinutes) {
-        this(coreRepository, workRepository, storedMediaRepository, retrievalService, policyProperties,
+        this(memoryService, storedMediaRepository, retrievalService, policyProperties,
                 workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
     }
 
-    private MemoryLoader(UserCoreMemoryRepository coreRepository,
-                         UserWorkMemoryRepository workRepository,
+    private MemoryLoader(MemoryService memoryService,
                          StoredMediaRepository storedMediaRepository,
                          MemoryRetrievalService retrievalService,
                          MemoryPolicyProperties policyProperties,
@@ -75,8 +69,7 @@ public class MemoryLoader {
                          int coreMaxChars,
                          int usageTouchIntervalMinutes,
                          boolean compatibilityMarker) {
-        this.coreRepository = coreRepository;
-        this.workRepository = workRepository;
+        this.memoryService = memoryService;
         this.storedMediaRepository = storedMediaRepository;
         this.retrievalService = retrievalService;
         this.workMaxLoad = Math.max(1, workMaxLoad);
@@ -95,8 +88,7 @@ public class MemoryLoader {
      * Compatibility constructor for callers created before durable retrieval was introduced.
      * Spring uses the constructor above; tests and integrations can still use the old signature.
      */
-    public MemoryLoader(UserCoreMemoryRepository coreRepository,
-                        UserWorkMemoryRepository workRepository,
+    public MemoryLoader(MemoryService memoryService,
                         StoredMediaRepository storedMediaRepository,
                         MemoryRetrievalService retrievalService,
                         int workMaxLoad,
@@ -104,27 +96,25 @@ public class MemoryLoader {
                         int coreMaxLoad,
                         int coreMaxChars,
                         int usageTouchIntervalMinutes) {
-        this(coreRepository, workRepository, storedMediaRepository, retrievalService, new MemoryPolicyProperties(),
+        this(memoryService, storedMediaRepository, retrievalService, new MemoryPolicyProperties(),
                 workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
     }
 
-    public MemoryLoader(UserCoreMemoryRepository coreRepository,
-                        UserWorkMemoryRepository workRepository,
+    public MemoryLoader(MemoryService memoryService,
                         StoredMediaRepository storedMediaRepository,
                         int workMaxLoad,
                         int workMaxChars,
                         int coreMaxLoad,
                         int coreMaxChars,
                         int usageTouchIntervalMinutes) {
-        this(coreRepository, workRepository, storedMediaRepository, null, new MemoryPolicyProperties(),
+        this(memoryService, storedMediaRepository, null, new MemoryPolicyProperties(),
                 workMaxLoad, workMaxChars, coreMaxLoad, coreMaxChars, usageTouchIntervalMinutes, true);
     }
 
-    MemoryLoader(UserCoreMemoryRepository coreRepository,
-                 UserWorkMemoryRepository workRepository,
+    MemoryLoader(MemoryService memoryService,
                  int workMaxLoad,
                  int workMaxChars) {
-        this(coreRepository, workRepository, null, null, new MemoryPolicyProperties(),
+        this(memoryService, null, null, new MemoryPolicyProperties(),
                 workMaxLoad, workMaxChars, 16, 2200, 15, true);
     }
 
@@ -141,33 +131,38 @@ public class MemoryLoader {
     // Loads and ranks memories directly when durable retrieval is unavailable.
     private LoadedMemory loadFromRepositories(String userId, String query) {
         LocalDateTime now = LocalDateTime.now();
-        List<com.liche.wechatagent.memory.UserCoreMemory> cores = new ArrayList<>(coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
-                .filter(memory -> userId != null && userId.equals(memory.getUserId()))
-                .filter(CoreMemoryService::isActive)
-                .toList());
-        cores.sort(Comparator.comparingInt((com.liche.wechatagent.memory.UserCoreMemory memory) ->
+        // 无条件注入的那些（原 core）：服务已经滤掉非活跃与非显式来源
+        List<Memory> cores = new ArrayList<>(memoryService.listAlwaysInject(userId));
+        cores.sort(Comparator.comparingInt((Memory memory) ->
                         relevance(memory.getContent(), query)).reversed()
-                .thenComparing(com.liche.wechatagent.memory.UserCoreMemory::getLastConfirmedAt,
+                .thenComparing(Memory::getLastConfirmedAt,
                         Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(com.liche.wechatagent.memory.UserCoreMemory::getUpdatedAt,
+                .thenComparing(Memory::getUpdatedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())));
-        List<com.liche.wechatagent.memory.UserCoreMemory> coreCandidates = withinBudget(cores,
-                com.liche.wechatagent.memory.UserCoreMemory::getContent, coreMaxLoad, coreMaxChars);
+        List<Memory> coreCandidates = withinBudget(cores, Memory::getContent, coreMaxLoad, coreMaxChars);
 
-        List<UserWorkMemory> active = new ArrayList<>(workRepository.findByUserId(userId).stream()
+        // 按相关性注入的那些（原 work + 原 episode）：保持合并前的排序权重
+        List<Memory> active = new ArrayList<>();
+        memoryService.listByKind(userId, Memory.KIND_TASK).stream()
                 .filter(memory -> userId != null && userId.equals(memory.getUserId()))
-                .filter(memory -> WorkMemoryService.isActive(memory, now))
-                .toList());
-        active.sort(Comparator.comparingInt((UserWorkMemory memory) -> relevance(memory.getContent(), query)).reversed()
-                .thenComparing(Comparator.comparing(UserWorkMemory::getPriority).reversed())
-                .thenComparing(Comparator.comparing(UserWorkMemory::getUpdatedAt).reversed()));
+                .filter(memory -> MemoryService.isActive(memory, now))
+                .forEach(active::add);
+        memoryService.listByKind(userId, Memory.KIND_EXPERIENCE).stream()
+                .filter(memory -> userId != null && userId.equals(memory.getUserId()))
+                .filter(memory -> MemoryService.isActive(memory, now))
+                .forEach(active::add);
+        active.sort(Comparator.comparingInt((Memory memory) -> relevance(memory.getContent(), query)).reversed()
+                .thenComparing(Comparator.comparing(Memory::getPriority,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .thenComparing(Memory::getUpdatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())));
 
-        List<UserWorkMemory> workCandidates = withinBudget(active, UserWorkMemory::getContent, workMaxLoad, workMaxChars);
+        List<Memory> workCandidates = withinBudget(active, Memory::getContent, workMaxLoad, workMaxChars);
         Map<Long, StoredMedia> linkedMedia = linkedMedia(userId, coreCandidates, workCandidates);
-        List<com.liche.wechatagent.memory.UserCoreMemory> selectedCores = withinBudget(coreCandidates,
+        List<Memory> selectedCores = withinBudget(coreCandidates,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 coreMaxLoad, coreMaxChars);
-        List<UserWorkMemory> selectedWork = withinBudget(workCandidates,
+        List<Memory> selectedWork = withinBudget(workCandidates,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 workMaxLoad, workMaxChars);
         touchUsage(now, selectedCores, selectedWork);
@@ -203,8 +198,8 @@ public class MemoryLoader {
     }
 
     private Map<Long, StoredMedia> linkedMedia(String userId,
-                                                List<com.liche.wechatagent.memory.UserCoreMemory> cores,
-                                                List<UserWorkMemory> work) {
+                                                List<Memory> cores,
+                                                List<Memory> work) {
         if (storedMediaRepository == null) {
             return Map.of();
         }
@@ -245,23 +240,12 @@ public class MemoryLoader {
     }
 
     private void touchUsage(LocalDateTime now,
-                            List<com.liche.wechatagent.memory.UserCoreMemory> cores,
-                            List<UserWorkMemory> work) {
-        LocalDateTime refreshBefore = now.minusMinutes(usageTouchIntervalMinutes);
-        List<com.liche.wechatagent.memory.UserCoreMemory> coreUpdates = cores.stream()
-                .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .peek(memory -> memory.setLastUsedAt(now))
-                .toList();
-        if (!coreUpdates.isEmpty()) {
-            coreRepository.saveAll(coreUpdates);
-        }
-        List<UserWorkMemory> workUpdates = work.stream()
-                .filter(memory -> memory.getLastUsedAt() == null || memory.getLastUsedAt().isBefore(refreshBefore))
-                .peek(memory -> memory.setLastUsedAt(now))
-                .toList();
-        if (!workUpdates.isEmpty()) {
-            workRepository.saveAll(workUpdates);
-        }
+                            List<Memory> cores,
+                            List<Memory> work) {
+        // 服务内部只收集"确实过期没刷"的 id，走定向 UPDATE（原 coreRepository/workRepository.saveAll 已废）
+        List<Memory> touched = new ArrayList<>(cores);
+        touched.addAll(work);
+        memoryService.touch(touched, now, usageTouchIntervalMinutes);
     }
 
     private int relevance(String content, String query) {

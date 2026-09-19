@@ -45,14 +45,12 @@ public class MemoryExtractor {
 
     private final ChatModel chatModel;
     private final ContextStore contextStore;
-    private final WorkMemoryService workMemoryService;
-    private final CoreMemoryService coreMemoryService;
+    private final MemoryService memoryService;
     private final ObjectMapper objectMapper;
     private final int recentTurns;
     private final StoredMediaRepository storedMediaRepository;
     private final MemoryMutationLock mutationLock;
     private final ConversationMemoryService conversationMemoryService;
-    private final EpisodicMemoryService episodicMemoryService;
     private final int minConfidence;
     private final int maxCandidateItems;
     private final int maxContentChars;
@@ -167,26 +165,22 @@ public class MemoryExtractor {
     @Autowired
     public MemoryExtractor(ChatModel chatModel,
                            ContextStore contextStore,
-                           WorkMemoryService workMemoryService,
-                           CoreMemoryService coreMemoryService,
+                           MemoryService memoryService,
                            ObjectMapper objectMapper,
                            @Value("${memory.extraction-recent-turns:40}") int recentTurns,
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock,
                            ConversationMemoryService conversationMemoryService,
-                           EpisodicMemoryService episodicMemoryService,
                            @Value("${memory.min-confidence:60}") int minConfidence,
                            MemoryPolicyProperties policyProperties,
                            @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.chatModel = chatModel;
         this.contextStore = contextStore;
-        this.workMemoryService = workMemoryService;
-        this.coreMemoryService = coreMemoryService;
+        this.memoryService = memoryService;
         this.objectMapper = objectMapper;
         this.storedMediaRepository = storedMediaRepository;
         this.mutationLock = mutationLock;
         this.conversationMemoryService = conversationMemoryService;
-        this.episodicMemoryService = episodicMemoryService;
         MemoryPolicyProperties policies = policyProperties == null ? new MemoryPolicyProperties() : policyProperties;
         int requestedRecentTurns = Math.max(1, recentTurns);
         int configuredRecentTurns = policies.getExtractionRecentTurns();
@@ -218,44 +212,25 @@ public class MemoryExtractor {
         this.zone = parseZone(timeZoneId);
     }
 
-    MemoryExtractor(ChatModel chatModel,
-                    ContextStore contextStore,
-                    WorkMemoryService workMemoryService,
-                    CoreMemoryService coreMemoryService,
-                    ObjectMapper objectMapper,
-                    int recentTurns,
-                    StoredMediaRepository storedMediaRepository,
-                    MemoryMutationLock mutationLock,
-                    ConversationMemoryService conversationMemoryService,
-                    int minConfidence,
-                    MemoryPolicyProperties policyProperties,
-                    String timeZoneId) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
-                recentTurns, storedMediaRepository, mutationLock, conversationMemoryService, null,
-                minConfidence, policyProperties, timeZoneId);
-    }
-
     public MemoryExtractor(ChatModel chatModel,
                            ContextStore contextStore,
-                           WorkMemoryService workMemoryService,
-                           CoreMemoryService coreMemoryService,
+                           MemoryService memoryService,
                            ObjectMapper objectMapper,
                            int recentTurns,
                            StoredMediaRepository storedMediaRepository,
                            MemoryMutationLock mutationLock) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
-                recentTurns, storedMediaRepository, mutationLock, null, null, 60,
+        this(chatModel, contextStore, memoryService, objectMapper,
+                recentTurns, storedMediaRepository, mutationLock, null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
 
     public MemoryExtractor(ChatModel chatModel,
                            ContextStore contextStore,
-                           WorkMemoryService workMemoryService,
-                           CoreMemoryService coreMemoryService,
+                           MemoryService memoryService,
                            ObjectMapper objectMapper,
                            int recentTurns) {
-        this(chatModel, contextStore, workMemoryService, coreMemoryService, objectMapper,
-                recentTurns, null, new MemoryMutationLock(), null, null, 60,
+        this(chatModel, contextStore, memoryService, objectMapper,
+                recentTurns, null, new MemoryMutationLock(), null, 60,
                 new MemoryPolicyProperties(), "Asia/Shanghai");
     }
 
@@ -312,8 +287,9 @@ public class MemoryExtractor {
             // 用户明确要求删掉：**该不该记全交给模型判断**，不要用正则替它做决定。
             // 它已经咬过一次——"教室/课表/第.周"整类被它当事务型跳过，正好把要记的事实挡在门外。
             // 代价是"整窗都在问课表"这种轮次也会真跑一次模型（一次约 0.05 元）；嫌贵就调大 ROUNDS，而不是加回正则。
-            List<UserWorkMemory> existing = workMemoryService.listActive(userId);
-            List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
+            List<Memory> existing = memoryService.listActive(userId, Memory.KIND_TASK);
+            // 无条件注入的那些（原 core）：活跃 + 只认显式来源
+            List<Memory> cores = memoryService.listAlwaysInject(userId);
             // 已有事实卡片：事实不多时**直接列进主提示词**，让模型在输出 facts 时顺带给合并结论
             // （NEW/SUPERSEDES/SUPPLEMENT/SAME）→ 一次调用定稿，省掉"每条事实一次小调用"。
             // 卡片太多就不列（列不下就会被迫截断、可能漏掉该合并的那条），那时退回"向量召回 + 小判定"。
@@ -503,7 +479,7 @@ public class MemoryExtractor {
         applyWorkConflicts(userId, result, allowedSourceIds);
         applyWorkCompletions(userId, result, allowedSourceIds);
         applyFacts(userId, result);
-        runSafely(userId, "过期工作记忆", workMemoryService::expireDueMemories);
+        runSafely(userId, "过期工作记忆", memoryService::expireDueMemories);
     }
 
     /**
@@ -536,7 +512,7 @@ public class MemoryExtractor {
     }
 
     private void applyEpisodes(String userId, ExtractionResult result, Set<String> allowedSourceIds) {
-        if (episodicMemoryService == null) {
+        if (memoryService == null) {
             return;
         }
         for (EpisodeCandidate candidate : safeList(result.episodes())) {
@@ -545,7 +521,7 @@ public class MemoryExtractor {
             }
             MemoryProvenance provenance = provenance(userId, candidate.sourceMessageIds(), allowedSourceIds,
                     candidate.confidence());
-            runSafely(userId, "新增情景记忆", () -> episodicMemoryService.add(userId, candidate.title(),
+            runSafely(userId, "新增情景记忆", () -> memoryService.addExperience(userId, candidate.title(),
                     candidate.summary(), candidate.episodeType(), candidate.importance(), candidate.confidence(),
                     candidate.keywords(), parseOccurredAt(candidate.occurredAt()), provenance));
         }
@@ -566,11 +542,11 @@ public class MemoryExtractor {
             MemoryAttributes attributes = new MemoryAttributes(candidate.importance(), candidate.confidence(),
                     candidate.keywords());
             if (isDefaultAttributes(attributes, MemoryAttributes.defaults())) {
-                runSafely(userId, "新增工作记忆", () -> workMemoryService.add(userId, candidate.content(),
+                runSafely(userId, "新增工作记忆", () -> memoryService.addTask(userId, candidate.content(),
                         candidate.priority(), "extraction", "AUTO", provenance,
                         parseValidUntil(candidate.validUntil())));
             } else {
-                runSafely(userId, "新增工作记忆", () -> workMemoryService.add(userId, candidate.content(),
+                runSafely(userId, "新增工作记忆", () -> memoryService.addTask(userId, candidate.content(),
                         candidate.priority(), "extraction", "AUTO", provenance,
                         parseValidUntil(candidate.validUntil()), attributes));
             }
@@ -597,7 +573,7 @@ public class MemoryExtractor {
                     candidate.keywords());
             // 【2026-09-14】确定性兜底：这条"新"核心事实其实和已有的某条是同一个主题（换了分数/日期/院校/称呼…）时，
             // 走替换而不是新增——模型偶尔不把它写成 coreUpdates，就会留下"旧事实还在"的观感（用户明确报过这个症状）。
-            UserCoreMemory similar = mostSimilarCore(userId, candidate.content());
+            Memory similar = mostSimilarCore(userId, candidate.content());
             if (similar == null) {
                 // 字面不像也可能是"同一件事换了个说法"（实测：「考研数学目标分是130」→ 模型抽成
                 // 「用户在考研中设定的数学目标分数为140分，希望冲刺更高分数」，二元组重合度很低）。
@@ -610,14 +586,14 @@ public class MemoryExtractor {
                         userId, similar.getContent(), candidate.content(),
                         String.format(java.util.Locale.ROOT, "%.2f",
                                 MemoryTextSimilarity.similarity(similar.getContent(), candidate.content())));
-                runSafely(userId, "替换核心记忆", () -> coreMemoryService.replaceFromExtraction(userId, replacedId,
+                runSafely(userId, "替换核心记忆", () -> memoryService.replaceProfile(userId, replacedId,
                         candidate.content(), "与已有同类记忆冲突或重复，按用户最新陈述替换", "AUTO", provenance, attributes));
                 continue;
             }
             if (isDefaultAttributes(attributes, MemoryAttributes.coreDefaults())) {
-                runSafely(userId, "新增核心记忆", () -> coreMemoryService.add(userId, candidate.content(), "AUTO", provenance));
+                runSafely(userId, "新增核心记忆", () -> memoryService.addProfile(userId, candidate.content(), "AUTO", provenance));
             } else {
-                runSafely(userId, "新增核心记忆", () -> coreMemoryService.add(userId, candidate.content(), "AUTO", provenance,
+                runSafely(userId, "新增核心记忆", () -> memoryService.addProfile(userId, candidate.content(), "AUTO", provenance,
                         attributes));
             }
         }
@@ -637,7 +613,7 @@ public class MemoryExtractor {
                     .noneMatch(allowedSourceIds::contains))) {
                 continue;
             }
-            runSafely(userId, "更新核心记忆", () -> coreMemoryService.listActive(userId).stream()
+            runSafely(userId, "更新核心记忆", () -> memoryService.listAlwaysInject(userId).stream()
                     .filter(memory -> memory != null && memory.getContent() != null
                             && (memory.getContent().contains(candidate.oldContent())
                             || candidate.oldContent().contains(memory.getContent())))
@@ -648,10 +624,11 @@ public class MemoryExtractor {
                         MemoryAttributes attributes = new MemoryAttributes(candidate.importance(), candidate.confidence(),
                                 candidate.keywords());
                         if (isDefaultAttributes(attributes, MemoryAttributes.coreDefaults())) {
-                            coreMemoryService.update(userId, memory.getId(), candidate.newContent(),
-                                    "用户明确陈述的新长期事实替代旧事实", "AUTO", provenance);
+                            // 传 null 让服务自己套 coreDefaults()——与原 CoreMemoryService.update(…, provenance) 一致
+                            memoryService.replaceProfile(userId, memory.getId(), candidate.newContent(),
+                                    "用户明确陈述的新长期事实替代旧事实", "AUTO", provenance, null);
                         } else {
-                            coreMemoryService.update(userId, memory.getId(), candidate.newContent(),
+                            memoryService.replaceProfile(userId, memory.getId(), candidate.newContent(),
                                     "用户明确陈述的新长期事实替代旧事实", "AUTO", provenance, attributes);
                         }
                     }));
@@ -672,11 +649,11 @@ public class MemoryExtractor {
             MemoryAttributes attributes = new MemoryAttributes(candidate.importance(), candidate.confidence(),
                     candidate.keywords());
             if (isDefaultAttributes(attributes, MemoryAttributes.defaults())) {
-                runSafely(userId, "替代工作记忆", () -> workMemoryService.updateFromExtraction(userId,
+                runSafely(userId, "替代工作记忆", () -> memoryService.replaceTask(userId,
                         candidate.existingId(), candidate.proposedContent(), provenance,
-                        parseValidUntil(candidate.validUntil())));
+                        parseValidUntil(candidate.validUntil()), null));
             } else {
-                runSafely(userId, "替代工作记忆", () -> workMemoryService.updateFromExtraction(userId,
+                runSafely(userId, "替代工作记忆", () -> memoryService.replaceTask(userId,
                         candidate.existingId(), candidate.proposedContent(), provenance,
                         parseValidUntil(candidate.validUntil()), attributes));
             }
@@ -692,7 +669,7 @@ public class MemoryExtractor {
             if (completion.existingId() == null || completion.confidence() < minConfidence) {
                 continue;
             }
-            runSafely(userId, "完成工作记忆", () -> workMemoryService.markCompleted(userId, completion.existingId(),
+            runSafely(userId, "完成工作记忆", () -> memoryService.markCompleted(userId, completion.existingId(),
                     completion.reason(), provenance(userId, completion.sourceMessageIds(), allowedSourceIds,
                     completion.confidence())));
         }
@@ -769,13 +746,13 @@ public class MemoryExtractor {
     }
 
     /** 已有核心记忆里跟这条新事实最像的一条（相似度不够就返回 null） */
-    private UserCoreMemory mostSimilarCore(String userId, String content) {
-        if (content == null || content.isBlank() || coreMemoryService == null) {
+    private Memory mostSimilarCore(String userId, String content) {
+        if (content == null || content.isBlank() || memoryService == null) {
             return null;
         }
-        UserCoreMemory best = null;
+        Memory best = null;
         double bestScore = CORE_CONFLICT_SIMILARITY;
-        for (UserCoreMemory memory : coreMemoryService.listActive(userId)) {
+        for (Memory memory : memoryService.listAlwaysInject(userId)) {
             if (memory == null || memory.getContent() == null) {
                 continue;
             }
@@ -797,11 +774,11 @@ public class MemoryExtractor {
      *
      * @return 命中的那条已有记忆；答"不是同一件事"或解析失败都返回 null（=新增，宁可不替换）
      */
-    private UserCoreMemory reconcileCoreWithModel(String userId, String content) {
-        if (chatModel == null || coreMemoryService == null || content == null || content.isBlank()) {
+    private Memory reconcileCoreWithModel(String userId, String content) {
+        if (chatModel == null || memoryService == null || content == null || content.isBlank()) {
             return null;
         }
-        List<UserCoreMemory> cores = coreMemoryService.listActive(userId);
+        List<Memory> cores = memoryService.listAlwaysInject(userId);
         if (cores.isEmpty() || cores.size() > RECONCILE_MAX_CORES) {
             return null;
         }
@@ -835,7 +812,7 @@ public class MemoryExtractor {
             if (index < 1 || index > cores.size()) {
                 return null;
             }
-            UserCoreMemory hit = cores.get(index - 1);
+            Memory hit = cores.get(index - 1);
             log.info("核心记忆比对（二次调用）user={} 判定为已有记忆的新版本 id={} old=\"{}\" new=\"{}\"",
                     userId, hit.getId(), hit.getContent(), content);
             return hit;
@@ -908,7 +885,7 @@ public class MemoryExtractor {
                 result.coreUpdates(), result.conflicts(), result.completedWork(), result.duplicates(), cleaned);
     }
 
-    private String buildPrompt(List<ContextTurn> recent, List<UserWorkMemory> existing, List<UserCoreMemory> cores,
+    private String buildPrompt(List<ContextTurn> recent, List<Memory> existing, List<Memory> cores,
                                int backgroundTurns, String factCards) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是用户的长期记忆提取器。当前时间：")
@@ -957,7 +934,7 @@ public class MemoryExtractor {
         if (cores.isEmpty()) {
             prompt.append("（无）\n");
         } else {
-            for (UserCoreMemory memory : cores) {
+            for (Memory memory : cores) {
                 // 格式压紧（2026-09-18 瘦身）：29 条核心记忆原来每行都写「；importance=；keywords=」，
                 // 光标签就占 700 多字符。改成「（重要度｜关键词）」，模型照样读得懂。
                 prompt.append("- ").append(memory.getContent())
@@ -970,7 +947,7 @@ public class MemoryExtractor {
         if (existing.isEmpty()) {
             prompt.append("（无）\n");
         } else {
-            for (UserWorkMemory memory : existing) {
+            for (Memory memory : existing) {
                 prompt.append(memory.getId()).append(": ").append(memory.getContent())
                         .append('（').append(memory.getImportance())
                         .append('｜').append(memory.getValidUntil() == null ? "" : memory.getValidUntil())

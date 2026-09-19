@@ -28,23 +28,22 @@ class MemoryExtractorAutonomyTest {
     void automaticallyPromotesLongTermGoalWithoutUsingAssistantClaims() {
         ChatModel chatModel = mock(ChatModel.class);
         ContextStore contextStore = mock(ContextStore.class);
-        WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
+        MemoryService memoryService = mock(MemoryService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "我要考南京理工大学研究生"),
                 new ContextTurn("assistant", "那我替你决定考北京大学")));
-        when(workMemoryService.listActive("u1")).thenReturn(List.of());
-        when(coreMemoryService.listActive("u1")).thenReturn(List.of());
+        when(memoryService.listActive("u1", Memory.KIND_TASK)).thenReturn(List.of());
+        when(memoryService.listAlwaysInject("u1")).thenReturn(List.of());
         when(chatModel.chat(anyString())).thenReturn("""
                 {"newWorkItems":[],"coreCandidates":[{"content":"用户的长期目标是考取南京理工大学研究生"}],
                  "coreUpdates":[],"workConflicts":[],"duplicates":[]}
                 """);
-        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, new ObjectMapper(), 20);
+        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, memoryService,
+                new ObjectMapper(), 20);
 
         extractor.extract("u1");
 
-        verify(coreMemoryService).add(org.mockito.ArgumentMatchers.eq("u1"),
+        verify(memoryService).addProfile(org.mockito.ArgumentMatchers.eq("u1"),
                 org.mockito.ArgumentMatchers.eq("用户的长期目标是考取南京理工大学研究生"),
                 org.mockito.ArgumentMatchers.eq("AUTO"), org.mockito.ArgumentMatchers.any(MemoryProvenance.class));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
@@ -57,22 +56,21 @@ class MemoryExtractorAutonomyTest {
     void ignoresLowConfidenceCandidatesWithoutWritingMemory() {
         ChatModel chatModel = mock(ChatModel.class);
         ContextStore contextStore = mock(ContextStore.class);
-        WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
+        MemoryService memoryService = mock(MemoryService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "我可能下个月换工作")));
-        when(workMemoryService.listActive("u1")).thenReturn(List.of());
-        when(coreMemoryService.listActive("u1")).thenReturn(List.of());
+        when(memoryService.listActive("u1", Memory.KIND_TASK)).thenReturn(List.of());
+        when(memoryService.listAlwaysInject("u1")).thenReturn(List.of());
         when(chatModel.chat(anyString())).thenReturn("""
                 {"newWorkItems":[{"content":"用户下个月会换工作","priority":3,"confidence":20}],
                  "coreCandidates":[],"coreUpdates":[],"workConflicts":[],"completedWorkItems":[],"duplicates":[]}
                 """);
-        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, new ObjectMapper(), 20);
+        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, memoryService,
+                new ObjectMapper(), 20);
 
         extractor.extract("u1");
 
-        verify(workMemoryService, never()).add(org.mockito.ArgumentMatchers.anyString(),
+        verify(memoryService, never()).addTask(org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(MemoryProvenance.class), org.mockito.ArgumentMatchers.any());
@@ -82,28 +80,30 @@ class MemoryExtractorAutonomyTest {
     void continuesApplyingOtherCandidatesWhenOneMemoryWriteFails() {
         ChatModel chatModel = mock(ChatModel.class);
         ContextStore contextStore = mock(ContextStore.class);
-        WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
+        MemoryService memoryService = mock(MemoryService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(
                 new ContextTurn("user", "这周完成实验报告，同时我长期目标是考南京理工大学研究生", List.of("msg-1"))));
-        when(workMemoryService.listActive("u1")).thenReturn(List.of());
-        when(coreMemoryService.listActive("u1")).thenReturn(List.of());
+        when(memoryService.listActive("u1", Memory.KIND_TASK)).thenReturn(List.of());
+        when(memoryService.listAlwaysInject("u1")).thenReturn(List.of());
         when(chatModel.chat(anyString())).thenReturn("""
                 {"newWorkItems":[{"content":"用户本周完成实验报告","priority":4,"sourceMessageIds":["msg-1"]}],
                  "coreCandidates":[{"content":"用户的长期目标是考南京理工大学研究生","sourceMessageIds":["msg-1"]}],
                  "coreUpdates":[],"workConflicts":[],"completedWorkItems":[],"duplicates":[]}
                 """);
-        doThrow(new IllegalStateException("temporary database failure")).when(workMemoryService).add(
-                org.mockito.ArgumentMatchers.eq("u1"), org.mockito.ArgumentMatchers.eq("用户本周完成实验报告"),
-                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(MemoryProvenance.class),
-                org.mockito.ArgumentMatchers.any());
-        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, new ObjectMapper(), 20);
+        // 只按内容打桩，避免 7 参重载 + 记录类型 equals 把匹配搞脆
+        org.mockito.Mockito.doThrow(new IllegalStateException("temporary database failure"))
+                .when(memoryService).addTask(org.mockito.ArgumentMatchers.eq("u1"),
+                        org.mockito.ArgumentMatchers.eq("用户本周完成实验报告"),
+                        org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(MemoryProvenance.class),
+                        org.mockito.ArgumentMatchers.any());
+        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, memoryService,
+                new ObjectMapper(), 20);
 
         assertTrue(extractor.extract("u1"));
 
-        verify(coreMemoryService).add(org.mockito.ArgumentMatchers.eq("u1"),
+        verify(memoryService).addProfile(org.mockito.ArgumentMatchers.eq("u1"),
                 org.mockito.ArgumentMatchers.eq("用户的长期目标是考南京理工大学研究生"),
                 org.mockito.ArgumentMatchers.eq("AUTO"), org.mockito.ArgumentMatchers.any(MemoryProvenance.class));
     }
@@ -112,11 +112,10 @@ class MemoryExtractorAutonomyTest {
     void appliesConfiguredExtractionLimitsAndPromptPolicy() {
         ChatModel chatModel = mock(ChatModel.class);
         ContextStore contextStore = mock(ContextStore.class);
-        WorkMemoryService workMemoryService = mock(WorkMemoryService.class);
-        CoreMemoryService coreMemoryService = mock(CoreMemoryService.class);
+        MemoryService memoryService = mock(MemoryService.class);
         when(contextStore.getRecent("u1", 20)).thenReturn(List.of(new ContextTurn("user", "我有一个长期目标")));
-        when(workMemoryService.listActive("u1")).thenReturn(List.of());
-        when(coreMemoryService.listActive("u1")).thenReturn(List.of());
+        when(memoryService.listActive("u1", Memory.KIND_TASK)).thenReturn(List.of());
+        when(memoryService.listAlwaysInject("u1")).thenReturn(List.of());
         when(chatModel.chat(anyString())).thenReturn("""
                 {"newWorkItems":[],"coreCandidates":[
                   {"content":"第一个目标","confidence":90},
@@ -128,13 +127,13 @@ class MemoryExtractorAutonomyTest {
         policies.setExtractionMaxKeywords(2);
         policies.setExtractionDefaultConfidence(77);
         policies.setDedupThreshold(0.9d);
-        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, workMemoryService,
-                coreMemoryService, new ObjectMapper(), 20, null, new MemoryMutationLock(),
+        MemoryExtractor extractor = new MemoryExtractor(chatModel, contextStore, memoryService,
+                new ObjectMapper(), 20, null, new MemoryMutationLock(),
                 null, 60, policies, "UTC");
 
         assertTrue(extractor.extract("u1"));
 
-        verify(coreMemoryService, times(1)).add(eq("u1"), anyString(), eq("AUTO"),
+        verify(memoryService, times(1)).addProfile(eq("u1"), anyString(), eq("AUTO"),
                 any(MemoryProvenance.class), any(MemoryAttributes.class));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(chatModel).chat(prompt.capture());

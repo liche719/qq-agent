@@ -8,11 +8,9 @@ import com.liche.wechatagent.media.StoredMedia;
 import com.liche.wechatagent.media.StoredMediaRepository;
 import com.liche.wechatagent.memory.ConversationMemory;
 import com.liche.wechatagent.memory.ConversationMemoryRepository;
-import com.liche.wechatagent.memory.EpisodicMemory;
-import com.liche.wechatagent.memory.EpisodicMemoryRepository;
+import com.liche.wechatagent.memory.Memory;
 import com.liche.wechatagent.memory.MemoryChangeLogRepository;
-import com.liche.wechatagent.memory.UserCoreMemoryRepository;
-import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import com.liche.wechatagent.memory.MemoryRepository;
 import com.liche.wechatagent.reminder.ReminderTaskRepository;
 import com.liche.wechatagent.user.UserProfileRepository;
 import org.slf4j.Logger;
@@ -61,18 +59,23 @@ public class MemoryBackupJob {
     private static final int DEFAULT_CONVERSATION_BACKUP_LIMIT = 10_000;
     private static final int DEFAULT_CHANGE_LOG_LIMIT = 5_000;
     private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
+    /**
+     * 快照里存记忆的字段名。合并后只写 {@code memories}；后三个是**老备份包的兼容项**——
+     * 清理历史备份时三个都要试，否则老的 core/work/episode 数组会漏删（正文仍在包里）。
+     */
+    private static final List<String> MEMORY_COLLECTIONS =
+            List.of("memories", "coreMemories", "workMemories", "episodicMemories");
 
     public record PurgeResult(int filesUpdated, boolean complete) {
     }
 
     private final UserProfileRepository userProfileRepository;
-    private final UserCoreMemoryRepository coreRepository;
-    private final UserWorkMemoryRepository workRepository;
+    private final MemoryRepository memoryRepository;
     private final MemoryChangeLogRepository changeLogRepository;
     private final ReminderTaskRepository reminderRepository;
     private final StoredMediaRepository storedMediaRepository;
     private final ConversationMemoryRepository conversationMemoryRepository;
-    private final EpisodicMemoryRepository episodicMemoryRepository;
+    /** 只在生成/读取快照 JSON 时用得到 */
     private final ObjectMapper objectMapper;
     private final Path backupDir;
     private final Path mediaRoot;
@@ -88,32 +91,8 @@ public class MemoryBackupJob {
         this.databaseDump = databaseDump;
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
-                           UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
-                           MemoryChangeLogRepository changeLogRepository,
-                           ReminderTaskRepository reminderRepository,
-                           StoredMediaRepository storedMediaRepository,
-                           ConversationMemoryRepository conversationMemoryRepository,
-                           EpisodicMemoryRepository episodicMemoryRepository,
-                           ObjectMapper objectMapper,
-                           @Value("${backup.dir:backup}") String backupDir,
-                           @Value("${backup.retention-days:30}") int retentionDays,
-                           @Value("${backup.conversation-limit:10000}") int conversationBackupLimit,
-                            @Value("${media.storage.root:stored-media}") String mediaRoot,
-                            @Value("${backup.change-log-limit:5000}") int changeLogLimit,
-                            @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
-        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
-                objectMapper, backupDir,
-                retentionDays, conversationBackupLimit, mediaRoot, changeLogLimit, timeZoneId, true);
-    }
-
-    /** Backwards-compatible constructor retained for focused tests and older embedders. */
-    public MemoryBackupJob(UserProfileRepository userProfileRepository,
-                           UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
+                           MemoryRepository memoryRepository,
                            MemoryChangeLogRepository changeLogRepository,
                            ReminderTaskRepository reminderRepository,
                            StoredMediaRepository storedMediaRepository,
@@ -121,75 +100,34 @@ public class MemoryBackupJob {
                            String backupDir,
                            int retentionDays,
                            String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, null, null, objectMapper, backupDir, retentionDays,
+        this(userProfileRepository, memoryRepository, changeLogRepository,
+                reminderRepository, storedMediaRepository, null, objectMapper, backupDir, retentionDays,
                 DEFAULT_CONVERSATION_BACKUP_LIMIT, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId());
     }
 
     /** Compatibility constructor for callers that include durable conversation evidence. */
+    @org.springframework.beans.factory.annotation.Autowired
     public MemoryBackupJob(UserProfileRepository userProfileRepository,
-                           UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
-                           MemoryChangeLogRepository changeLogRepository,
-                           ReminderTaskRepository reminderRepository,
-                           StoredMediaRepository storedMediaRepository,
-                           ConversationMemoryRepository conversationMemoryRepository,
-                           ObjectMapper objectMapper,
-                           String backupDir,
-                           int retentionDays,
-                           int conversationBackupLimit,
-                           String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, conversationMemoryRepository, null, objectMapper,
-                backupDir, retentionDays, conversationBackupLimit, mediaRoot, DEFAULT_CHANGE_LOG_LIMIT,
-                DEFAULT_ZONE.getId());
-    }
-
-    /** Compatibility constructor for callers that include conversation and episodic evidence. */
-    public MemoryBackupJob(UserProfileRepository userProfileRepository,
-                           UserCoreMemoryRepository coreRepository,
-                           UserWorkMemoryRepository workRepository,
-                           MemoryChangeLogRepository changeLogRepository,
-                           ReminderTaskRepository reminderRepository,
-                           StoredMediaRepository storedMediaRepository,
-                           ConversationMemoryRepository conversationMemoryRepository,
-                           EpisodicMemoryRepository episodicMemoryRepository,
-                           ObjectMapper objectMapper,
-                           String backupDir,
-                           int retentionDays,
-                           int conversationBackupLimit,
-                           String mediaRoot) {
-        this(userProfileRepository, coreRepository, workRepository, changeLogRepository,
-                reminderRepository, storedMediaRepository, conversationMemoryRepository, episodicMemoryRepository,
-                objectMapper, backupDir, retentionDays, conversationBackupLimit, mediaRoot,
-                DEFAULT_CHANGE_LOG_LIMIT, DEFAULT_ZONE.getId(), true);
-    }
-
-    private MemoryBackupJob(UserProfileRepository userProfileRepository,
-                            UserCoreMemoryRepository coreRepository,
-                            UserWorkMemoryRepository workRepository,
+                            MemoryRepository memoryRepository,
                             MemoryChangeLogRepository changeLogRepository,
                             ReminderTaskRepository reminderRepository,
                             StoredMediaRepository storedMediaRepository,
                             ConversationMemoryRepository conversationMemoryRepository,
-                            EpisodicMemoryRepository episodicMemoryRepository,
                             ObjectMapper objectMapper,
-                            String backupDir,
-                            int retentionDays,
-                            int conversationBackupLimit,
-                            String mediaRoot,
-                            int changeLogLimit,
-                            String timeZoneId,
-                            boolean initializationMarker) {
+                            @Value("${backup.dir:backup}") String backupDir,
+                            @Value("${backup.retention-days:30}") int retentionDays,
+                            @Value("${backup.conversation-limit:10000}") int conversationBackupLimit,
+                            @Value("${media.storage.root:stored-media}") String mediaRoot,
+                            @Value("${backup.change-log-limit:5000}") int changeLogLimit,
+                            @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        // ObjectMapper 只在生成快照时用得到，不再存成字段（测试默认构造用的那份也一样）
+        this.objectMapper = objectMapper;
         this.userProfileRepository = userProfileRepository;
-        this.coreRepository = coreRepository;
-        this.workRepository = workRepository;
+        this.memoryRepository = memoryRepository;
         this.changeLogRepository = changeLogRepository;
         this.reminderRepository = reminderRepository;
         this.storedMediaRepository = storedMediaRepository;
         this.conversationMemoryRepository = conversationMemoryRepository;
-        this.episodicMemoryRepository = episodicMemoryRepository;
-        this.objectMapper = objectMapper;
         this.backupDir = Path.of(backupDir).toAbsolutePath().normalize();
         this.mediaRoot = Path.of(mediaRoot).toAbsolutePath().normalize();
         this.retentionDays = Math.max(1, retentionDays);
@@ -399,20 +337,36 @@ public class MemoryBackupJob {
     // Collects all user-scoped records and media artifacts into one backup document.
     private ObjectNode buildBackupState(String userId, List<StoredMedia> media,
                                         List<ConversationMemory> conversations) throws IOException {
-        ObjectNode node = objectMapper.createObjectNode();
+        ObjectNode node = this.objectMapper.createObjectNode();
         node.put("userId", userId);
-        node.set("profile", objectMapper.valueToTree(userProfileRepository.findById(userId).orElse(null)));
-        node.set("coreMemories", objectMapper.valueToTree(coreRepository.findByUserIdOrderByCreatedAtAsc(userId)));
-        node.set("workMemories", objectMapper.valueToTree(workRepository.findByUserId(userId)));
-        node.set("changeLogs", objectMapper.valueToTree(
+        node.set("profile", this.objectMapper.valueToTree(userProfileRepository.findById(userId).orElse(null)));
+        // 三表合并（2026-09-18）前这里是 coreMemories / workMemories / episodicMemories 三个数组，
+        // 现在只有一个 memories（Memory 实体直接序列化，按 kind 区分语义）。
+        // 注意：**老备份包里的三个数组仍然要能被清理**，见 removeMemoryRecord / removeEpisodicRecords。
+        node.set("memories", this.objectMapper.valueToTree(memoriesForBackup(userId)));
+        node.set("changeLogs", this.objectMapper.valueToTree(
                 changeLogRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, changeLogLimit))));
-        node.set("conversationMemories", objectMapper.valueToTree(conversations));
-        node.set("episodicMemories", objectMapper.valueToTree(episodicEvidenceForBackup(userId)));
+        node.set("conversationMemories", this.objectMapper.valueToTree(conversations));
         node.put("conversationMemoryBackupLimit", conversationBackupLimit);
-        node.set("reminders", objectMapper.valueToTree(reminderRepository.findByUserIdAndStatus(userId, "PENDING")));
-        node.set("storedMedia", objectMapper.valueToTree(media));
+        node.set("reminders", this.objectMapper.valueToTree(reminderRepository.findByUserIdAndStatus(userId, "PENDING")));
+        node.set("storedMedia", this.objectMapper.valueToTree(media));
         node.set("mediaArtifacts", backupMedia(userId, media));
         return node;
+    }
+
+    private List<Memory> memoriesForBackup(String userId) {
+        if (memoryRepository == null || userId == null || userId.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<Memory> records = memoryRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+            return records == null ? List.of() : records.stream()
+                    .filter(record -> record != null && userId.equals(record.getUserId()))
+                    .toList();
+        } catch (Exception exception) {
+            log.error("备份记忆失败 userHash={}", shortHash(userId), exception);
+            throw new IllegalStateException("备份记忆失败，已中止本次备份以避免写出空备份", exception);
+        }
     }
 
     private List<ConversationMemory> conversationEvidenceForBackup(String userId) {
@@ -434,21 +388,6 @@ public class MemoryBackupJob {
         } catch (Exception exception) {
             log.error("备份持久化对话证据失败 userHash={}", shortHash(userId), exception);
             throw new IllegalStateException("备份对话证据失败，已中止本次备份以避免写出空备份", exception);
-        }
-    }
-
-    private List<EpisodicMemory> episodicEvidenceForBackup(String userId) {
-        if (episodicMemoryRepository == null || userId == null || userId.isBlank()) {
-            return List.of();
-        }
-        try {
-            var records = episodicMemoryRepository.findByUserIdOrderByOccurredAtDesc(userId);
-            return records == null ? List.of() : records.stream()
-                    .filter(record -> record != null && userId.equals(record.getUserId()))
-                    .toList();
-        } catch (Exception exception) {
-            log.error("备份情景记忆失败 userHash={}", shortHash(userId), exception);
-            throw new IllegalStateException("备份情景记忆失败，已中止本次备份以避免写出空备份", exception);
         }
     }
 
@@ -539,13 +478,16 @@ public class MemoryBackupJob {
     }
 
     private boolean removeMemoryRecord(ObjectNode state, String layer, Long targetId) {
-        String collection = switch (layer) {
-            case "CORE" -> "coreMemories";
-            case "WORK" -> "workMemories";
-            case "ARCHIVE" -> "archives";
-            default -> "";
-        };
-        ArrayNode records = array(state, collection);
+        // 新结构只有一个 memories 数组；老备份包里是 coreMemories / workMemories / episodicMemories
+        // 三个数组——三个都试一遍，老包也必须能删干净（合并前写出去的备份还有 30 天保留期）。
+        boolean changed = false;
+        for (String collection : MEMORY_COLLECTIONS) {
+            changed |= removeRecordById(array(state, collection), targetId);
+        }
+        return changed;
+    }
+
+    private boolean removeRecordById(ArrayNode records, Long targetId) {
         if (records == null) {
             return false;
         }
@@ -605,27 +547,36 @@ public class MemoryBackupJob {
         if (sourceMessageIds != null && !sourceMessageIds.isEmpty()) {
             return backupSourceMessageIds(record).stream().anyMatch(sourceMessageIds::contains);
         }
+        // 老结构用 content，Episode 用 summary；两个都试，新老包都能命中
         return rememberedContent != null && rememberedContent.length() >= 6
-                && contentContains(record.path("content").asText(""), rememberedContent);
+                && (contentContains(record.path("content").asText(""), rememberedContent)
+                || contentContains(record.path("summary").asText(""), rememberedContent));
     }
 
     private boolean removeEpisodicRecords(ObjectNode state, Set<String> sourceMessageIds,
                                           String rememberedContent) {
-        ArrayNode records = array(state, "episodicMemories");
-        if (records == null) {
-            return false;
-        }
+        // 新结构里经历也是 memories 数组的一行（kind=EXPERIENCE）；老包里它们单独在 episodicMemories。
+        // 两处都清：只删老数组会把新包里的经历留下，只删新数组会漏掉老包。
         boolean changed = false;
-        for (int index = records.size() - 1; index >= 0; index--) {
-            JsonNode record = records.get(index);
-            boolean sourceMatch = sourceMessageIds != null && !sourceMessageIds.isEmpty()
-                    && backupSourceMessageIds(record).stream().anyMatch(sourceMessageIds::contains);
-            boolean contentMatch = (sourceMessageIds == null || sourceMessageIds.isEmpty())
-                    && rememberedContent != null && rememberedContent.length() >= 6
-                    && contentContains(record.path("summary").asText(""), rememberedContent);
-            if (sourceMatch || contentMatch) {
-                records.remove(index);
-                changed = true;
+        for (String collection : MEMORY_COLLECTIONS) {
+            ArrayNode records = array(state, collection);
+            if (records == null) {
+                continue;
+            }
+            for (int index = records.size() - 1; index >= 0; index--) {
+                JsonNode record = records.get(index);
+                // 新的 memories 数组里混着三种 kind，按 id 删的那条走 removeMemoryRecord；
+                // 这里只处理"按证据来源/正文"忘的那一类，所以 KIND_TASK/PROFILE 的行只按内容匹配删。
+                boolean sourceMatch = sourceMessageIds != null && !sourceMessageIds.isEmpty()
+                        && backupSourceMessageIds(record).stream().anyMatch(sourceMessageIds::contains);
+                boolean contentMatch = (sourceMessageIds == null || sourceMessageIds.isEmpty())
+                        && rememberedContent != null && rememberedContent.length() >= 6
+                        && (contentContains(record.path("content").asText(""), rememberedContent)
+                        || contentContains(record.path("summary").asText(""), rememberedContent));
+                if (sourceMatch || contentMatch) {
+                    records.remove(index);
+                    changed = true;
+                }
             }
         }
         return changed;

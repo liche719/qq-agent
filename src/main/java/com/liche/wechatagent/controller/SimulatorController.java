@@ -6,10 +6,8 @@ import com.liche.wechatagent.channel.InboundMessage;
 import com.liche.wechatagent.channel.OutboundMessage;
 import com.liche.wechatagent.channel.SimulatorChannel;
 import com.liche.wechatagent.exception.BizException;
-import com.liche.wechatagent.memory.UserCoreMemory;
-import com.liche.wechatagent.memory.UserCoreMemoryRepository;
-import com.liche.wechatagent.memory.UserWorkMemory;
-import com.liche.wechatagent.memory.UserWorkMemoryRepository;
+import com.liche.wechatagent.memory.Memory;
+import com.liche.wechatagent.memory.MemoryService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,17 +38,14 @@ public class SimulatorController {
 
     private final AgentOrchestrator orchestrator;
     private final SimulatorChannel simulatorChannel;
-    private final UserCoreMemoryRepository coreRepository;
-    private final UserWorkMemoryRepository workRepository;
+    private final MemoryService memoryService;
 
     public SimulatorController(AgentOrchestrator orchestrator,
                                SimulatorChannel simulatorChannel,
-                               UserCoreMemoryRepository coreRepository,
-                               UserWorkMemoryRepository workRepository) {
+                               MemoryService memoryService) {
         this.orchestrator = orchestrator;
         this.simulatorChannel = simulatorChannel;
-        this.coreRepository = coreRepository;
-        this.workRepository = workRepository;
+        this.memoryService = memoryService;
     }
 
     @PostMapping("/send")
@@ -102,11 +97,22 @@ public class SimulatorController {
     @GetMapping("/memories")
     public Map<String, Object> memories(@RequestParam String userId) {
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("core", coreRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
-                .map(UserCoreMemory::getContent).toList());
-        map.put("work", workRepository.findByUserId(userId).stream()
-                .map(w -> "[" + w.getPriority() + "] " + w.getContent()).toList());
+        // 三表合并（2026-09-18）后键名保持合并前的语义兼容：core / work / experience 各一组
+        List<Memory> profile = memoryService.listActive(userId, Memory.KIND_PROFILE);
+        List<Memory> task = new java.util.ArrayList<>(memoryService.listActive(userId, Memory.KIND_TASK));
+        task.addAll(inactiveOfKind(userId, Memory.KIND_TASK));
+        List<Memory> experience = new java.util.ArrayList<>(memoryService.listActive(userId, Memory.KIND_EXPERIENCE));
+        experience.addAll(inactiveOfKind(userId, Memory.KIND_EXPERIENCE));
+        map.put("core", profile.stream().map(Memory::getContent).toList());
+        map.put("work", task.stream().map(memory -> "[" + memory.getPriority() + "] " + memory.getContent()).toList());
+        map.put("experience", experience.stream().map(Memory::getContent).toList());
         return map;
+    }
+
+    private List<Memory> inactiveOfKind(String userId, String kind) {
+        return memoryService.listInactive(userId).stream()
+                .filter(memory -> kind.equals(memory.getKind()))
+                .toList();
     }
 
 

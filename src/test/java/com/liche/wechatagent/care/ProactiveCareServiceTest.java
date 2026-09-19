@@ -2,7 +2,7 @@ package com.liche.wechatagent.care;
 
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
-import com.liche.wechatagent.memory.WorkMemoryService;
+import com.liche.wechatagent.memory.MemoryService;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserProfileRepository;
 import com.liche.wechatagent.user.UserService;
@@ -27,7 +27,7 @@ class ProactiveCareServiceTest {
         UserProfile profile = new UserProfile("u1", "persona");
         when(userService.get("u1")).thenReturn(profile);
         ProactiveCareService service = new ProactiveCareService(mock(UserProfileRepository.class), userService,
-                mock(WorkMemoryService.class), List.<WeChatChannel>of(),
+                mock(MemoryService.class), List.<WeChatChannel>of(),
                 mock(UserLogService.class));
 
         String result = service.configure("u1", "on");

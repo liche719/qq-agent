@@ -3,8 +3,8 @@ package com.liche.wechatagent.care;
 import com.liche.wechatagent.channel.ProactiveDelivery;
 import com.liche.wechatagent.channel.WeChatChannel;
 import com.liche.wechatagent.log.UserLogService;
-import com.liche.wechatagent.memory.UserWorkMemory;
-import com.liche.wechatagent.memory.WorkMemoryService;
+import com.liche.wechatagent.memory.Memory;
+import com.liche.wechatagent.memory.MemoryService;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserProfileRepository;
 import com.liche.wechatagent.user.UserService;
@@ -38,7 +38,7 @@ public class ProactiveCareService {
 
     private final UserProfileRepository profileRepository;
     private final UserService userService;
-    private final WorkMemoryService workMemoryService;
+    private final MemoryService memoryService;
     private final List<WeChatChannel> channels;
     private final UserLogService userLogService;
     private final LocalTime deliveryTime;
@@ -51,7 +51,7 @@ public class ProactiveCareService {
     @Autowired
     public ProactiveCareService(UserProfileRepository profileRepository,
                                 UserService userService,
-                                WorkMemoryService workMemoryService,
+                                MemoryService memoryService,
                                 List<WeChatChannel> channels,
                                 UserLogService userLogService,
                                 @org.springframework.beans.factory.annotation.Value("${care.delivery-time:20:30}") String deliveryTime,
@@ -62,7 +62,7 @@ public class ProactiveCareService {
                                 @org.springframework.beans.factory.annotation.Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.profileRepository = profileRepository;
         this.userService = userService;
-        this.workMemoryService = workMemoryService;
+        this.memoryService = memoryService;
         this.channels = channels;
         this.userLogService = userLogService;
         this.deliveryTime = parseDeliveryTime(deliveryTime);
@@ -75,33 +75,33 @@ public class ProactiveCareService {
 
     ProactiveCareService(UserProfileRepository profileRepository,
                          UserService userService,
-                         WorkMemoryService workMemoryService,
+                         MemoryService memoryService,
                          List<WeChatChannel> channels,
                          UserLogService userLogService) {
-        this(profileRepository, userService, workMemoryService, channels, userLogService, "20:30",
+        this(profileRepository, userService, memoryService, channels, userLogService, "20:30",
                 DEFAULT_FOCUS_MAX_CHARS, DEFAULT_MIN_FOCUS_PRIORITY, DEFAULT_RETRY_DELAY_MINUTES,
                 DEFAULT_WEEKLY_DAY.name(), DEFAULT_ZONE.getId());
     }
 
     ProactiveCareService(UserProfileRepository profileRepository,
                          UserService userService,
-                         WorkMemoryService workMemoryService,
+                         MemoryService memoryService,
                          List<WeChatChannel> channels,
                          UserLogService userLogService,
                          String deliveryTime) {
-        this(profileRepository, userService, workMemoryService, channels, userLogService, deliveryTime,
+        this(profileRepository, userService, memoryService, channels, userLogService, deliveryTime,
                 DEFAULT_FOCUS_MAX_CHARS, DEFAULT_MIN_FOCUS_PRIORITY, DEFAULT_RETRY_DELAY_MINUTES,
                 DEFAULT_WEEKLY_DAY.name(), DEFAULT_ZONE.getId());
     }
 
     ProactiveCareService(UserProfileRepository profileRepository,
                          UserService userService,
-                         WorkMemoryService workMemoryService,
+                         MemoryService memoryService,
                          List<WeChatChannel> channels,
                          UserLogService userLogService,
                          String deliveryTime,
                          String timeZoneId) {
-        this(profileRepository, userService, workMemoryService, channels, userLogService, deliveryTime,
+        this(profileRepository, userService, memoryService, channels, userLogService, deliveryTime,
                 DEFAULT_FOCUS_MAX_CHARS, DEFAULT_MIN_FOCUS_PRIORITY, DEFAULT_RETRY_DELAY_MINUTES,
                 DEFAULT_WEEKLY_DAY.name(), timeZoneId);
     }
@@ -163,11 +163,11 @@ public class ProactiveCareService {
     }
 
     private String findFocus(String userId) {
-        return workMemoryService.listActive(userId).stream()
+        return memoryService.listActive(userId, Memory.KIND_TASK).stream()
                 .filter(memory -> memory.getPriority() != null && memory.getPriority() >= minFocusPriority)
-                .max(Comparator.comparing(UserWorkMemory::getPriority)
-                        .thenComparing(UserWorkMemory::getUpdatedAt))
-                .map(UserWorkMemory::getContent)
+                .max(Comparator.comparing(Memory::getPriority)
+                        .thenComparing(Memory::getUpdatedAt))
+                .map(Memory::getContent)
                 .orElse(null);
     }
 

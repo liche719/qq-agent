@@ -622,3 +622,31 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 两点容易误会的地方（都写进代码/文档了）：① **只有 user/assistant 正文嵌**，工具轨迹那些 system 行（生产 542 条）**故意不嵌**；② 每条最多取**前 1000 字**（`EmbeddingClient.MAX_INPUT_CHARS`），不是整条长回复都送。
 
 当时评估过的更省方案（**都没采纳**，留个记录）：**C** 每条只嵌前 300 字（省 31%，长回复后半段搜不到）；**B** 只嵌用户说的话（降到 1/15，但实测工具命中里 5/7 是助手回复，"你当时怎么答的"这类翻旧账就没了）；**D** 对话完全不做向量（成本 0，`searchConversation` 退化成"按时间取最近 N 条"，按语义搜历史的能力取消）。
+
+## 20. 记忆分层合并：5 张表 → 3 张（2026-09-18，用户决定；已上线）
+
+**为什么要合**：`core` / `work` / `episode` 三张散文表在**操作**上只剩两条轴——① 要不要每轮无条件注入（原来只有 core 是）② 是不是"有槽位的当前值"或"原文证据"。实测边界已经站不住：生产只有 **19 行 episode**，而 work 里大量行本身就是"经历"（"用户有两门体育挂科了，正在申请重修"）。用户的原话是"如果能准确定义好每层的作用效果，会不会多余做，才是我能接受的"——按这个标准，**work 与 episode 这两层边界不成立**。
+
+**合并后的三个概念**（每个都能一句话说清，这才是目的）：
+
+| 表 | 一句话 | 谁在用 |
+|---|---|---|
+| `memory` | 我对你的了解（一条一句话，有生命周期；`always_inject` 决定是否无条件在场，`kind` 决定语义） | 每轮注入（PROFILE 无条件 / TASK+EXPERIENCE 按向量挑） |
+| `memory_fact` | 会变的信息的**当前值**（有槽位，可精确改写） | 模型按需查工具 |
+| `conversation_memory` | 我们当时说的**原话**（证据，只能忘不能替） | 兜底注入 + `searchConversation` |
+
+`memory.kind`：`PROFILE`（原 core，`always_inject=true`）/ `TASK`（原 work）/ `EXPERIENCE`（原 episode）。
+**"层"从此不再是表**，而是两条正交的轴：`always_inject`（要不要无条件在场）+ `kind`（有没有槽位/是不是原文）。
+
+**迁移**：`deploy/postgres/V16__merge_memory_layers.sql`。老表**不删**（留作切削前快照，回滚＝回退镜像）。id 会撞车而 core/work 有 `superseded_by_id` 自引用，所以先建临时列 `legacy_id` 存老 id，搬完按 `(kind, legacy_id)` 自连接回填引用，再删这一列。
+
+**本地演练核对**（rehearsal 库）：三张老表 52 + 62 + 0 行 → `memory` 里 PROFILE 52（全部 `always_inject`）、TASK 62；`superseded_by_id` 回填 7 条，且**跨 kind 引用 = 0**。经历那条分支本地副本没有数据，单独塞了两条假经历验证：`title / category(episode_type) / occurred_at / ended_at / importance / content(summary)` 映射正确、替代链也对。
+
+**生产迁移核对**（2026-09-18）：先 `pg_dump` 三张老表到 `/root/wechat-agent-memory-legacy-backup-20260918.sql`（1.1 MB，600），再跑 V16：
+`INSERT 29`（PROFILE）+ `INSERT 65`（TASK）+ `INSERT 19`（EXPERIENCE）= **113 行**（与老表逐项相等），`UPDATE 11`（3 条 core + 8 条 work 的替代引用回填），**跨 kind 引用 = 0**；状态分布 ACTIVE 90 / COMPLETED 2 / EXPIRED 10 / SUPERSEDED 11 = 113。老表一条没删（切削前快照）。
+
+**踩到的坑（新）**：`Get-Content -Raw | docker exec -i psql` 会把多字节内容弄坏——V16 报 `syntax error at or near "source"`（psql 看到的是被切碎的行），换成 `docker cp` + `psql -f` 立刻正常。本地跑迁移**一律用 `docker cp` + `-f`**；推服务器则用 SFTP 上传 + `docker exec -i ... -f -`（走 shell 重定向，不经 PowerShell 管道）。这跟坑 12 是同一族问题。
+
+**代码变化**：`CoreMemoryService` + `WorkMemoryService` + `EpisodicMemoryService` → `MemoryService`（按 kind 分派，行为逐字保留）；三个实体/仓库 → `Memory` + `MemoryRepository`；`WorkMemoryVectorStore` 删掉（改用通用的 `PgVectorStore`，白名单加 `memory`，于是项目里只剩"事实用"和"通用"两个向量 store）。变更日志的 `layer` 列开始写 kind（`PROFILE`/`TASK`/`EXPERIENCE`），面板的中文映射同时**保留** CORE/WORK/ARCHIVE 的旧值（历史行还在库里）。面板：总览显示「记忆·长期设定 / 中期事项 / 经历」，用户详情返回一个 `memories` 数组、前端按 kind 分组，`/memory` 的编号从 `C3`/`W12` 改成统一的 `M3`。
+
+**判重那套没动**：字面相似度（0.8，带否定词感知）仍然负责"这两句是不是同一句"，"是不是同一个槽位改了值"仍然交给槽位/模型判定——**"像不像" ≠ "是不是同一个值"**，向量也不能拿来判重（详见 §18 的讨论）。

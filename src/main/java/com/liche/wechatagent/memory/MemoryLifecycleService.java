@@ -11,24 +11,24 @@ public class MemoryLifecycleService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryLifecycleService.class);
 
-    private final WorkMemoryService workMemoryService;
+    private final MemoryService memoryService;
     private final ConversationMemoryService conversationMemoryService;
 
     @Autowired
-    public MemoryLifecycleService(WorkMemoryService workMemoryService,
+    public MemoryLifecycleService(MemoryService memoryService,
                                  ConversationMemoryService conversationMemoryService) {
-        this.workMemoryService = workMemoryService;
+        this.memoryService = memoryService;
         this.conversationMemoryService = conversationMemoryService;
     }
 
-    public MemoryLifecycleService(WorkMemoryService workMemoryService) {
-        this(workMemoryService, null);
+    public MemoryLifecycleService(MemoryService memoryService) {
+        this(memoryService, null);
     }
 
     @Scheduled(fixedDelayString = "${memory.lifecycle-scan-interval-ms:3600000}", initialDelayString = "${memory.lifecycle-initial-delay-ms:60000}")
     public void expireDueMemories() {
         try {
-            int expired = workMemoryService.expireDueMemories();
+            int expired = memoryService.expireDueMemories();
             if (expired > 0) {
                 log.info("记忆生命周期扫描完成，自动过期 {} 条工作记忆", expired);
             }
