@@ -2,6 +2,7 @@ package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.agent.AgentTaskStateStore;
 import com.liche.wechatagent.agent.AgentOrchestrator;
+import com.liche.wechatagent.backup.BackupFreshnessChecker;
 import com.liche.wechatagent.channel.qq.QqChannel;
 import com.liche.wechatagent.log.OperationLog;
 import com.liche.wechatagent.log.OperationLogRepository;
@@ -51,6 +52,13 @@ public class AdminDashboardController {
     private final StoredMediaRepository media;
     private final Scheduler scheduler;
     private final Path logDirectory;
+    /** 备份新鲜度（可选注入：只为总览页多一条告警，缺了也不该影响面板启动） */
+    private BackupFreshnessChecker backupFreshness;
+
+    @Autowired(required = false)
+    public void setBackupFreshness(BackupFreshnessChecker backupFreshness) {
+        this.backupFreshness = backupFreshness;
+    }
 
     @Autowired
     public AdminDashboardController(HealthController health, AgentTaskStateStore tasks, AgentOrchestrator orchestrator,
@@ -112,6 +120,14 @@ public class AdminDashboardController {
             if (!"UP".equals(state)) alerts.add(name + " 状态异常：" + state);
         });
         if (!moduleErrors.isEmpty()) alerts.add("部分业务数据暂不可用");
+        // 备份太旧也标黄（2026-09-20 加）：备份每天 03:00 自己跑，撞上部署重启就会整天没有备份，
+        // 而它正是「用户长期记忆不丢失」的最后一道防线——所以面板上必须看得见。
+        if (backupFreshness != null && backupFreshness.enabled()) {
+            var backupStatus = backupFreshness.check();
+            if (!backupStatus.fresh()) {
+                alerts.add(backupStatus.message());
+            }
+        }
         out.put("status", alerts.isEmpty() ? "UP" : "DEGRADED");
         out.put("alerts", alerts); return out;
     }

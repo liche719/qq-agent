@@ -463,6 +463,9 @@ backup:
   dir: ${BACKUP_DIR:backup}
   cron: '${BACKUP_CRON:0 0 3 * * ?}'
   retention-days: ${BACKUP_RETENTION_DAYS:30}
+  # 最新一份备份超过多少小时就算"太旧"（推 QQ 告警 + 面板标黄）；0 = 不检查。
+  # 默认 26：比每天一次的 03:00 多留 2 小时，漏跑一天当天就能发现。
+  max-age-hours: ${BACKUP_MAX_AGE_HOURS:26}
   conversation-limit: ${BACKUP_CONVERSATION_LIMIT:10000}
   change-log-limit: ${BACKUP_CHANGE_LOG_LIMIT:5000}
 

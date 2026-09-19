@@ -1,5 +1,6 @@
 package com.liche.wechatagent.alert;
 
+import com.liche.wechatagent.backup.BackupFreshnessChecker;
 import com.liche.wechatagent.channel.qq.QqChannel;
 import com.liche.wechatagent.config.AlertProperties;
 import org.quartz.Scheduler;
@@ -41,6 +42,7 @@ public class AlertNotifier {
     private final JdbcTemplate jdbc;
     private final StringRedisTemplate redis;
     private final Scheduler scheduler;
+    private final BackupFreshnessChecker backupFreshness;
     private final ZoneId zone;
 
     /** 当前处于激活状态的问题：key → 描述 */
@@ -51,13 +53,14 @@ public class AlertNotifier {
     private final long startedAt = System.currentTimeMillis();
 
     public AlertNotifier(AlertProperties properties, ObjectProvider<QqChannel> qqChannel, JdbcTemplate jdbc,
-                         StringRedisTemplate redis, Scheduler scheduler,
+                         StringRedisTemplate redis, Scheduler scheduler, BackupFreshnessChecker backupFreshness,
                          @Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.properties = properties;
         this.qqChannel = qqChannel;
         this.jdbc = jdbc;
         this.redis = redis;
         this.scheduler = scheduler;
+        this.backupFreshness = backupFreshness;
         this.zone = parseZone(timeZone);
     }
 
@@ -184,7 +187,23 @@ public class AlertNotifier {
         }
 
         collectMemoryExtractionProblems(problems);
+        collectBackupProblems(problems);
         return problems;
+    }
+
+    /**
+     * 备份太旧（2026-09-20 加）。备份是每天 03:00 由应用自己跑的，跑失败只写日志；
+     * 撞上部署重启就会整天没有备份而无人知晓。判定逻辑在 {@link BackupFreshnessChecker}，
+     * 这里只负责把结论变成一条告警（面板总览也会显示同一条，见 AdminDashboardController）。
+     */
+    private void collectBackupProblems(Map<String, String> problems) {
+        if (backupFreshness == null || !backupFreshness.enabled()) {
+            return;
+        }
+        BackupFreshnessChecker.Status status = backupFreshness.check();
+        if (!status.fresh()) {
+            problems.put("backup-stale", status.message());
+        }
     }
 
     /**
