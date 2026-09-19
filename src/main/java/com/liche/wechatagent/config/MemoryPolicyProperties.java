@@ -18,7 +18,6 @@ public class MemoryPolicyProperties {
     public static final int DEFAULT_EXTRACTION_MAX_CONTENT_CHARS = 4_000;
     public static final int DEFAULT_EXTRACTION_MAX_KEYWORDS = 8;
     public static final int DEFAULT_EXTRACTION_CONFIDENCE = 85;
-    public static final int DEFAULT_CONVERSATION_MAX_RETRIEVAL_TERMS = 8;
     public static final int DEFAULT_CONVERSATION_FORGET_SCAN_BATCH = 250;
     public static final int DEFAULT_CORE_MAX_CONTENT_CHARS = 4_000;
     public static final int DEFAULT_WORK_MAX_CONTENT_CHARS = 2_000;
@@ -34,9 +33,6 @@ public class MemoryPolicyProperties {
     public static final int DEFAULT_WORK_IMPORTANCE = 3;
     private static final List<String> DEFAULT_HISTORY_MARKERS = List.of(
             "之前", "上次", "以前", "曾经", "历史", "记得", "聊过", "说过", "那时候", "过去", "还记得");
-    private static final List<String> DEFAULT_CONVERSATION_RETRIEVAL_NOISE = List.of(
-            "之前", "上次", "以前", "曾经", "历史", "记得", "聊过", "说过", "那时候", "过去", "还记得",
-            "用户", "助手", "帮我", "请问", "这个", "那个", "什么", "怎么", "一下", "看看");
     private static final List<String> DEFAULT_NEGATION_MARKERS = List.of(
             "不再", "不想", "不会", "取消", "放弃", "停止", "改考", "不喜欢", "不需要");
 
@@ -45,7 +41,6 @@ public class MemoryPolicyProperties {
     private int extractionMaxKeywords = DEFAULT_EXTRACTION_MAX_KEYWORDS;
     private int extractionDefaultConfidence = DEFAULT_EXTRACTION_CONFIDENCE;
     private double dedupThreshold = 0.8d;
-    private int conversationMaxRetrievalTerms = DEFAULT_CONVERSATION_MAX_RETRIEVAL_TERMS;
     private int conversationForgetScanBatch = DEFAULT_CONVERSATION_FORGET_SCAN_BATCH;
     private int coreMaxContentChars = DEFAULT_CORE_MAX_CONTENT_CHARS;
     private int workMaxContentChars = DEFAULT_WORK_MAX_CONTENT_CHARS;
@@ -58,7 +53,6 @@ public class MemoryPolicyProperties {
     private int defaultCoreImportance = DEFAULT_CORE_IMPORTANCE;
     private int defaultWorkImportance = DEFAULT_WORK_IMPORTANCE;
     private List<String> historyMarkers = new ArrayList<>(DEFAULT_HISTORY_MARKERS);
-    private List<String> conversationRetrievalNoise = new ArrayList<>(DEFAULT_CONVERSATION_RETRIEVAL_NOISE);
     private List<String> negationMarkers = new ArrayList<>(DEFAULT_NEGATION_MARKERS);
 
     public int getExtractionMaxCandidates() {
@@ -99,14 +93,6 @@ public class MemoryPolicyProperties {
 
     public void setDedupThreshold(double dedupThreshold) {
         this.dedupThreshold = dedupThreshold;
-    }
-
-    public int getConversationMaxRetrievalTerms() {
-        return conversationMaxRetrievalTerms;
-    }
-
-    public void setConversationMaxRetrievalTerms(int conversationMaxRetrievalTerms) {
-        this.conversationMaxRetrievalTerms = conversationMaxRetrievalTerms;
     }
 
     public int getConversationForgetScanBatch() {
@@ -206,15 +192,6 @@ public class MemoryPolicyProperties {
 
     public void setHistoryMarkers(List<String> historyMarkers) {
         this.historyMarkers = normalizedTerms(historyMarkers, DEFAULT_HISTORY_MARKERS);
-    }
-
-    public List<String> getConversationRetrievalNoise() {
-        return List.copyOf(conversationRetrievalNoise);
-    }
-
-    public void setConversationRetrievalNoise(List<String> conversationRetrievalNoise) {
-        this.conversationRetrievalNoise = normalizedTerms(conversationRetrievalNoise,
-                DEFAULT_CONVERSATION_RETRIEVAL_NOISE);
     }
 
     public List<String> getNegationMarkers() {

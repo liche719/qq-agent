@@ -650,3 +650,10 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 **代码变化**：`CoreMemoryService` + `WorkMemoryService` + `EpisodicMemoryService` → `MemoryService`（按 kind 分派，行为逐字保留）；三个实体/仓库 → `Memory` + `MemoryRepository`；`WorkMemoryVectorStore` 删掉（改用通用的 `PgVectorStore`，白名单加 `memory`，于是项目里只剩"事实用"和"通用"两个向量 store）。变更日志的 `layer` 列开始写 kind（`PROFILE`/`TASK`/`EXPERIENCE`），面板的中文映射同时**保留** CORE/WORK/ARCHIVE 的旧值（历史行还在库里）。面板：总览显示「记忆·长期设定 / 中期事项 / 经历」，用户详情返回一个 `memories` 数组、前端按 kind 分组，`/memory` 的编号从 `C3`/`W12` 改成统一的 `M3`。
 
 **判重那套没动**：字面相似度（0.8，带否定词感知）仍然负责"这两句是不是同一句"，"是不是同一个槽位改了值"仍然交给槽位/模型判定——**"像不像" ≠ "是不是同一个值"**，向量也不能拿来判重（详见 §18 的讨论）。
+
+**上线后的收尾（2026-09-19）**
+- **真实对话验证**：合并后生产上跑过真实一轮，`memory` 表同时供出 PROFILE（无条件注入那批）+ TASK + EXPERIENCE 三类，`0 ERROR`；注入证据仍可从 `memory.last_used_at` 反查。
+- **顺手修掉的 bug**：总览 `memoryKinds` 三个数全是 0——`countByKind(null, kind)` 被"用户必须有值"的守卫挡成 0；改成全库口径的 `countByKind(kind)` 后才对（29 / 65 / 19）。
+- **清掉两条垃圾事实**：`周五·体育课 / 课程 = 体育课`、`周二晚上·课 / 安排 = 有课`（值等于 subject 的一部分、零信息量；规则 13 之后新提取已不会再产出这种）→ 先 `pg_dump memory_fact`（159 KB，600）再删，剩 10 条有效。
+- **`episode-vector-floor` 在真实经历上校准**（19 条、真模型、5 个探针）：相关对 **0.48~0.61**（"上次打印申请表为什么着急" 0.479/0.478、"我挂科重修那件事" 0.535/0.528、"课表上教室改到哪了" 0.607/0.580），无关探针最高 **0.380**（量子计算）/ **0.334**（今天心情不错）→ **0.45 正好卡在中间，不需要改**。注意经历是长文本、相似度整体比短记忆低，门槛别照搬 P2 那套直觉。
+- **清掉死配置**：`conversation-retrieval-noise`（yml 键 + `MemoryPolicyProperties` 的字段/getter/setter/默认常量）与 `conversation-max-retrieval-terms`——P3 删掉"按字面词 LIKE 捞旧对话"后没人读了。

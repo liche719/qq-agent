@@ -421,9 +421,9 @@ memory:
   self-reflect-interest-threshold: ${MEMORY_SELF_REFLECT_INTEREST_THRESHOLD:150}
   self-reflect-on-idle: ${MEMORY_SELF_REFLECT_ON_IDLE:true}
   self-reflect-idle-hours: ${MEMORY_SELF_REFLECT_IDLE_HOURS:20}
-  # 可按部署语言扩展“追溯历史”触发词和检索降噪词；留空时使用内置通用中文默认值。
+  # 可按部署语言扩展“追溯历史”触发词；留空时使用内置通用中文默认值。
+  # （原来的 conversation-retrieval-noise 是"按字面词 LIKE 捞旧对话"的降噪词，那条路 P3 已整块删除，故删掉这个键）
   history-markers: ${MEMORY_HISTORY_MARKERS:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得}
-  conversation-retrieval-noise: ${MEMORY_CONVERSATION_RETRIEVAL_NOISE:之前,上次,以前,曾经,历史,记得,聊过,说过,那时候,过去,还记得,用户,助手,帮我,请问,这个,那个,什么,怎么,一下,看看}
   negation-markers: ${MEMORY_NEGATION_MARKERS:不再,不想,不会,取消,放弃,停止,改考,不喜欢,不需要}
   historical-retrieval-limit: ${MEMORY_HISTORICAL_RETRIEVAL_LIMIT:8}
   historical-min-score: ${MEMORY_HISTORICAL_MIN_SCORE:3}
