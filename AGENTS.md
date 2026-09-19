@@ -65,8 +65,8 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
   - `docker-compose.remote.yml` —— 含 agent 服务，CI 使用
   - `.env`（权限 600，服务器侧凭据，不入库、CI 也不传）
   - `docker/searxng/settings.yml`
-- 容器：`wechat-agent-mysql`(mysql:8.0.46) / `wechat-agent-redis` / `wechat-agent-searxng` / `wechat-agent-java` —— **只有 4 个**（nginx 网关已于 2026-09-12 按用户要求拆除）。
-- 数据卷：`wechat-agent-infra_mysql-data` / `_redis-data` / `_searxng-data` —— **任何操作都不允许删除或重建这些卷**。
+- 容器：`wechat-agent-postgres`(pgvector/pg16) / `wechat-agent-redis` / `wechat-agent-searxng` / `wechat-agent-java` —— **只有 4 个**（nginx 网关已于 2026-09-12 按用户要求拆除；mysql 已于 2026-09-20 退役）。
+- 数据卷：`wechat-agent-infra_postgres-data` / `_redis-data` / `_searxng-data` —— **任何操作都不允许删除或重建这些卷**。旧的 `_mysql-data` 已按用户决定于 2026-09-20 删除（删前整库 dump 服务器 + 本地各留一份，见 `docs/pg-migration.md`）。
 - agent 容器用 `network_mode: host`，**直接对公网监听 `0.0.0.0:443`（HTTPS，标准端口，应用自带 TLS）**；MySQL/Redis/SearXNG 走 `127.0.0.1`。端口由 compose 的 `SERVER_PORT` 决定（默认 443；服务器 `.env` 另有一行显式覆盖）。
 - 远程排查（面板走 HTTPS，域名证书有效，本机排查可用 `-k`）：
 

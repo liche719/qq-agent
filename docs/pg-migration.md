@@ -41,7 +41,33 @@
    表现是**每次重启都刷"恢复提醒调度失败 reminderId=…"**（提醒恢复属于"用户长期记忆不丢失"那条线，不能有 ERROR）。
    **判断依据**：本地同一份数据、只把 `QUARTZ_DELEGATE` 补成全限定名，重启后 ERROR 归零。
 
-## 回滚（MySQL 容器与数据卷都还在）
+## 回滚（MySQL 容器已退役，2026-09-20 起卷也删了）
+
+**2026-09-20 按用户决定收尾**：确认 pg 里数据齐全后，把最后一份 MySQL 整库 dump 导出来、
+然后删掉了数据卷 `wechat-agent-infra_mysql-data` 与 `mysql:8.0.46` 镜像（合计回收 ~1.0 GB）。
+所以**下面这套"原样回滚"已经不可用**——卷没了，起 mysql 只会得到空库。
+
+删之前的那份 dump（`--all-databases`，1.2 MB，41 张表；`user_profile=3`、`conversation_memory=1160`、
+旧 `user_core_memory`/`user_work_memory`/`episodic_memory` = 29/64/18，与当年迁进 pg 的数字吻合）：
+
+- 服务器 `/root/wechat-agent-mysql-final-dump-20260920.sql.gz`
+- 本地 `C:\Users\33721\Desktop\wechat-agent\wechat-agent-mysql-final-dump-20260920.sql.gz`
+  （sha256 `e4f062357d368b784aed96af3784b5794445996e3260423c6c6fe4c5090ce44a`）
+
+真要再看旧库，用这份 dump 起一个临时 MySQL 灌进去即可（**不要**指望卷）：
+`docker run -d -e MYSQL_ROOT_PASSWORD=x mysql:8.0.46` → `zcat dump.sql.gz | docker exec -i <容器> mysql -uroot -px`。
+
+**为什么敢删**：① pg 侧逐表计数只多不少（迁移后还在长）；② 迁移前后各有 mysqldump 快照留在
+`/root`（`wechat-agent-backup-20260912015146.sql.gz`、`-clockfix-…`、`-baseline-202609142104.sql.gz`、
+以及 `backup/20260917.sql.gz`）；③ 全库 pg dump 每天在跑，另有一份自包含导出包。
+
+**顺带封存了一个雷**：服务器 `/opt/wechat-agent-infra/docker-compose.yml` 是 09-11 从本地开发版拷过去的
+残留（里面的 `mysql` 口令还是 `root`），4 个容器其实全来自 `docker-compose.remote.yml`。谁要是**不加 `-f`**
+在那个目录跑一次 `docker compose up -d`，它会去建同名容器，把正在跑的 redis（丢 `--requirepass`）、
+searxng（丢调好的 settings 挂载）一起换掉，还会凭空重建一个 mysql 卷。已改名为
+`docker-compose.localdev-unused.txt`（内容没动），现在不加 `-f` 只会得到 `no configuration file provided`。
+
+（以下为历史回滚步骤，卷删除后已失效，留作参考）
 
 ```
 cd /opt/wechat-agent-infra

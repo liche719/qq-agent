@@ -254,8 +254,8 @@ services:
       - ./stored-media:/app/stored-media
       - ./logs:/app/logs
     depends_on:
-      # 2026-09-18：整库迁到 PostgreSQL 后，agent 不再依赖 mysql（容器已删、**数据卷仍保留**做回滚）。
-      # 回滚时把下面这段和 mysql 服务一起恢复即可。
+      # 2026-09-18：整库迁到 PostgreSQL 后，agent 不再依赖 mysql。
+      # 2026-09-20：mysql 数据卷与镜像已按用户决定删除，**回滚到 MySQL 这条路已经没了**（见 docs/pg-migration.md）。
       postgres:
         condition: service_healthy
       redis:
@@ -263,9 +263,9 @@ services:
       searxng:
         condition: service_started
 
-  # ── MySQL：2026-09-18 迁 pg 后**不再启动**（容器已删，数据卷 wechat-agent-infra_mysql-data 保留）。
-  # 回滚做法：取消下面整段的注释 + 把 agent 的 depends_on 里 postgres 换回 mysql，
-  # 再在服务器 .env 里把 DB_URL/DB_DRIVER/DB_USER/DB_PASSWORD 改回 MySQL（或删掉那四行走默认值）。
+  # ── MySQL：2026-09-18 迁 pg 后不再使用；2026-09-20 数据卷 `wechat-agent-infra_mysql-data` 与镜像都已删除。
+  # 下面是历史定义，留作参考：起一个空 mysql 只能得到空库，要看旧数据请用那份整库 dump
+  # （服务器 /root/wechat-agent-mysql-final-dump-20260920.sql.gz，本地同名一份）。
   # mysql:
   #   image: mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
   #   container_name: wechat-agent-mysql
