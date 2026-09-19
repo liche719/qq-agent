@@ -155,6 +155,16 @@ public class MemoryService {
         return validUserId(userId) ? repository.countByUserIdAndStatus(userId, MemoryStatus.ACTIVE.name()) : 0L;
     }
 
+    /**
+     * 全库口径的按 kind 计数（总览面板用）。
+     *
+     * <p>**不要**用 {@code countByKind(null, kind)} 代替：那个方法有"用户必须有值"的守卫，传 null 会得到 0
+     * （这个坑上线当天踩过一次——总览三行全显示 0）。
+     */
+    public long countByKind(String kind) {
+        return kind == null || kind.isBlank() ? 0L : repository.countByKind(kind);
+    }
+
     public static boolean isActive(Memory memory, LocalDateTime now) {
         if (memory == null || !isStoredActive(memory)) {
             return false;

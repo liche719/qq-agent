@@ -250,7 +250,7 @@ public class AdminDashboardController {
     /** 按 kind 计数（全库口径）；单个 kind 查不动时给 0，别把整个总览带崩 */
     private long countMemoryKind(String kind) {
         try {
-            return memoryService.countByKind(null, kind);
+            return memoryService.countByKind(kind);
         } catch (RuntimeException exception) {
             return 0L;
         }

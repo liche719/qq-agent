@@ -39,6 +39,9 @@ public interface MemoryRepository extends JpaRepository<Memory, Long> {
     long countByUserIdAndKind(String userId, String kind);
     long countByUserIdAndStatus(String userId, String status);
 
+    /** 全库口径的按 kind 计数（总览面板用：不能传 null 用户，那样会被守卫挡成 0） */
+    long countByKind(String kind);
+
     /** 到期时间已过的工作型记忆（生命周期扫描用） */
     List<Memory> findByValidUntilBefore(LocalDateTime validUntil);
 
