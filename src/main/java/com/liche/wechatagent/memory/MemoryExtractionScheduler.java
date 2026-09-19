@@ -474,9 +474,16 @@ public class MemoryExtractionScheduler {
                     System.currentTimeMillis(), pending.trigger);
             return;
         }
-        // 刚跑完这一趟的窗口里可能又满了（提取要跑十几秒，用户还在说话）→ 立刻再看一眼
-        if (userService.isMemoryEnabled(userId) && decide(userId) != null) {
-            schedule(userId);
+        // 刚跑完这一趟的窗口里可能又满了（提取要跑十几秒，用户还在说话）→ 立刻再看一眼。
+        //
+        // **但"判定不了"（DEGRADED：没有 Redis/库）不能自排**：那种模式下 decide() 恒返回 DEGRADED，
+        // 自排就等于"跑完立刻再跑一次"，窗口里其实没新内容、白花一次调用（生产上会被 min-interval 限速，
+        // 但在单测的全零参数下就是死循环——实测 1.4 秒排了 11131 次）。降级模式靠下一条用户消息触发即可。
+        if (userService.isMemoryEnabled(userId)) {
+            String reason = decide(userId);
+            if (reason != null && !"DEGRADED".equals(reason)) {
+                schedule(userId);
+            }
         }
     }
 

@@ -657,3 +657,11 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 - **清掉两条垃圾事实**：`周五·体育课 / 课程 = 体育课`、`周二晚上·课 / 安排 = 有课`（值等于 subject 的一部分、零信息量；规则 13 之后新提取已不会再产出这种）→ 先 `pg_dump memory_fact`（159 KB，600）再删，剩 10 条有效。
 - **`episode-vector-floor` 在真实经历上校准**（19 条、真模型、5 个探针）：相关对 **0.48~0.61**（"上次打印申请表为什么着急" 0.479/0.478、"我挂科重修那件事" 0.535/0.528、"课表上教室改到哪了" 0.607/0.580），无关探针最高 **0.380**（量子计算）/ **0.334**（今天心情不错）→ **0.45 正好卡在中间，不需要改**。注意经历是长文本、相似度整体比短记忆低，门槛别照搬 P2 那套直觉。
 - **清掉死配置**：`conversation-retrieval-noise`（yml 键 + `MemoryPolicyProperties` 的字段/getter/setter/默认常量）与 `conversation-max-retrieval-terms`——P3 删掉"按字面词 LIKE 捞旧对话"后没人读了。
+
+**V17：删三张老表（2026-09-19）**
+删之前先做**双向逐条比对**（不是只比行数）：`memory` 里 PROFILE/TASK/EXPERIENCE = 29/65/19 与老表相等，**老表每一行都能按 (kind, content) 在新表找到**、**新表也没有多出来的行**（missing=0 / extra=0），`superseded_by_id` 无断链。然后 `pg_dump` 三张老表（1,138,793 B、含 3 个 CREATE TABLE、600）到 `/root/wechat-agent-memory-legacy-backup-20260919.sql`（09-18 那份也还在）；本地演练库先删 + 起一次应用确认没事，再对生产执行 `deploy/postgres/V17__drop_legacy_memory_tables.sql`：`legacy_tables_left=0`，`memory` 113 行、向量齐、0 ERROR，面板与用户详情接口全 200。
+
+⚠️ **删完之后"回退镜像即恢复"这条路就没了**：老代码的实体映射的就是这三张表，回退前必须先从这个 dump 恢复（V17 文件里留了三张表的建表语句）。
+
+**顺带修掉的调度器自排死循环（2026-09-19）**
+`MemoryExtractionScheduler.runAttempt` 跑完一趟会"立刻再看一眼窗口满没满"，而 `decide()` 在**降级模式（没有 Redis/库）**下恒返回 `DEGRADED` → 等于自己排自己：生产上会被 `min-interval`（180s）限速成"每 3 分钟白跑一次提取"，单测的全零参数下就是死循环（实测 1.4 秒排了 11131 次）。改成**只有真正判定出 ROUNDS/IDLE 才自排**，降级模式靠下一条用户消息触发。同时把一直红着的 `MemoryExtractionSchedulerTest` 钉回 4 参重载（原来的桩是 3 参、从来没匹配上，"失败后重试"这条语义其实一直没被验证过）。现在记忆相关测试 **74 项全绿**。
