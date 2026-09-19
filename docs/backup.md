@@ -100,3 +100,42 @@ unzip -o backup/20260913.zip -d /tmp/restore-20260913      # 解出 user-*/state
 **验证方法**（别等到凌晨三点）：把 `BACKUP_CRON` 临时改成 `0 */2 * * * ?`，重建容器，
 确认宿主机 `backup/` 下真的出现当天的 `.zip` 与 `.sql.gz`（日志里会有「库级备份完成」），
 验完改回 `0 0 3 * * ?` —— 这就是坑 38/46 记下来的做法。
+
+---
+
+## 客户端/服务端版本错配（2026-09-20 修）
+
+Dockerfile 的 `postgresql-client` **没钉版本**，基础镜像换到 Ubuntu 26.04 后装的是 **pg_dump 18.6**，
+而服务端是 **PostgreSQL 16.14** → dump 里带 `SET transaction_timeout = 0;` 和 `\restrict` 元命令，
+`psql -v ON_ERROR_STOP=1` 恢复直接 `ERROR: unrecognized configuration parameter "transaction_timeout"`。
+
+- 修法：`DatabaseDumpService.transferDump()` 在**非 COPY 数据块内**丢掉服务端不认识的 `SET <guc>` 行
+  （不认识哪些由 `select name from pg_settings` 现场决定）和 `\restrict`/`\unrestrict` 元命令。
+  **只在 COPY 块外过滤**：数据体里出现同形文本不能动。
+- 反向也一样：用 16 的客户端打、往 18 恢复没问题，但反过来必然踩。**要长期可靠就把客户端版本钉到服务端大版本。**
+
+## 把数据全部拿走（2026-09-20，服务器到期场景）
+
+「有备份」不等于「能把数据拿出来」——卷和备份都在同一台机器上。所以除日常两份备份外，
+另有一个**自包含导出包**（`/root/wechat-agent-full-export-20260920.tar.gz`，9.0 MB，
+本地另存一份 `C:\Users\33721\Desktop\wechat-agent\`），内容：
+
+| 成员 | 说明 |
+|---|---|
+| `db/<day>.sql.gz` | 全库 dump（39 张表） |
+| `snapshots/<day>.zip` | 每用户 `state.json` 逻辑快照（不依赖数据库也能读） |
+| `media/stored-media/`、`media/backup-media/` | 原始媒体 + 去重后的共享副本 |
+| `legacy/*.sql` | 三表合并前的两代老备份（`V16` 之前），保险用 |
+| `counts.tsv` | 打包那一刻**每张表的行数**，恢复后照它对 |
+| `SHA256SUMS` | 包内每个文件的 sha256（`sha256sum -c`） |
+| `README-restore.md` | 恢复步骤 |
+
+**闭环验证（已做，不是推测）**：把包里的 `db/<day>.sql.gz` 灌进一个干净库（本地 `wa-pg-rehearsal`），
+`ON_ERROR_STOP=1` 零报错、**39 张表逐表行数与 `counts.tsv` 零差异**，抽样 `memory` 113（PROFILE 29 /
+TASK 65 / EXPERIENCE 19）、`conversation_memory` 1332 行 4 个用户、`memory_fact` 10、`exam_plan` 1。
+**换机器恢复只要 PostgreSQL 16 + pgvector**；服务器 `.env`（口令）只有「想把服务原样跑起来」时才需要，
+只要数据不需要它。
+
+**两个口径**：① 逻辑备份的 `state.json` 按 `user_profile` 遍历，所以**没建档的账号不在这份里**
+（库里那 4 条 `sim-iv-check`/`sim-iv-check2` 的测试经历就是这种），**全库 dump 才是无遗漏的**；
+② 机主 `memories=109` 与库里 113 的差额就是那 4 条，不是备份丢数据。
