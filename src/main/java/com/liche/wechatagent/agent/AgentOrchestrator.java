@@ -367,7 +367,8 @@ public class AgentOrchestrator {
             String reply;
             StreamReplySink sink = createSinkFor(batch);
             try {
-                reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink);
+                reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink,
+                        extracted.failures());
             } finally {
                 mediaToolContextService.unbind();
             }
@@ -400,7 +401,8 @@ public class AgentOrchestrator {
 
     private record DocumentBundle(List<ExtractedDocument> documents,
                                   List<ExtractedDocument> directDocuments,
-                                  List<ExtractedDocument> quotedDocuments) {
+                                  List<ExtractedDocument> quotedDocuments,
+                                  List<String> failures) {
     }
 
     // Extracts direct and quoted attachments while preserving their source lists.
@@ -408,20 +410,43 @@ public class AgentOrchestrator {
         if (!batch.attachments().isEmpty() || !batch.quotedAttachments().isEmpty()) {
             toolStatusService.push("我正在读取你发来的文件…");
         }
-        List<ExtractedDocument> direct = batch.attachments().isEmpty()
-                ? List.of() : documentExtractionService.extractAll(batch.attachments());
-        List<ExtractedDocument> quoted = batch.quotedAttachments().isEmpty()
-                ? List.of() : documentExtractionService.extractAll(batch.quotedAttachments());
+        // 2026-09-20：改成逐个兜住（服务内部不再整批抛）——一个文件读不了不影响其余文件，
+        // 读不了的原因会带给模型，让它如实告诉用户是哪个文件、为什么。
+        List<ExtractedDocument> direct = new java.util.ArrayList<>();
+        List<ExtractedDocument> quoted = new java.util.ArrayList<>();
+        List<String> failures = new java.util.ArrayList<>();
+        if (!batch.attachments().isEmpty()) {
+            DocumentExtractionService.ExtractionResult result =
+                    documentExtractionService.extractAll(batch.attachments());
+            direct.addAll(result.documents());
+            failures.addAll(result.failures());
+        }
+        if (!batch.quotedAttachments().isEmpty()) {
+            DocumentExtractionService.ExtractionResult result =
+                    documentExtractionService.extractAll(batch.quotedAttachments());
+            quoted.addAll(result.documents());
+            failures.addAll(result.failures());
+        }
         List<ExtractedDocument> all = new java.util.ArrayList<>(direct);
         all.addAll(quoted);
-        return new DocumentBundle(all, direct, quoted);
+        return new DocumentBundle(all, direct, quoted, List.copyOf(failures));
     }
 
     // Invokes the model with the current media, quote, history, and document context.
     private String invokeAgent(InboundMessageBatch batch, String userId, String content, UserProfile profile,
                                MemoryLoader.LoadedMemory memory, List<ContextTurn> history,
-                               List<ExtractedDocument> documents, StreamReplySink sink) {
+                               List<ExtractedDocument> documents, StreamReplySink sink,
+                               List<String> documentFailures) {
         String agentText = quotePrompt(content, batch.quotedContent()) + mediaToolContextService.promptSection();
+        if (documentFailures != null && !documentFailures.isEmpty()) {
+            // 读不了的附件要说清楚：哪些没读成、为什么——否则模型会猜内容或含糊其辞
+            StringBuilder note = new StringBuilder("\n【系统提示】以下附件这次没能读取，请如实告诉用户，"
+                    + "不要猜测里面的内容：\n");
+            for (String failure : documentFailures) {
+                note.append("- ").append(failure).append('\n');
+            }
+            agentText = agentText + note;
+        }
         List<String> allImages = new java.util.ArrayList<>(batch.images());
         allImages.addAll(batch.quotedImages());
         // 陪练模式只追加一段额外要求，用户自己的人设保持不动

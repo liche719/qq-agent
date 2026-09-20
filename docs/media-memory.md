@@ -62,7 +62,19 @@
 | PDF | 有文字层就取正文；扫描版渲染前 `document.max-pdf-pages`(10) 页成图给视觉模型 |
 | Word `.docx` | POI `XWPFWordExtractor` |
 | PPT `.pptx` | POI `XMLSlideShow` 逐页取文本框 + **表格**（`|` 分隔）+ 递归分组形状，**带页码**（`第 N 页：`） |
-| 老版 `.ppt`/`.doc`、xlsx 等 | **不支持**（`.ppt` 要么加 `poi-scratchpad` 依赖，要么让用户另存为 pptx/pdf）；错误文案会直接告诉用户能读什么、该怎么转 |
+| PPT 老版 `.ppt` | **2026-09-20 补**：OLE2 魔数 + POI `HSLFSlideShow`（依赖 `poi-scratchpad:5.3.0`，`poi-ooxml` 不含它），同一套"逐页文本框 + 表格 + 页码"。**老师的课件十有八九是老版 .ppt，所以这条必须有** |
+| 其他 OLE2（`.doc`/`.xls`） | 不支持，但会明确说"这个 OLE2 文档不是可读的 PPT（.doc/.xls 暂不支持），先另存为 .pptx 或 PDF" |
+| 下载到的是 HTML | 单独判（`looksLikeHtml`）：QQ 文件地址失效时会回一个网页（HTTP 200），提示"下载到的不是文件内容，请重新发一次"——**不要笼统说"不支持该类型"** |
+
+**一个附件读不了不再拖垮整批（2026-09-20 修，很关键）**：原来 `extractAll` 里是
+`documents.add(extract(attachment))`——**任何一个附件抛异常，整条消息就只剩一句错误**。实测就是这样：
+用户发 4 个文件、其中 1 个是老 `.ppt`，**其余 3 个也读不了**，agent 连模型都没调（5 秒就回了一句错误）。
+现在逐个 `try/catch` 成 `ExtractionResult{documents, failures}`，读不了的进 `failures`，
+`AgentOrchestrator` 把 failures 拼成一段【系统提示】塞进这一轮提示词，让模型**如实告诉用户是哪个文件没读成、
+为什么**（并明确"不要猜内容"）。
+
+**诊断日志（排查用，别删）**：读不了时打 `附件读不了 name=… type=… host=… reason=…`；类型完全不认识时再加
+`大小=… 头16字节=…`（十六进制）——下次"发过来的到底是什么文件"一看就知道。
 
 **顺带修的**：读不了附件时也会 `persistConversation`（用户"发了但没读成"的消息不再在对话记忆里空白）；落库失败只 WARN，不影响回话。
 

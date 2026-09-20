@@ -12,6 +12,12 @@ import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.hslf.usermodel.HSLFGroupShape;
+import org.apache.poi.hslf.usermodel.HSLFShape;
+import org.apache.poi.hslf.usermodel.HSLFSlide;
+import org.apache.poi.hslf.usermodel.HSLFSlideShow;
+import org.apache.poi.hslf.usermodel.HSLFTable;
+import org.apache.poi.hslf.usermodel.HSLFTextShape;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFGroupShape;
 import org.apache.poi.xslf.usermodel.XSLFShape;
@@ -20,9 +26,10 @@ import org.apache.poi.xslf.usermodel.XSLFTable;
 import org.apache.poi.xslf.usermodel.XSLFTableCell;
 import org.apache.poi.xslf.usermodel.XSLFTableRow;
 import org.apache.poi.xslf.usermodel.XSLFTextShape;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -39,6 +46,7 @@ import java.util.zip.ZipInputStream;
 @Service
 public class DocumentExtractionService {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentExtractionService.class);
     private static final int DEFAULT_MAX_REDIRECTS = 3;
     private static final long DEFAULT_CONNECT_TIMEOUT_SECONDS = 8;
     private static final long DEFAULT_READ_TIMEOUT_SECONDS = 30;
@@ -81,15 +89,30 @@ public class DocumentExtractionService {
                 DEFAULT_CONNECT_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, urlValidator);
     }
 
-    public List<ExtractedDocument> extractAll(List<InboundAttachment> attachments) {
+    /** 批量读取结果：能读的进 documents，读不了的进 failures（**一个失败不再拖垮整批**） */
+    public record ExtractionResult(List<ExtractedDocument> documents, List<String> failures) {
+    }
+
+    public ExtractionResult extractAll(List<InboundAttachment> attachments) {
         if (attachments == null || attachments.isEmpty()) {
-            return List.of();
+            return new ExtractionResult(List.of(), List.of());
         }
         List<ExtractedDocument> documents = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
         for (InboundAttachment attachment : attachments) {
-            documents.add(extract(attachment));
+            // 2026-09-20：以前这里是直接 `documents.add(extract(...))`，一个附件抛异常就整批发不出去
+            // （用户发 4 个文件、其中 1 个是老 .ppt → 其余 3 个也读不了，只回一句错误）。
+            // 现在逐个兜住，读不了的记进 failures，由 AgentOrchestrator 告诉模型"哪个文件没读成"。
+            try {
+                documents.add(extract(attachment));
+            } catch (DocumentExtractionException exception) {
+                String label = displayName(attachment, "（没有文件名）");
+                failures.add(label + "：" + exception.getMessage());
+                log.warn("附件读不了 name={} type={} host={} reason={}", label, mimeType(attachment),
+                        hostOf(attachment.url()), exception.getMessage());
+            }
         }
-        return documents;
+        return new ExtractionResult(List.copyOf(documents), List.copyOf(failures));
     }
 
     private ExtractedDocument extract(InboundAttachment attachment) {
@@ -97,23 +120,36 @@ public class DocumentExtractionService {
             throw new DocumentExtractionException("文件没有可读取的下载地址。");
         }
         byte[] bytes = download(attachment.url());
+        if (bytes.length == 0) {
+            throw new DocumentExtractionException("下载到的内容是空的，请重新发一次。");
+        }
+        if (looksLikeHtml(bytes)) {
+            // QQ 的文件地址有时会回一个登录/错误页（HTTP 200 但内容不是文件），这时要说清楚而不是"不支持该类型"
+            throw new DocumentExtractionException("下载到的不是文件内容（拿到的是网页），请重新发一次这个文件。");
+        }
+        String name = displayName(attachment, "");
         if (isPdf(attachment, bytes)) {
-            return extractPdf(displayName(attachment, "document.pdf"), bytes);
+            return extractPdf(name.isBlank() ? "document.pdf" : name, bytes);
         }
         if (isDocx(attachment, bytes)) {
-            return extractDocx(displayName(attachment, "document.docx"), bytes);
+            return extractDocx(name.isBlank() ? "document.docx" : name, bytes);
         }
         // 2026-09-20 加：把图片**当文件**发过来（QQ 的"文件"元素）时，原来会落到最后那句
         // "只支持 PDF 和 DOCX" 被拒——而同一张图用"图片"元素发却能看。这里按字节头认出图片后，
         // 走和扫描版 PDF 一样的 pageImages 通道交给视觉模型。
-        if (isImage(attachment, bytes)) {
-            return extractImage(displayName(attachment, "image.jpg"), bytes);
+        if (sniffImageMime(bytes) != null) {
+            return extractImage(name.isBlank() ? "image.jpg" : name, bytes);
         }
         if (isPptx(attachment, bytes)) {
-            return extractPptx(displayName(attachment, "slides.pptx"), bytes);
+            return extractPptx(name.isBlank() ? "slides.pptx" : name, bytes);
         }
+        if (isLegacyPpt(bytes)) {
+            return extractLegacyPpt(name.isBlank() ? "slides.ppt" : name, bytes);
+        }
+        log.warn("附件类型不认识 name={} type={} host={} 大小={} 头16字节={}", name, mimeType(attachment),
+                hostOf(attachment.url()), bytes.length, hexHead(bytes, 16));
         throw new DocumentExtractionException("这个文件我暂时读不了（现在支持：图片 jpg/png/webp/gif、PDF、"
-                + "Word .docx、PPT .pptx）。如果是老版 .ppt/.doc，先另存为 .pptx/.docx 或 PDF 再发我。");
+                + "Word .docx、PPT .ppt/.pptx）。如果确实需要，先另存为 PDF 再发我。");
     }
 
     /** 以文件形式发来的图片：字节头认出类型后直接给视觉模型看（大小已在 download() 里卡过） */
@@ -121,14 +157,6 @@ public class DocumentExtractionService {
         String mime = sniffImageMime(bytes);
         String dataUrl = "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
         return new ExtractedDocument(name, "这是用户发来的图片，已提供给视觉模型查看。", List.of(dataUrl), false);
-    }
-
-    private boolean isImage(InboundAttachment attachment, byte[] bytes) {
-        String mime = mimeType(attachment);
-        String name = fileName(attachment);
-        boolean claimed = mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".jpeg")
-                || name.endsWith(".png") || name.endsWith(".webp") || name.endsWith(".gif");
-        return claimed && sniffImageMime(bytes) != null;
     }
 
     /** 只认字节头，不认后缀/MIME：先把真正是图片的挑出来，避免把改名的怪文件塞给视觉模型 */
@@ -310,8 +338,7 @@ public class DocumentExtractionService {
         }
     }
 
-    private void appendShapeText(XSLFShape shape, StringBuilder out) {
-        if (shape instanceof XSLFTextShape textShape) {
+    private void appendShapeText(XSLFShape shape, StringBuilder out) {        if (shape instanceof XSLFTextShape textShape) {
             String value = textShape.getText();
             if (value != null && !value.isBlank()) {
                 out.append(value.trim()).append('\n');
@@ -344,6 +371,104 @@ public class DocumentExtractionService {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ImageIO.write(image, "jpg", output);
         return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(output.toByteArray());
+    }
+
+    // ---------- 老版二进制 .ppt（OLE2 / HSLF，2026-09-20 加：老师的课件常常就是 .ppt）----------
+
+    /** OLE2 复合文档魔数；真正的 PPT 判定交给 HSLF 解析（能打开才算） */
+    private boolean isLegacyPpt(byte[] bytes) {
+        return matchesAt(bytes, 0, new byte[]{(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+                (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1});
+    }
+
+    private ExtractedDocument extractLegacyPpt(String name, byte[] bytes) {
+        try (HSLFSlideShow show = new HSLFSlideShow(new ByteArrayInputStream(bytes))) {
+            StringBuilder text = new StringBuilder();
+            int slideNumber = 0;
+            for (HSLFSlide slide : show.getSlides()) {
+                slideNumber++;
+                StringBuilder slideText = new StringBuilder();
+                for (HSLFShape shape : slide.getShapes()) {
+                    appendHslfShapeText(shape, slideText);
+                }
+                if (!slideText.isEmpty()) {
+                    text.append("第 ").append(slideNumber).append(" 页：\n").append(slideText).append('\n');
+                }
+            }
+            String content = text.toString().trim();
+            if (content.isBlank()) {
+                throw new DocumentExtractionException("这个 PPT 里没有可读取的文字（可能是整页图片），"
+                        + "把关键几页截图发我我就能看。");
+            }
+            return new ExtractedDocument(name, limit(content), List.of(), content.length() > maxTextChars);
+        } catch (DocumentExtractionException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            // OLE2 但不是 PPT（可能是 .doc/.xls）：交给上层给出"不支持"的提示
+            throw new DocumentExtractionException("这个 OLE2 文档不是可读的 PPT（.doc/.xls 暂不支持），"
+                    + "先另存为 .pptx 或 PDF 再发我。", exception);
+        }
+    }
+
+    private void appendHslfShapeText(HSLFShape shape, StringBuilder out) {
+        if (shape instanceof HSLFTextShape textShape) {
+            String value = textShape.getText();
+            if (value != null && !value.isBlank()) {
+                out.append(value.trim()).append('\n');
+            }
+            return;
+        }
+        if (shape instanceof HSLFTable table) {
+            int rows = table.getNumberOfRows();
+            int columns = table.getNumberOfColumns();
+            for (int row = 0; row < rows; row++) {
+                List<String> cells = new ArrayList<>();
+                for (int column = 0; column < columns; column++) {
+                    String value = table.getCell(row, column).getText();
+                    if (value != null && !value.isBlank()) {
+                        cells.add(value.trim());
+                    }
+                }
+                if (!cells.isEmpty()) {
+                    out.append(String.join(" | ", cells)).append('\n');
+                }
+            }
+            return;
+        }
+        if (shape instanceof HSLFGroupShape group) {
+            for (HSLFShape child : group.getShapes()) {
+                appendHslfShapeText(child, out);
+            }
+        }
+    }
+
+    /** QQ 的文件地址失效时可能回一个 HTML 页面（HTTP 200），那要给"重新发一次"而不是"不支持该类型" */
+    private boolean looksLikeHtml(byte[] bytes) {
+        int limit = Math.min(bytes.length, 512);
+        StringBuilder head = new StringBuilder();
+        for (int index = 0; index < limit; index++) {
+            char value = (char) (bytes[index] & 0xFF);
+            head.append(Character.isWhitespace(value) ? ' ' : Character.toLowerCase(value));
+        }
+        String text = head.toString().trim();
+        return text.startsWith("<!doctype html") || text.startsWith("<html") || text.startsWith("<?xml");
+    }
+
+    private String hostOf(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host == null ? "" : host;
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
+    private String hexHead(byte[] bytes, int count) {
+        StringBuilder out = new StringBuilder();
+        for (int index = 0; index < Math.min(count, bytes.length); index++) {
+            out.append(String.format("%02x", bytes[index]));
+        }
+        return out.toString();
     }
 
     private String limit(String text) {
