@@ -374,7 +374,15 @@ public class AgentOrchestrator {
             persistConversation(batch, taskId, userId, profile, reply);
             return new HandledReply(reply, sink);
         } catch (DocumentExtractionException exception) {
-            return new HandledReply(exception.getMessage(), null);
+            // 2026-09-20：读不了附件时原来直接 return，**这一轮不落库**——用户"发了但没读成"的消息
+            // 在对话记忆里是空白的（下次翻记录/提取都当没发生过）。这里补上落库，落库本身失败不影响回话。
+            String reply = exception.getMessage();
+            try {
+                persistConversation(batch, taskId, userId, profile, reply);
+            } catch (RuntimeException persistFailure) {
+                log.warn("附件读取失败后补记对话也失败：{}", persistFailure.toString());
+            }
+            return new HandledReply(reply, null);
         }
     }
 
