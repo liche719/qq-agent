@@ -513,10 +513,10 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 .status-line { margin-top: 26px; text-align: center; font-size: 12.5px; color: var(--muted); }
 .status-line.stale { color: var(--bad-ink); }
 
-/* ---------- ICP 备案号页脚（固定在底部居中；未配置备案号时整块不渲染）---------- */
+/* ---------- ICP 备案号页脚（固定在**右下角**；未配置备案号时整块不渲染）---------- */
 .site-footer {
-  position: fixed; left: 0; right: 0; bottom: calc(6px + env(safe-area-inset-bottom));
-  z-index: 20; text-align: center; font-size: 12.5px; color: var(--muted);
+  position: fixed; right: 14px; bottom: calc(6px + env(safe-area-inset-bottom));
+  z-index: 20; text-align: right; font-size: 12.5px; color: var(--muted);
   pointer-events: none;
 }
 .site-footer a { pointer-events: auto; color: var(--muted); }
