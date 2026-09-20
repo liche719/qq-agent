@@ -227,6 +227,9 @@ services:
       MAIMEMO_OIDC_CLIENT_ID: ${MAIMEMO_OIDC_CLIENT_ID:-}
       MAIMEMO_OIDC_CLIENT_SECRET: ${MAIMEMO_OIDC_CLIENT_SECRET:-}
       MAIMEMO_OIDC_REDIRECT_URI: ${MAIMEMO_OIDC_REDIRECT_URI:-}
+      # 申请的权限范围必须与开放平台里勾选的**完全一致**，否则换 token 会 invalid_scope。
+      # 不设就走 application.yml 的默认 `openid offline_access open.memo.study`（读写）；只读填 `.read`。
+      MAIMEMO_OIDC_SCOPES: ${MAIMEMO_OIDC_SCOPES:-}
       # 考研规划模块：三条定时推送的时间与总开关（compose 只传列出的变量——见坑 36）
       EXAM_ENABLED: ${EXAM_ENABLED:-true}
       EXAM_MORNING_TIME: ${EXAM_MORNING_TIME:-07:30}
