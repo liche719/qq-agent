@@ -42,3 +42,30 @@
 2. 造一批测试资料（**12 个 `.txt` + 4 张图片，文件名刻意不含目标关键词**），让机器人"连续调用 readStoredMedia 把这 16 份全读一遍"：日志里 `工具开始 name=readStoredMedia` 会出现十几次，其中第 11、12 次被拒——WARN `本轮读取文件已达上限 10，拒绝继续读取 mediaId=<id>`，**被拒的 id 必须是文本文件**，这才证明"文本也占额度"；回复里应说明有上限、让用户点名。**反向对照**：另起一句只读 5 份，不该出现任何上限 WARN（旧上限 3 会在这里挡住）。
 3. 检查库里 `extracted_text like '%【视觉识别】%'` 有没有内容 → 证明模型把看到的东西写回来了。
 4. 往某行的 `extracted_text` 里塞一个**只存在于内容里**的关键词，再问"我保存的文件里哪个提到 X" → 除了断言回复里出现文件名，还要断言**回复里带出那句内容**（回落列表也会列出所有文件名，只看文件名会假阳性），并核对日志里这一轮真的调了 `listStoredMedia`（同一会话里模型可能凭上一轮上下文直接回答、根本不搜）。
+
+## 6. 附件支持的类型（2026-09-20 扩）
+
+**改之前只有 PDF 和 DOCX 能读**：`DocumentExtractionService.extract()` 认不出就抛
+`目前只支持 PDF 和 DOCX 文件。`，而这个异常**被直接当成回复发给用户**
+（`AgentOrchestrator` 的 `catch (DocumentExtractionException e) → HandledReply(e.getMessage())`）。
+所以用户发 PPT 只会收到那一句 21 字的话，**而且那一轮不落库**（`return` 在 `persistConversation` 之前）。
+
+**另一个容易忽略的点**：QQ 的「图片」元素和「文件」元素走**两条完全不同的路**——
+图片（`batch.images()`）由 `AgentLoop` 自动下载成 data URL 直接进多模态消息；而**把同一张 jpg 当"文件"发**
+（`batch.attachments()`）会进 `DocumentExtractionService`，改之前一样被"只支持 PDF/DOCX"拒掉。
+
+现在支持：
+
+| 类型 | 怎么读 |
+|---|---|
+| 图片 jpg/jpeg/png/webp/gif（**含当文件发的**） | **按字节头**认类型（`sniffImageMime`，不认后缀/MIME，避免改名的怪文件），转 data URL 走 `pageImages` → 复用已有视觉通道 |
+| PDF | 有文字层就取正文；扫描版渲染前 `document.max-pdf-pages`(10) 页成图给视觉模型 |
+| Word `.docx` | POI `XWPFWordExtractor` |
+| PPT `.pptx` | POI `XMLSlideShow` 逐页取文本框 + **表格**（`|` 分隔）+ 递归分组形状，**带页码**（`第 N 页：`） |
+| 老版 `.ppt`/`.doc`、xlsx 等 | **不支持**（`.ppt` 要么加 `poi-scratchpad` 依赖，要么让用户另存为 pptx/pdf）；错误文案会直接告诉用户能读什么、该怎么转 |
+
+**顺带修的**：读不了附件时也会 `persistConversation`（用户"发了但没读成"的消息不再在对话记忆里空白）；落库失败只 WARN，不影响回话。
+
+**怎么验证这块**：
+1. 单测式（不用发 QQ）：`poi-ooxml` 造一个含文本框+表格的 `.pptx` → 用 `extractPptx` 同一套走法取文本（页码/表格都要出来）；用 `ImageIO` 造 jpg/png 核对魔数 `ff d8 ff` / `89 50 4e 47`，并确认纯文本字节返回 `null`（不会被误当图片）。2026-09-20 已这样验过。
+2. 端到端：在 QQ 里**以文件形式**发一张 jpg + 一个 pptx，看日志有没有 `图片下载完成` / 多模态消息（图片）或模型能说出 PPT 内容（文本），并确认**这一轮没有** `目前只支持` 字样。
