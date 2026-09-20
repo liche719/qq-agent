@@ -82,7 +82,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ### 运维面板访问方式（应用自带 HTTPS，2026-09-12 定型）
 
-- **面板唯一入口**：`https://liche.cloud/`（**标准 443 端口，地址里不带端口号**；Vue 单页应用，Let's Encrypt 证书，浏览器绿锁）。**ICP 备案期间（2026-09-12 起）域名解析已暂停，暂时改用 `https://120.25.170.92/`**（证书名称不匹配，点继续访问）；备案通过后把 A 记录设回 `ENABLE` 即恢复域名访问。用户明确弃用 VPN（wg0/socat/51820 已全拆）与 nginx 网关，**不要再加回来**。
+- **面板唯一入口**：`https://liche.cloud/`（**标准 443 端口，地址里不带端口号**；Vue 单页应用，Let's Encrypt 证书，浏览器绿锁）。**ICP 备案已于 2026-09-20 通过（粤ICP备2026141530号），当天把 A 记录从 `DISABLE` 改回 `ENABLE` 并实测通过**：域名解析到 `120.25.170.92`、`curl https://liche.cloud/index.html` 不加 `-k` 返回 **200 且 `ssl_verify_result=0`**、面板接口带口令 200 / 无口令 401 / 编码路径 401（服务器本机与你的电脑两侧都验过）。IP `https://120.25.170.92/` 仍能进，但**证书名必然不匹配**，建议把 IP 那个书签删掉。用户明确弃用 VPN（wg0/socat/51820 已全拆）与 nginx 网关，**不要再加回来**。
 - 应用直接用 PEM 证书起 HTTPS，无需 keystore：compose 里设 `SERVER_ADDRESS`/`SERVER_PORT=443`/`SERVER_SSL_ENABLED` 与证书/私钥路径，并把宿主机 `docker/tls/` 挂到 `/app/certs`（证书服务器侧生成、不入库；`server.key` 600）。
 - 安全组放行 **TCP 443**（2026-09-12 开通，手机同样绿锁）。**8443 的规则已确认删除**（外部连 8443 是**6 秒无应答**＝被丢弃，与从未开过的 51820 一致；规则还开着而只是没人监听会是**快速拒绝**）。**教训：判断安全组规则是否还在要看耗时**——我按"connection refused 就是还开着"推断，写错过文档。
 - **鉴权分层**：口令经请求头 `X-Agent-Admin-Key` 由 `AdminAccessFilter` 校验（`ADMIN_REQUIRE_KEY=true` 时**这是唯一凭据**，因此不再要求来源 IP 在白名单内），账号由 `AdminSessionController` 经 `POST /api/admin/session` 校验；前端把凭据存 `sessionStorage`（勾「记住账号密码」则存 `localStorage`）。
@@ -94,7 +94,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 服务器已装好：`/root/.acme.sh`（v3.1.3，**从 Gitee 镜像装**；`curl https://get.acme.sh` 走 GitHub codeload 会 error 52）、LE 账号已注册、**每天 06:55 `acme.sh --cron`** 自动续期（到期前 60 天重签 → `--install-cert` 的 reloadcmd 覆盖 `docker/tls/` → `docker restart wechat-agent-java`）。**换证书必须重启容器**，Spring Boot 不热加载。自签备份在 `docker/tls/server.{crt,key}.selfsigned`，回滚＝覆盖回去 + 重启。
 - 云解析由服务器脚本用 **RAM 子账号 AccessKey**（只授 `AliyunDNSFullAccess`）经 API 维护；密钥只写 `/root/.acme.sh/account.conf`（600），**不入库、不进 CI、不写日志**。直接调 AliyunDNS API 要手写 HMAC-SHA1 RPC 签名（可用 Python 实现 `DescribeDomains`/`DescribeDomainRecords`/`AddDomainRecord`）。签发/安装脚本 `/root/issue-liche-cloud.sh`。
 - **当前证书**：`CN = liche.cloud`（Let's Encrypt YR2），有效期 2026-09-12 → **2026-12-11**；`curl https://liche.cloud/` 不加 `-k` 返回 200。
-- **端口**：应用监听标准 **443**（服务器 `.env` 的 `SERVER_PORT=443`），地址因此不带端口号。**注意 443 上跑未备案域名属于"官方不允许、实际通常可用"**；万一被拦，回滚＝`SERVER_PORT` 改回 8443 并重建（安全组的 8443 规则先留着）。LE 不给 IP 签证书，所以**只有域名访问才有绿锁**，IP 访问必然提示"证书名称不匹配"。
+- **端口**：应用监听标准 **443**（服务器 `.env` 的 `SERVER_PORT=443`），地址因此不带端口号。**备案 2026-09-20 已通过（粤ICP备2026141530号），443 上跑 `liche.cloud` 现在是完全合规的**（以前那套"未备案域名可能被拦、回滚到 8443"的说辞已作废）。LE 不给 IP 签证书，所以**只有域名访问才有绿锁**，IP 访问必然提示"证书名称不匹配"。
 
 ### 五个功能模块（均已端到端验证）
 
@@ -123,7 +123,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - 构建步骤用钉到 SHA 的 `docker/build-push-action` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（纯后端约 192 秒、含前端约 240 秒）。
 - 流程：`docker build` → `docker save | gzip` → **`wechat-deploy upload-*`（走 stdin，HMAC 验签）** → **`wechat-deploy deploy <sha>`**（load、只重建 agent、重启 searxng、按 image id 保留两代镜像 tag）。服务端细节见 `docs/deploy-security.md`。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
 - 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥已删除，轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）、`DEPLOY_HOST_KEY`（服务器主机指纹，替代 `ssh-keyscan`，见坑 50）。
-- **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（备案期间自动跳过，通过后自动生效）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
+- **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（**2026-09-20 备案通过、A 记录启用后，这项从"永远跳过"变成"每次部署都真跑"**）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
 - **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
 - 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
 
@@ -227,7 +227,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ## 7. 当前状态（2026-09-14 · 记忆链路收口之后）
 
 - **4 个容器 running**，应用 `production` profile（`validate`，冷启动 ~40 秒，零 ERROR）。
-- **面板入口 `https://120.25.170.92/`**（备案期间用 IP；用域名会证书不匹配、带 `liche.cloud` SNI 会被阿里云掐断，见坑 47）。
+- **面板入口 `https://liche.cloud/`**（2026-09-20 备案通过、A 记录已启用，浏览器绿锁；IP 访问仍会提示证书名不匹配）。
 - **用户的考研数据（真实数据，别乱动）**：`exam_plan` 1 行（南京理工大学 · 计算机专硕 22408，阶段 BASIC，每天 300 分钟，四科 数学 130/英语 70/408 120/政治 70，**考试日期 2027-12-25**）；`exam_task` 今天 3 条；进度/错题/里程碑/打卡都是 0。**他自己用聊天让 agent 改过一次计划**（09-13 18:03），所以"只改某一项"这条路是通的。
 - 其余数据（09-14 复查）：`user_profile` 3、`conversation_memory` 662、`user_core_memory` 25、`user_work_memory` 60、`reminder_task` 18、`scheduled_task` 2、`stored_media` 6、`memory_archive` 3。**用户自建任务 #5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）都是他的数据，不要删。** 墨墨 token 在**服务器 `.env` 的 `MAIMEMO_API_TOKEN`**（**有效期约一天，随时可能过期**）。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（09-13 实测 148K）；`stored-media`/`logs` 同样已持久化（见坑 38、`docs/backup.md`）。
