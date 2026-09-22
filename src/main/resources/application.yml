@@ -107,6 +107,11 @@ llm:
     dialog: ${LLM_MAX_TOKENS_DIALOG:0}
     dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
 
+  # 每次调用的落库审计（`llm_call_audit`，2026-09-21 加）：场景/成败/耗时/命中与未命中 token/花的钱。
+  # 为什么要有开关：写库挂在模型调用路径上，真出问题时得能一行环境变量关掉，而不是等重新部署。
+  audit:
+    enabled: ${LLM_AUDIT_ENABLED:true}
+
 agent:
   message-batch-thread-name-prefix: ${AGENT_MESSAGE_BATCH_THREAD_NAME_PREFIX:message-batch-}
   workers: ${AGENT_WORKERS:8}

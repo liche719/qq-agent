@@ -35,10 +35,17 @@ public class OpenAiCompatChatModel implements ChatModel {
     private final RuntimeMetrics metrics;
     /** 用量接收端（记账/审计/熔断）；Spring 注入，单测直接构造时为空 */
     private List<LlmUsageSink> usageSinks = List.of();
+    /** 调用事件接收端（**落库审计**用：场景/成败/耗时/用量；2026-09-21 加，见 {@link LlmCallSink}） */
+    private List<LlmCallSink> callSinks = List.of();
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setUsageSinks(List<LlmUsageSink> usageSinks) {
         this.usageSinks = usageSinks == null ? List.of() : usageSinks;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCallSinks(List<LlmCallSink> callSinks) {
+        this.callSinks = callSinks == null ? List.of() : callSinks;
     }
 
     public OpenAiCompatChatModel(String baseUrl, String apiKey, String model, double temperature, int timeoutSeconds) {
@@ -111,6 +118,8 @@ public class OpenAiCompatChatModel implements ChatModel {
             metrics.recordLlm(false, ok, millis, error, scenario.label(), usage.prompt(), usage.completion(),
                     usage.reasoning());
         }
+        // 落库审计（含失败调用）：失败也有成本——输入照样计费，只记成功的会漏钱
+        publishCall(scenario, false, ok, millis, usage, error);
         if (ok) {
             publishUsage(usage);
             log.info("LLM 调用 scenario={} ms={} temperature={} maxTokens={} reasoningEffort={} promptTokens={} "
@@ -142,6 +151,28 @@ public class OpenAiCompatChatModel implements ChatModel {
                 usage.path("completion_tokens").asInt(0),
                 usage.path("completion_tokens_details").path("reasoning_tokens").asInt(0),
                 Math.max(0, cached));
+    }
+
+    /**
+     * 把这一次调用的事实（场景 / 成败 / 耗时 / 用量）广播给审计接收端——与
+     * {@link #publishUsage} 的区别是它带上场景与成败，专门给**落库**用。
+     */
+    private void publishCall(LlmScenario scenario, boolean streaming, boolean ok, long millis,
+                             Usage usage, String error) {
+        if (callSinks.isEmpty()) {
+            return;
+        }
+        LlmCallEvent event = new LlmCallEvent(scenario.label(), streaming, ok, millis,
+                new LlmUsage(Math.max(0, usage.prompt()), Math.max(0, usage.completion()),
+                        Math.max(0, usage.reasoning()), Math.max(0, usage.cached())),
+                error);
+        for (LlmCallSink sink : callSinks) {
+            try {
+                sink.acceptCall(event);
+            } catch (RuntimeException exception) {
+                log.warn("调用审计接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
     }
 
     /**

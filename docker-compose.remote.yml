@@ -81,6 +81,8 @@ services:
       LLM_MAX_TOKENS_REFLECT: ${LLM_MAX_TOKENS_REFLECT:-16384}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
       LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
+      # 每次 LLM 调用的落库审计（llm_call_audit）；要临时关掉写库审计就把它设成 false（坑 36：不透传就改不动）
+      LLM_AUDIT_ENABLED: ${LLM_AUDIT_ENABLED:-true}
       # 向量模型（记忆事实层的语义召回，2026-09-18）：**api-key 在服务器 .env 里留空占位**，
       # 留空时功能降级成"只新增不合并"、不会报错。默认端点=阿里云百炼 OpenAI 兼容模式，
       # 模型按用户指定用 qwen3.7-text-embedding-flash（1024 维，与表里的 vector(1024) 对齐）。

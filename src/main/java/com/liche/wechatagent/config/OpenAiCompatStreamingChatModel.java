@@ -46,10 +46,17 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private final RuntimeMetrics metrics;
     /** 用量接收端（setter 注入，单测直接 new 时为空——那时不记账）。**模型层不认识钱**。 */
     private List<LlmUsageSink> usageSinks = List.of();
+    /** 调用事件接收端（**落库审计**用：场景/成败/耗时/用量；2026-09-21 加，见 {@link LlmCallSink}） */
+    private List<LlmCallSink> callSinks = List.of();
 
     @Autowired(required = false)
     public void setUsageSinks(List<LlmUsageSink> usageSinks) {
         this.usageSinks = usageSinks == null ? List.of() : usageSinks;
+    }
+
+    @Autowired(required = false)
+    public void setCallSinks(List<LlmCallSink> callSinks) {
+        this.callSinks = callSinks == null ? List.of() : callSinks;
     }
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
@@ -119,7 +126,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                     }
                     log.warn("LLM 流式请求被拒 HTTP {} body={}", response.code(), detail);
                     record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0,
-                            tokens, reasoningEffort);
+                            tokens, cachedTokens, reasoningEffort);
                     handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
                     return;
                 }
@@ -219,11 +226,11 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                         .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
                 publishUsage(cachedTokens, tokens);
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
-                        tokens, reasoningEffort);
+                        tokens, cachedTokens, reasoningEffort);
             }
         } catch (Exception e) {
             record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0, tokens,
-                    reasoningEffort);
+                    cachedTokens, reasoningEffort);
             handler.onError(e);
         }
     }
@@ -256,14 +263,40 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
         }
     }
 
+    /**
+     * 把这一次调用的事实（场景 / 成败 / 耗时 / 用量）广播给审计接收端。
+     *
+     * <p>与 {@link #publishUsage} 的区别：那个只管 token（进程内计数、按钱熔断），
+     * 这个带上场景与成败，专门给**落库**用——"哪一类调用在烧钱、失败的调用烧了多少"都要靠它。
+     */
+    private void publishCall(LlmScenario scenario, boolean streaming, boolean ok, long millis,
+                             int[] tokens, int[] cachedTokens, String error) {
+        if (callSinks.isEmpty()) {
+            return;
+        }
+        LlmCallEvent event = new LlmCallEvent(scenario.label(), streaming, ok, millis,
+                new LlmUsage(Math.max(0, tokens[0]), Math.max(0, tokens[1]),
+                        Math.max(0, tokens[2]), Math.max(0, cachedTokens[0])),
+                error);
+        for (LlmCallSink sink : callSinks) {
+            try {
+                sink.acceptCall(event);
+            } catch (RuntimeException exception) {
+                log.warn("调用审计接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
+    }
+
     private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
                         double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars,
-                        int[] tokens, String reasoningEffort) {
+                        int[] tokens, int[] cachedTokens, String reasoningEffort) {
         long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
         if (metrics != null) {
             // usage 直接来自流式响应（见 chat 里的实测说明）；拿不到时是 0，日志里另有字符数兜底
             metrics.recordLlm(true, ok, millis, error, scenario.label(), tokens[0], tokens[1], tokens[2]);
         }
+        // 落库审计（含失败调用）：失败也有成本——思考与输入照样计费，只记成功的会漏钱
+        publishCall(scenario, true, ok, millis, tokens, cachedTokens, error);
         if (ok) {
             log.info("LLM 流式调用 scenario={} ms={} temperature={} maxTokens={} reasoningEffort={}"
                             + " 正文={}字 思考={}字 promptTokens={} completionTokens={} reasoningTokens={}",

@@ -376,3 +376,44 @@ LLM_REASONING_EFFORT=dialog=low,dialog_deep=low,extract=high
 `reasoningEffort=low` / `=high` / `=(默认)`，方便核对是不是真的传下去了。
 
 上线后实测：对话往返 **3.8 秒**（思考 39 token），提取那次 `reasoningEffort=high`。
+
+## 16. 每次调用都落库记账：`llm_call_audit`（2026-09-21）
+
+**为什么**：在那之前只有"作业"按次落库（`agent_quest_run` / `memory_extraction_run`），
+而**对话本身**——占开销最大头的每轮流式调用——只进了 `RuntimeMetrics` 的进程内计数，
+重启归零、也没法按天或按场景聚合。用户问"最近花了多少钱"时，只能翻日志估（估出来 10 天 2.4~6.4 元，
+但**按没按缓存命中算差 3 倍以上**，估的意义有限）。
+
+**表**：`llm_call_audit`（DDL `deploy/postgres/V18__create_llm_call_audit.sql`），一行 = 一次调用：
+`created_at / scenario / streaming / ok / duration_ms / prompt_tokens / completion_tokens /
+reasoning_tokens / cache_hit_tokens / cache_miss_tokens / cost_yuan / error_message`。
+**失败调用也记**（输入和思考照样计费，只记成功的会漏钱）。
+
+**几个口径**：
+
+- `cost_yuan numeric(10,4)` 由 `LlmCostLedger.price(hit, miss, completion, Instant.now())` 算好写进来——
+  命中/未命中分开（命中价是未命中的 1/50）、**峰谷 ×2 按调用时刻定**；这里不重复定义价格。
+- 按**调用**记，不是按对话轮：一轮里可能出现多次（正文 + 工具后继续）。想看"一轮"的成本，看相邻秒数成组。
+- 它与 `RuntimeMetrics` 的分工：那个是进程内、给面板看"现在快不快"；这个落库、回答"这段时间花了多少"。
+
+**接线**（沿用已有的解耦方式）：模型层只广播事实，不认识钱也不认识库——
+新增接口 `LlmCallSink`（对应已有的 `LlmUsageSink`，后者只有 token、没有场景与成败，
+所以另开一个而不是改签名），两个自研 ChatModel 在 `record(...)` 里广播 `LlmCallEvent`，
+实现类 `LlmCallAuditRecorder` 负责搬运与写库。**写库失败只记 WARN**，绝不把用户的回复带崩。
+开关 `llm.audit.enabled`（`LLM_AUDIT_ENABLED`，compose 已透传，坑 36）——真出问题能一行环境变量关掉。
+
+**查账**：
+
+```sql
+-- 按天
+select created_at::date d, count(*), round(sum(cost_yuan)::numeric,4) yuan,
+       sum(prompt_tokens), sum(completion_tokens), sum(cache_hit_tokens), sum(cache_miss_tokens)
+  from llm_call_audit group by 1 order by 1;
+-- 按场景（花钱多的在前）+ 缓存命中率
+select scenario, count(*), round(sum(cost_yuan)::numeric,4) yuan,
+       round(avg(prompt_tokens)::numeric,0) avg_prompt,
+       round(100.0*sum(cache_hit_tokens)/nullif(sum(prompt_tokens),0),1) hit_pct
+  from llm_call_audit group by 1 order by 3 desc;
+```
+
+`LlmCallAuditRecorder` 另有 `byDay(days)` / `byScenario(days)` / `todayYuan()`，供面板后续直接读。
