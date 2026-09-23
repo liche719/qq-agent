@@ -259,15 +259,16 @@ public class AgentLoop {
                                                         List<ContextTurn> history, String userText,
                                                         List<String> images, List<ExtractedDocument> documents) {
         List<ChatMessage> messages = new ArrayList<>();
-        String systemPrompt = buildSystemPrompt(persona, coreSection, workSection, userId, userText);
+        String systemPrompt = buildSystemPrompt(persona, userId, userText);
         messages.add(SystemMessage.from(systemPrompt));
+        // 记忆块拼在**本轮用户消息**里（2026-09-23）：放系统提示词会让每轮前缀都变，
+        // 后面的固定规则与 53 个工具 schema（约 6.8k token）全部按未命中价计费（实测命中率 0% → 97.6%）。
+        String memoryBlock = AgentPromptBuilder.memoryBlock(coreSection, workSection);
         if (turnTraceStore != null) {
-            int recorded = (persona == null ? 0 : persona.length())
-                    + (coreSection == null ? 0 : coreSection.length())
-                    + (workSection == null ? 0 : workSection.length());
-            turnTraceStore.addSection(userId, "最近对话与本轮输入（不在系统提示词里）", userText, 0);
-            turnTraceStore.addSectionChars(userId, "固定规则与边界（提示词里人设之后那一大段）",
-                    systemPrompt.length() - recorded - (userText == null ? 0 : userText.length()), 0);
+            turnTraceStore.addSection(userId, "【长期核心记忆】", coreSection, 0);
+            turnTraceStore.addSection(userId, "【与当前问题相关的工作记忆】", workSection, 0);
+            turnTraceStore.addSectionChars(userId, "本轮输入与记忆块（拼在用户消息里，不占系统提示词）",
+                    memoryBlock.length() + (userText == null ? 0 : userText.length()), 0);
         }
         if (history != null) {
             for (ContextTurn turn : history) {
@@ -275,7 +276,7 @@ public class AgentLoop {
                         ? AiMessage.from(turn.text()) : UserMessage.from(turn.text()));
             }
         }
-        messages.add(buildUserMessage(userText, images, documents));
+        messages.add(buildUserMessage(userText, images, documents, memoryBlock));
         return messages;
     }
 
@@ -751,8 +752,10 @@ public class AgentLoop {
         }
     }
 
-    private UserMessage buildUserMessage(String userText, List<String> images, List<ExtractedDocument> documents) {
-        String promptText = documentPrompt(userText, documents);
+    private UserMessage buildUserMessage(String userText, List<String> images, List<ExtractedDocument> documents,
+                                         String memoryBlock) {
+        String prefix = memoryBlock == null ? "" : memoryBlock;
+        String promptText = prefix + documentPrompt(userText, documents);
         boolean hasImages = (images != null && !images.isEmpty())
                 || (documents != null && documents.stream().anyMatch(document -> !document.pageImages().isEmpty()));
         if (!hasImages) {
@@ -826,19 +829,21 @@ public class AgentLoop {
         return prompt.toString();
     }
 
-    private String buildSystemPrompt(String persona, String coreSection, String workSection, String userId,
-                                      String userText) {
+    private String buildSystemPrompt(String persona, String userId, String userText) {
         java.util.List<PromptSection> sections = promptSections(userId, userText);
+        String systemPrompt = AgentPromptBuilder.build(persona, sections, toolRegistry.retryAttempts());
         if (turnTraceStore != null) {
             turnTraceStore.startTurn(userId);
             turnTraceStore.addSection(userId, "人设", persona, 0);
             sections.forEach(section -> turnTraceStore.addSection(userId, section.title(), section.body(),
                     section.charLimit()));
-            turnTraceStore.addSection(userId, "【长期核心记忆】", coreSection, 0);
-            turnTraceStore.addSection(userId, "【与当前问题相关的工作记忆】", workSection, 0);
+            int recorded = (persona == null ? 0 : persona.length())
+                    + sections.stream().mapToInt(section -> section.title().length()
+                            + (section.body() == null ? 0 : section.body().trim().length()) + 2).sum();
+            turnTraceStore.addSectionChars(userId, "固定规则与边界（系统提示词里唯一一大段静态内容）",
+                    systemPrompt.length() - recorded, 0);
         }
-        return AgentPromptBuilder.build(persona, sections, coreSection, workSection,
-                toolRegistry.retryAttempts());
+        return systemPrompt;
     }
 
     /**
