@@ -9,6 +9,9 @@ on:
       - 'docs/**'
       - 'AGENTS.md'
       - 'LICENSE'
+      # 只改 CI 配置本身不该触发一次部署（2026-09-30 加）：否则改工作流/加诊断工作流
+      # 都会白跑一次。注意副作用——改了这个文件要生效，得手动 workflow_dispatch 一次。
+      - '.github/workflows/**'
   workflow_dispatch:
 
 concurrency:
