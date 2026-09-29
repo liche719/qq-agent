@@ -1,0 +1,73 @@
+name: diag-net
+
+# 临时诊断（2026-09-30）：只回答一个问题 —— "GitHub runner 传往服务器的单条 TCP 是不是塌了？
+# 换成多路并行能不能救？" 它只做两件事：用**同一个已签名的上传通道**传小块数据，
+# 比较「1 条 10MB」与「8 条 1.25MB 并行」的墙钟时间。传上去的是随机字节、会被服务端的
+# compose/镜像校验拒绝（不会落盘覆盖任何东西），目的是量带宽而不是真的部署。
+#
+# 结论出来后这个文件应该删掉（它不是部署路径的一部分）。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Install SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Measure throughput
+        env:
+          DEPLOY_TAR_SECRET: ${{ secrets.DEPLOY_TAR_SECRET }}
+        run: |
+          set -eu
+          HOST="${{ secrets.DEPLOY_HOST }}"
+          DUSER="${{ secrets.DEPLOY_USER }}"
+          SECRET=$(printf '%s' "$DEPLOY_TAR_SECRET" | tr -d '\r\n')
+          mac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
+
+          push() { # $1=文件 $2=假的 git sha（40 位十六进制，只是为了各写各的临时文件）
+            local sha
+            sha=$(sha256sum "$1" | cut -d' ' -f1)
+            ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+              "wechat-deploy upload-image $2 $sha $(mac "$sha")" < "$1" 2>/dev/null || true
+          }
+
+          head -c 10485760 /dev/urandom > ten.bin
+          echo "=== 单流：10 MB 一次传 ==="
+          s=$(date +%s.%N); push ten.bin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; e=$(date +%s.%N)
+          one=$(echo "$e - $s" | bc)
+          echo "单流墙钟：${one}s  → $(echo "scale=0; 10485760/1024/$one" | bc) KB/s"
+
+          echo
+          echo "=== 8 路并行：每路 1.25 MB ==="
+          split -b 1310720 -d ten.bin part.
+          s=$(date +%s.%N)
+          i=0
+          for f in part.*; do
+            i=$((i+1))
+            push "$f" "$(printf 'b%.39d' "$i")" &
+          done
+          wait
+          e=$(date +%s.%N)
+          par=$(echo "$e - $s" | bc)
+          echo "并行墙钟：${par}s  → $(echo "scale=0; 10485760/1024/$par" | bc) KB/s"
+
+          echo
+          echo "=== 结论 ==="
+          echo "单流 ${one}s / 并行 ${par}s ，加速比 = $(echo "scale=2; $one/$par" | bc)x"
