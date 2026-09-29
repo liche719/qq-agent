@@ -72,7 +72,9 @@ services:
       LLM_ZERO_TEMPERATURE_SCENARIOS: ${LLM_ZERO_TEMPERATURE_SCENARIOS:-extract,reflect,reminder_parse,schedule_parse}
       # 思考档位（2026-09-18 用户要求：只有记忆提取 high，其余都 low）。格式「场景=档位」逗号分隔；
       # 没列的场景不传该字段、用上游默认。实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s。
-      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,dialog_deep=low,extract=high,reminder_parse=low,schedule_parse=low,reflect=low}
+      # 2026-09-29：extract 从 high 降到 low（账本显示它是最大单项开销，71% 是输出、思考占 4178 token）。
+      # 这里的默认值只是兜底，面板上的滑块优先（落库、改完立刻生效）。
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,dialog_deep=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，
       # 4096 会把正文挤没 → JSON 解析失败、这一趟白跑（上限不计费，放宽没有额外成本）

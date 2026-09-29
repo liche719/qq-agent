@@ -36,14 +36,17 @@ const DICTIONARY = {
     DELETED: '已删除',
     COMPLETED: '已完成'
   },
-  // LLM 调用场景（面板「模型与搜索」的按场景表格）
+  // LLM 调用场景（面板「模型与搜索」的按场景表格、思考强度滑块）
   scenario: {
     dialog: '对话（默认档）',
     dialog_deep: '对话（模型申请升档）',
     extract: '记忆提取',
+    reflect: '自主反思',
     reminder_parse: '提醒解析',
-    schedule_parse: '定时任务解析',
-    }
+    schedule_parse: '定时任务解析'
+  },
+  // 思考强度（reasoning_effort）；空值表示不传这个字段、用上游默认
+  effort: { low: '低', medium: '中', high: '高' }
 }
 
 export function zh(group, value) {

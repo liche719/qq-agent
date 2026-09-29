@@ -94,7 +94,10 @@ llm:
   # 2026-09-18 用户要求：对话 / 提醒解析 / 定时任务解析 / 反思 都 low，只有**记忆提取 high**（质量优先、后台跑）。
   # 实测：low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。
   # 注意 low 只是"少想一点"，不是硬上限（"每三天提醒我浇花"这种要算日期的，low 下仍会想 3300 token）。
-  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=high,reminder_parse=low,schedule_parse=low,reflect=low}
+  # **2026-09-29 改**：账本显示提取单次 0.026 元、成了最大单项开销，其中 71% 是输出、思考占 4178 token
+  # （high 档）。用户决定把 extract 也从 high 降到 low——实测 low 的思考只有 high 的 1/3。
+  # 这个默认值只是**兜底**：面板「模型与搜索」页每个场景都有滑块，改了立刻生效（落库，见 V19）。
+  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。

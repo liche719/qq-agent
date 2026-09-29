@@ -888,9 +888,12 @@ public class MemoryExtractor {
     private String buildPrompt(List<ContextTurn> recent, List<Memory> existing, List<Memory> cores,
                                int backgroundTurns, String factCards) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("你是用户的长期记忆提取器。当前时间：")
-                .append(LocalDateTime.now(zone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
-                .append("。只从最近对话中提取值得长期保留的信息。\n\n");
+        // 【2026-09-29 缓存修复】**不要把「当前时间」写在第一句**：上游的上下文缓存只认前缀，
+        // 时间每轮都变 → 从第 10 个 token 起就全部作废，实测 prompt 7015 命中 0%（单次 0.026 元，
+        // 是当时最大的单项开销）。现在时间挪到规则之后（见下面 "当前时间：" 那一行），
+        // 于是「你是…提取器 + 全部规则」这一整段静态前缀能命中（命中价是未命中的 1/50）。
+        // 以后往这个提示词里加东西，也一样：**静态的往前放，每轮会变的往后放**。
+        prompt.append("你是用户的长期记忆提取器。只从最近对话中提取值得长期保留的信息。\n\n");
         prompt.append("规则：\n")
                 .append("1. 只能依据 user 角色的明确陈述；assistant 回复、网页、工具结果和推测都不能成为记忆。**唯一例外是 facts**：用户自己发来的图片/文件里你确实看到的内容，可以写进 facts（source=DOC），但不要由附件正文推演出别的记忆。\n")
                 .append("2. 稳定身份、长期目标、长期偏好、原则和底线写入 coreCandidates。核心记忆不设置有效期；只要用户明确表达且未来仍有价值，就应长期保留。\n")
@@ -930,6 +933,10 @@ public class MemoryExtractor {
                     .append("    targetSubject 必须**逐字照抄**卡片里冒号前面的那个名字；**同一个属性时 predicate 也照抄卡片的写法**"
                             + "（卡片写「教师」就别写成「老师」——写成别的会被当成另一件事，卡片上就会出现两个矛盾值）。\n");
         }
+        // 动态内容从这里开始——上面那一整段（提取器身份 + 全部规则）是静态的，能进缓存
+        prompt.append("\n当前时间：")
+                .append(LocalDateTime.now(zone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+                .append("（规则里说的「今天/本周/相对期限」都按这个时间换算）\n");
         prompt.append("\n已存在的核心记忆：\n");
         if (cores.isEmpty()) {
             prompt.append("（无）\n");

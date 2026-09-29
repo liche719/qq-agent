@@ -13,12 +13,27 @@ const props = defineProps({
 const data = ref(null)
 const error = ref('')
 
+// 思考强度滑块（每个场景一个）。档位顺序就是滑块的 4 个位置：0=默认（不传上游默认档）
+const EFFORT_STEPS = ['', 'low', 'medium', 'high']
+const efforts = ref(null)
+const effortMessage = ref('')
+const effortBusy = ref('')
+
 function percent(value) {
   return value === null || value === undefined ? '—' : value + '%'
 }
 
 function ms(value) {
   return value === null || value === undefined ? '—' : fmtMs(value)
+}
+
+function positionOf(effort) {
+  const index = EFFORT_STEPS.indexOf(effort || '')
+  return index < 0 ? 0 : index
+}
+
+function effortText(effort) {
+  return effort ? zh('effort', effort) : '默认'
 }
 
 const llmRows = computed(() => {
@@ -63,6 +78,8 @@ const scenarioRows = computed(() => {
   return Object.keys(map).map((key) => Object.assign({ key }, map[key]))
 })
 
+const effortRows = computed(() => efforts.value?.scenarios || [])
+
 const lastErrors = computed(() => {
   const rows = []
   const llm = data.value?.llm || {}
@@ -81,8 +98,42 @@ async function load() {
   }
 }
 
+// 只在进入页面时读一次：滑块是用户正在编辑的东西，**不能**跟着 10 秒的 tick 被冲掉（坑 57 同款教训）
+async function loadEfforts() {
+  try {
+    efforts.value = await api('/llm/scenarios')
+  } catch (caught) {
+    error.value = caught.message
+  }
+}
+
+function onSlide(row, position) {
+  row.effective = EFFORT_STEPS[Number(position)] || ''
+}
+
+async function saveEffort(row, position) {
+  const effort = EFFORT_STEPS[Number(position)] || ''
+  if (effortBusy.value) return
+  effortBusy.value = row.scenario
+  try {
+    efforts.value = await api('/llm/scenarios', {
+      method: 'POST',
+      body: { scenario: row.scenario, effort }
+    })
+    effortMessage.value = zh('scenario', row.scenario) + ' 已设为「' + effortText(effort) + '」，下一次调用就生效'
+  } catch (caught) {
+    effortMessage.value = caught.message
+    await loadEfforts()
+  } finally {
+    effortBusy.value = ''
+  }
+}
+
 watch(() => props.tick, () => load())
-onMounted(() => load())
+onMounted(() => {
+  load()
+  loadEfforts()
+})
 </script>
 
 <template>
@@ -99,7 +150,40 @@ onMounted(() => load())
     </div>
 
     <section class="glass panel">
-      <div class="panel-head"><h2>按场景</h2><span class="hint">全部场景都开着深度思考（2026-09-14 起不再分场景开关）；「其中思考」是输出 token 里花在思考上的部分</span></div>
+      <div class="panel-head">
+        <h2>思考强度</h2>
+        <span class="hint">每个场景单独设置：越靠右想得越多、越慢也越贵；「默认」= 不传这个参数、用上游默认档</span>
+      </div>
+      <div v-for="row in effortRows" :key="row.scenario" class="effort-row">
+        <div class="effort-name">
+          {{ zh('scenario', row.scenario) }}
+          <small>{{ row.fromPanel ? '面板设定' : '跟随配置' }} · 配置默认 {{ effortText(row.configured) }}</small>
+        </div>
+        <input
+          class="effort-slider"
+          type="range"
+          min="0"
+          max="3"
+          step="1"
+          :value="positionOf(row.effective)"
+          :disabled="effortBusy === row.scenario"
+          @input="onSlide(row, $event.target.value)"
+          @change="saveEffort(row, $event.target.value)"
+        />
+        <div class="effort-value">{{ effortText(row.effective) }}</div>
+      </div>
+      <p v-if="effortMessage" class="hint" style="margin-top: 10px">{{ effortMessage }}</p>
+      <p class="hint" style="margin-top: 10px">
+        改完立刻生效、不用重启容器（值存在库里，重启也还在）。调高「记忆提取」会更认真但更贵；
+        调低「对话」回复更快、更像随口聊天。
+      </p>
+    </section>
+
+    <section class="glass panel">
+      <div class="panel-head">
+        <h2>按场景</h2>
+        <span class="hint">进程内累计，重启归零；「其中思考」是输出 token 里花在思考上的部分（受上面的滑块影响）</span>
+      </div>
       <DataTable :columns="scenarioColumns" :rows="scenarioRows" empty="还没有调用记录（重启后归零）"></DataTable>
     </section>
 

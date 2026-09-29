@@ -55,8 +55,35 @@ public class LlmScenarioSettings {
         this.reasoningEffort = parseReasoningEffort(reasoningEffortScenarios);
     }
 
-    /** 这个场景的思考档位；null = 不传（用上游默认） */
+    /**
+     * 面板上的**覆盖值**（2026-09-29 加，见 {@link LlmScenarioEffortService}）。
+     * 用 setter + {@code required=false} 注入而不是构造器参数：这个类有多个给单测用的构造器，
+     * 加构造器参数踩过坑（坑 45，曾把线上打挂两个部署周期）。
+     */
+    private LlmScenarioEffortService effortOverrides;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setEffortOverrides(LlmScenarioEffortService effortOverrides) {
+        this.effortOverrides = effortOverrides;
+    }
+
+    /**
+     * 这个场景这次真正要传的思考档位；null = 不传（用上游默认）。
+     *
+     * <p>顺序是**面板覆盖值 → 配置默认值**：面板改完立刻生效，不用重启容器。
+     */
     public String reasoningEffortFor(LlmScenario scenario) {
+        if (effortOverrides != null) {
+            String override = effortOverrides.overrideFor(scenario);
+            if (override != null && !override.isBlank()) {
+                return override;
+            }
+        }
+        return reasoningEffort.get(scenario);
+    }
+
+    /** 配置文件里的默认档位（不管面板怎么改都不变），给面板显示"默认是什么"用 */
+    public String configuredEffortFor(LlmScenario scenario) {
         return reasoningEffort.get(scenario);
     }
 
