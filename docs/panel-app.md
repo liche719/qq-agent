@@ -17,7 +17,7 @@ C:\Users\33721\Desktop\wechat-agent\panel-app\      ← 独立工程，**不在 
 覆盖的 `**.md`/`docs/**`）。这个壳和线上服务没有依赖关系，放进仓库等于每次改图标都白跑一次部署。
 真要入库，得同时把 `panel-app/**` 加进 workflow 的 `paths-ignore`。
 
-产物：`C:\Users\33721\Desktop\wechat-agent\liche-panel-1.0.apk`（14 698 字节，debug 自签）。
+产物：`C:\Users\33721\Desktop\wechat-agent\liche-panel-1.0.apk`（16 KB，debug 自签）。
 
 ## 它做了什么
 
@@ -27,7 +27,13 @@ C:\Users\33721\Desktop\wechat-agent\panel-app\      ← 独立工程，**不在 
 - 返回键 = 网页后退，退到底才退出 App。
 - 主文档加载失败时显示自制「重试」页（`onReceivedError` 只对 `isForMainFrame` 生效，
   图片/接口报错不该挡住整页）。
-- 图标沿用面板网页那个 favicon 的字形（自适应图标，前景是矢量，没放任何 png）。
+- 图标是**纯矢量**的自适应图标（`ic_launcher_background` / `_foreground` / `_monochrome` 三层，
+  没有任何 png）：蓝色斜渐变底 + 白色对话气泡 + 蓝色「心跳」折线（机器人 + 运维监控），
+  形状都收在 72dp 安全区里，圆形/方圆遮罩都不会切到。
+  应用名 **QQ机器人运维**（`strings.xml` 的 `app_name`）。
+  改完想看效果**不用装到手机**：`panel-app/tools/IconPreview.java` 是照同一套坐标用 Java2D
+  渲预览的小工具（`java tools/IconPreview.java tools/icon-preview.png`），
+  左边画圆形遮罩、右边画方圆遮罩，旁边那张 `icon-preview.png` 就是它的输出。
 
 **刻意零第三方依赖**（连 AndroidX 都没有）：一个 WebView 壳用不上；而且零依赖才能在
 "Google Maven 连不上、只有本地 Gradle 缓存"的机器上构建（下面有踩坑记录）。
