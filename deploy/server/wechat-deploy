@@ -17,6 +17,8 @@ umask 077
 SECRET_FILE=/etc/wechat-deploy.secret
 BASE=/var/lib/wechat-deploy
 INCOMING=$BASE/incoming
+# 分片落在整包旁边（save_stdin 本来就用 $INCOMING 做 mktemp 的目录，所以这个目录一定存在）
+PARTS_DIR=$INCOMING
 COMPOSE_DIR=/opt/wechat-agent-infra
 COMPOSE_FILE=$COMPOSE_DIR/docker-compose.remote.yml
 SETTINGS_FILE=$COMPOSE_DIR/docker/searxng/settings.yml
@@ -32,6 +34,8 @@ usage() {
   cat >&2 <<'EOF'
 wechat-deploy: 只接受以下子命令（其它命令一律拒绝，不提供 shell）
   wechat-deploy upload-image <git-sha> <sha256> <hmac>
+  wechat-deploy upload-image-part <git-sha> <序号> <sha256> <hmac>
+  wechat-deploy join-image <git-sha> <分片数> <整包 sha256> <hmac>
   wechat-deploy upload-compose <sha256> <hmac>
   wechat-deploy upload-settings <sha256> <hmac>
   wechat-deploy deploy <git-sha>
@@ -68,6 +72,53 @@ cmd_upload_image() { # $1=git-sha $2=sha256 $3=hmac
   check_mac "$2" "$3" image
   save_stdin "$INCOMING/wechat-agent-$1.tar.gz" "$2"
   log "upload-image ok sha=$1 bytes=$(stat -c%s "$INCOMING/wechat-agent-$1.tar.gz")"
+}
+
+# 分片上传（2026-09-30 加）：**为什么需要它** —— GitHub runner（Azure 美国）到这台机器
+# 的国际路由会"单条 TCP 塌缩"。实测同一份数据：单流 31 KB/s，8 路并行 182 KB/s（快 5.85 倍），
+# 227 MB 的镜像因此从 44 秒劣化到 118 分钟。分片并行上传把这个瓶颈绕开。
+# 安全性不变：每一片各自带 HMAC + sha256；合并后再校验**整包** sha256 才算通过。
+cmd_upload_image_part() { # $1=git-sha $2=序号 $3=sha256 $4=hmac
+  is_git_sha "$1" || die "git sha 格式不对"
+  case "$2" in ''|*[!0-9]*) die "分片序号必须是非负整数";; esac
+  [ "${#2}" -le 4 ] || die "分片序号过大"
+  check_mac "$3" "$4" image-part
+  save_stdin "$PARTS_DIR/wechat-agent-$1.part$2" "$3"
+}
+
+cmd_join_image() { # $1=git-sha $2=分片数 $3=整包 sha256 $4=hmac
+  is_git_sha "$1" || die "git sha 格式不对"
+  case "$2" in ''|*[!0-9]*) die "分片数必须是非负整数";; esac
+  [ "$2" -ge 1 ] && [ "$2" -le 512 ] || die "分片数不在 1..512"
+  check_mac "$3" "$4" image-join
+  local target="$INCOMING/wechat-agent-$1.tar.gz" got i part
+  rm -f "$target"
+  i=0
+  while [ "$i" -lt "$2" ]; do
+    part="$PARTS_DIR/wechat-agent-$1.part$i"
+    [ -f "$part" ] || { remove_parts "$1" "$2"; die "缺少分片 $i"; }
+    cat "$part" >>"$target" || { remove_parts "$1" "$2"; die "合并分片 $i 失败"; }
+    i=$((i + 1))
+  done
+  got=$(sha256sum "$target" | cut -d' ' -f1)
+  if [ "$got" != "$3" ]; then
+    rm -f "$target"
+    remove_parts "$1" "$2"
+    die "合并后 sha256 不符（期望 $3，实际 $got）"
+  fi
+  remove_parts "$1" "$2"
+  log "join-image ok sha=$1 parts=$2 bytes=$(stat -c%s "$target")"
+}
+
+# **不要写成 `rm -f ...part*`**：本脚本第 201 行有 `set -f`（禁用 glob，防止原始命令里的
+# `*` 被展开），通配符在这里不会展开，`rm` 会拿到一个字面量路径、什么都不删——
+# 227 MB 的分片就这么留在了磁盘上（2026-09-30 自测抓到的）。所以只能逐个删。
+remove_parts() { # $1=git-sha $2=分片数
+  local i=0
+  while [ "$i" -lt "$2" ]; do
+    rm -f "$PARTS_DIR/wechat-agent-$1.part$i"
+    i=$((i + 1))
+  done
 }
 
 cmd_upload_compose() { # $1=sha256 $2=hmac
@@ -172,6 +223,8 @@ sub=$1; shift
 
 case "$sub" in
   upload-image)    [ "$#" = 3 ] || usage; cmd_upload_image "$1" "$2" "$3" ;;
+  upload-image-part) [ "$#" = 4 ] || usage; cmd_upload_image_part "$1" "$2" "$3" "$4" ;;
+  join-image)      [ "$#" = 4 ] || usage; cmd_join_image "$1" "$2" "$3" "$4" ;;
   upload-compose)  [ "$#" = 2 ] || usage; cmd_upload_compose "$1" "$2" ;;
   upload-settings) [ "$#" = 2 ] || usage; cmd_upload_settings "$1" "$2" ;;
   deploy)          [ "$#" = 1 ] || usage; cmd_deploy "$1" ;;

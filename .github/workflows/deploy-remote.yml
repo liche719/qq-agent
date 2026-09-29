@@ -85,8 +85,37 @@ jobs:
           mac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
 
           image_sha=$(sha256sum wechat-agent-${GITHUB_SHA}.tar.gz | cut -d' ' -f1)
+
+          # **分片并行上传**（2026-09-30 改）：GitHub runner（Azure 美国）到这台服务器的国际路由上
+          # 单条 TCP 会塌缩——实测同一份数据单流 31 KB/s、8 路并行 182 KB/s（快 5.85 倍），
+          # 227 MB 的镜像因此从 44 秒劣化到 118 分钟。分片并发把这个瓶颈绕开。
+          # 安全性不变：每片各自带 HMAC + sha256，合并后再校验**整包** sha256 才算通过；
+          # 服务端只是多了两个子命令（upload-image-part / join-image），没有放宽任何校验。
+          TARBALL=wechat-agent-${GITHUB_SHA}.tar.gz
+          PARTS=16
+          TOTAL=$(stat -c%s "$TARBALL")
+          CHUNK=$(( (TOTAL + PARTS - 1) / PARTS ))
+          split -b "$CHUNK" -d -a 3 "$TARBALL" image-part-
+          COUNT=$(ls image-part-* | wc -l)
+          echo "分片：$COUNT 片，每片约 $((CHUNK / 1048576)) MB"
+
+          started=$(date +%s)
+          index=0
+          pids=""
+          for f in image-part-*; do
+            part_sha=$(sha256sum "$f" | cut -d' ' -f1)
+            ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+              "wechat-deploy upload-image-part ${GITHUB_SHA} ${index} ${part_sha} $(mac "$part_sha")" < "$f" &
+            pids="$pids $!"
+            index=$((index + 1))
+          done
+          failed=0
+          for p in $pids; do wait "$p" || failed=1; done
+          [ "$failed" = "0" ] || { echo "❌ 有分片上传失败"; exit 1; }
+          echo "分片上传完成：$(( $(date +%s) - started )) 秒"
+
           ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
-            "wechat-deploy upload-image ${GITHUB_SHA} ${image_sha} $(mac "$image_sha")" < wechat-agent-${GITHUB_SHA}.tar.gz
+            "wechat-deploy join-image ${GITHUB_SHA} ${COUNT} ${image_sha} $(mac "$image_sha")"
 
           compose_sha=$(sha256sum docker-compose.remote.yml | cut -d' ' -f1)
           ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
