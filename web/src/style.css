@@ -601,7 +601,13 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 .effort-row:first-of-type { border-top: 0; padding-top: 4px; }
 .effort-row .effort-name { flex: 1 1 158px; font-size: 14px; color: var(--ink); }
 .effort-row .effort-name small { display: block; margin-top: 3px; font-size: 12.5px; color: var(--muted); }
-.effort-row .effort-slider { flex: 2 1 210px; min-width: 160px; height: 34px; padding: 0; border: 0; background: none; appearance: none; -webkit-appearance: none; }
+/* `touch-action: pan-y` 不是装饰：滑块横跨整行，手机上想滚页面时手指很容易落在它上面，
+   而 range 控件会把手势当成"改值"——实测竖向划动真的会改档位并写库（2026-09-29 踩到，一次误写 5 行）。
+   声明 pan-y 之后，竖向划动交给页面滚动、不喂给控件。 */
+.effort-row .effort-slider {
+  flex: 2 1 210px; min-width: 160px; height: 34px; padding: 0; border: 0; background: none;
+  appearance: none; -webkit-appearance: none; touch-action: pan-y;
+}
 .effort-row .effort-slider::-webkit-slider-runnable-track {
   height: 6px; border-radius: 999px; background: var(--field-bg); border: 1px solid var(--line);
 }

@@ -111,8 +111,49 @@ function onSlide(row, position) {
   row.effective = EFFORT_STEPS[Number(position)] || ''
 }
 
+/**
+ * 手势守卫（2026-09-29 踩到之后加的）。
+ *
+ * `touch-action: pan-y` **不够**：range 控件在手指按下（touchstart）那一刻就已经把值跳到手指位置了，
+ * 等浏览器判定"这是竖向滚动"时值已经变了，松手照样触发 change。实测：在手机上竖向滑动滚页面，
+ * 一次误写了 5 行覆盖值。
+ *
+ * 所以自己判定：按下时记下坐标与**原值**，松手时看这一次划动是横还是竖——
+ * 竖着的（|dy| > |dx|）一律当"用户在滚页面"，把滑块拨回原值，不写库。
+ */
+let gesture = null
+
+function onSliderDown(row, event) {
+  gesture = { x: event.clientX, y: event.clientY, before: row.override || '' }
+}
+
+function onSliderUp(row, event) {
+  const started = gesture
+  gesture = null
+  if (!started) {
+    return
+  }
+  const dx = Math.abs(event.clientX - started.x)
+  const dy = Math.abs(event.clientY - started.y)
+  if (dy > dx) {
+    row.effective = started.before
+    if (event.target) {
+      event.target.value = String(positionOf(started.before))
+    }
+    return
+  }
+  saveEffort(row, event.target ? event.target.value : String(positionOf(row.effective)))
+}
+
 async function saveEffort(row, position) {
   const effort = EFFORT_STEPS[Number(position)] || ''
+  const current = row.override || ''
+  // 值没变就不写库：误触常常只是"拨到了同一个位置"，这种空写会把「跟随配置」
+  // 悄悄变成「面板设定」，让界面说谎。键盘操作（没有指针事件）也走这条兜底。
+  if (effort === current) {
+    row.effective = current
+    return
+  }
   if (effortBusy.value) return
   effortBusy.value = row.scenario
   try {
@@ -168,6 +209,9 @@ onMounted(() => {
           :value="positionOf(row.effective)"
           :disabled="effortBusy === row.scenario"
           @input="onSlide(row, $event.target.value)"
+          @pointerdown="onSliderDown(row, $event)"
+          @pointerup="onSliderUp(row, $event)"
+          @pointercancel="onSliderUp(row, $event)"
           @change="saveEffort(row, $event.target.value)"
         />
         <div class="effort-value">{{ effortText(row.effective) }}</div>

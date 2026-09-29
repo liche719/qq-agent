@@ -104,3 +104,40 @@ image id、只是各带一个 tag**（实测 `wechat-agent:6c16fd2…` 与 `wech
   真正的收窄在"这把钥匙只能跑一个脚本"，已经拿到。
 - 拿到私钥的人仍能：**重放**一次已授权过的上传（需要那份文件的原始字节，而它用完即删）、
   触发一次 `deploy`（要让服务器跑起来还得先有包）。要彻底堵死得给镜像包做签名，属于下一步。
+
+## 7. CI 上传变慢时的快路径（手动部署，2026-09-29 实测）
+
+**现象**：2026-09-20 之前的部署整条流水线 **4 分钟**；从 09-22 起，
+`Upload image and deployment files` 这一步要 **1 小时 50 分**（三次都是），整条流水线 2 小时。
+这一步是从 GitHub 美国 runner 把 `docker save` 出来的镜像传到阿里云，**这条路径不由我们控制**。
+
+**实测对比**：本机 → 服务器 **2.85 MB/s**（20 MB 上传 7 秒）；CI 那条路折算约 **60~75 KB/s**，差约 40 倍。
+
+**快路径**（2026-09-29 用过三次，每次约 1 分钟）：
+
+```powershell
+cd web; npm run build          # 前端先构建（产物进 src/main/resources/static）
+cd ..; mvn -q -DskipTests package
+# 再把 jar（约 100 MB，30 秒）和新的 docker-compose.remote.yml 传上去
+```
+
+服务器侧的关键三行——**用当前镜像做底、只换 jar**，不用在服务器上装 Maven/Node，也不用重新拉基础镜像：
+
+```bash
+printf 'FROM %s\nCOPY app.jar /app/app.jar\n' "$(docker inspect wechat-agent-java -f '{{.Config.Image}}')" > Dockerfile
+docker build -t "wechat-agent:manual-<短sha>" .
+AGENT_IMAGE="wechat-agent:manual-<短sha>" docker compose -f docker-compose.remote.yml up -d --no-build agent
+```
+
+**它绕过了什么**：HMAC 验签的上传、服务端 smoke check、镜像 tag 的两代保留策略。
+所以这是"提速/应急"手段而不是常用手段：**用完自己补三项验证**（首页 200、无口令 401、日志 0 ERROR），
+并且**一定要同步 `docker-compose.remote.yml`**（坑 36：compose 只透传 `environment:` 里列出的变量，
+不传新版就会出现"代码是新的、配置是旧的"）。
+
+**两个坑**：
+
+1. **探活别漏 `-k`**：证书是给 `liche.cloud` 签的，`curl -s https://127.0.0.1/...` 必然证书不匹配、
+   `%{http_code}` 恒为 `000`，看着像"应用没起来"，其实早好了。我第一次因此白等了 150 秒的探活循环。
+2. **正在跑的 CI 流水线要取消**：它构建的是**更早的提交**，等它两小时后落地会把手动部署的改动盖回去。
+   `gh run cancel <id>` 之后要确认它真的没在部署。
+
