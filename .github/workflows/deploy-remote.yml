@@ -99,15 +99,34 @@ jobs:
           COUNT=$(ls image-part-* | wc -l)
           echo "分片：$COUNT 片，每片约 $((CHUNK / 1048576)) MB"
 
+          # 单片的"传 + 失败重试"。
+          # **为什么必须重试**：服务器 sshd 是 `MaxStartups 10:30:100`——第 11 条起的**未认证**连接
+          # 会被随机丢弃，客户端看到的是 `kex_exchange_identification: Connection reset by peer`。
+          # 16 条并发正好踩在上面，2026-10-08 那次就是因此整批失败（生产没受影响，守卫拦住了）。
+          upload_part() { # $1=分片文件 $2=序号
+            local file="$1" index="$2" sha attempt
+            sha=$(sha256sum "$file" | cut -d' ' -f1)
+            for attempt in 1 2 3; do
+              if ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+                   "wechat-deploy upload-image-part ${GITHUB_SHA} ${index} ${sha} $(mac "$sha")" < "$file"; then
+                return 0
+              fi
+              echo "分片 $index 第 $attempt 次失败，${attempt}0 秒后重试"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+
           started=$(date +%s)
           index=0
           pids=""
           for f in image-part-*; do
-            part_sha=$(sha256sum "$f" | cut -d' ' -f1)
-            ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
-              "wechat-deploy upload-image-part ${GITHUB_SHA} ${index} ${part_sha} $(mac "$part_sha")" < "$f" &
+            upload_part "$f" "$index" &
             pids="$pids $!"
             index=$((index + 1))
+            # 错开启动：kex 只要几百毫秒，隔开之后**同时处于未认证态的连接**始终是个位数，
+            # 绕开 MaxStartups 的丢弃阈值。16 × 0.3s ≈ 5 秒的代价换掉整批失败。
+            sleep 0.3
           done
           failed=0
           for p in $pids; do wait "$p" || failed=1; done
