@@ -22,8 +22,10 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 
@@ -263,8 +265,9 @@ public class MemoryExtractor {
         BooleanSupplier currentCheck = stillCurrent == null ? () -> true : stillCurrent;
         MDC.put("userScope", UserScope.forUser(userId));
         MemoryExtractionAudit.Span span = audit == null ? null : audit.begin();
-        // [0]=verdict（模型判定计数） [1]=reason（跳过原因）——用数组是为了能在下面的 lambda 里赋值
-        String[] trail = new String[]{null, null};
+        // [0]=verdict（模型提议了多少条） [1]=reason（跳过原因） [2]=实际落库清单
+        // ——用数组是为了能在下面的 lambda 里赋值
+        String[] trail = new String[]{null, null, null};
         int windowTurns = 0;
         int windowChars = 0;
         try {
@@ -328,7 +331,7 @@ public class MemoryExtractor {
                     trail[1] = "STALE";
                     return;
                 }
-                apply(userId, writeBack, extractionRecent);
+                trail[2] = apply(userId, writeBack, extractionRecent);
             });
             return true;
         } catch (Exception e) {
@@ -338,7 +341,7 @@ public class MemoryExtractor {
         } finally {
             if (audit != null) {
                 audit.finish(userId, trigger == null ? MemoryExtractionRun.TRIGGER_AUTO : trigger, span, windowTurns, windowChars,
-                        trail[0], null, trail[1]);
+                        trail[0], trail[2], trail[1]);
             }
             MDC.remove("userScope");
         }
@@ -467,19 +470,66 @@ public class MemoryExtractor {
                                    List<MemoryFactCandidate> facts) {
     }
 
-    private void apply(String userId, ExtractionResult result, List<ContextTurn> recent) {
+    /**
+     * 把这次提取的结论写回。
+     *
+     * @return **实际落库清单**（按操作计数），形如 {@code 新增核心记忆=1,新增情景记忆=1,事实条数=4}。
+     *         它要和 verdict 里的"模型提议了多少条"放在一起看，才能回答
+     *         "提议了 5 条 episode 为什么只落了 1 条"——这是 2026-10-09 之前**完全看不见**的那一面
+     *         （审计里的 written_ids 从上线起一直硬编码传 null）。
+     */
+    private String apply(String userId, ExtractionResult result, List<ContextTurn> recent) {
         if (result == null) {
+            return "";
+        }
+        writeTally.set(new LinkedHashMap<>());
+        try {
+            Set<String> allowedSourceIds = allowedSourceIds(recent);
+            applyEpisodes(userId, result, allowedSourceIds);
+            applyNewWork(userId, result, allowedSourceIds);
+            applyCoreCandidates(userId, result, allowedSourceIds);
+            applyCoreUpdates(userId, result, allowedSourceIds);
+            applyWorkConflicts(userId, result, allowedSourceIds);
+            applyWorkCompletions(userId, result, allowedSourceIds);
+            applyFacts(userId, result);
+            runSafely(userId, "过期工作记忆", memoryService::expireDueMemories);
+            return writeSummary();
+        } finally {
+            writeTally.remove();
+        }
+    }
+
+    /**
+     * 本次提取的落库计数。
+     *
+     * <p>为什么用 ThreadLocal 而不是往 6 个 applyXxx 里传参：{@link #runSafely} 是**所有写入唯一的收口点**，
+     * 在那里记一笔就全覆盖了；改成传参要动 6 个方法签名 + 14 个调用点，纯属白改。
+     * {@link #apply} 是同步执行、且 finally 里 {@code remove()}，用法与 {@code LlmScenario.CURRENT} 一致。
+     */
+    private final ThreadLocal<Map<String, Integer>> writeTally = new ThreadLocal<>();
+
+    private void tally(String operation, int count) {
+        Map<String, Integer> counts = writeTally.get();
+        if (counts == null || count <= 0) {
             return;
         }
-        Set<String> allowedSourceIds = allowedSourceIds(recent);
-        applyEpisodes(userId, result, allowedSourceIds);
-        applyNewWork(userId, result, allowedSourceIds);
-        applyCoreCandidates(userId, result, allowedSourceIds);
-        applyCoreUpdates(userId, result, allowedSourceIds);
-        applyWorkConflicts(userId, result, allowedSourceIds);
-        applyWorkCompletions(userId, result, allowedSourceIds);
-        applyFacts(userId, result);
-        runSafely(userId, "过期工作记忆", memoryService::expireDueMemories);
+        counts.merge(operation, count, Integer::sum);
+    }
+
+    /** 把落库计数拼成一行；空串 = 这次一条都没写成 */
+    private String writeSummary() {
+        Map<String, Integer> counts = writeTally.get();
+        if (counts == null || counts.isEmpty()) {
+            return "";
+        }
+        StringBuilder summary = new StringBuilder();
+        counts.forEach((operation, count) -> {
+            if (summary.length() > 0) {
+                summary.append(',');
+            }
+            summary.append(operation).append('=').append(count);
+        });
+        return summary.toString();
     }
 
     /**
@@ -507,6 +557,9 @@ public class MemoryExtractor {
         }
         runSafely(userId, "事实层写入", () -> {
             int written = factService.apply(userId, candidates);
+            // 事实层能拿到**条数**（runSafely 只知道"调了一次"），所以额外记一行精确的：
+            // 审计里同时有"调了几次"和"真正落了几条"，才能看出 candidates 有多少被去重挡掉
+            tally("事实条数", written);
             log.info("事实层写入 user={} candidates={} new={}", userId, candidates.size(), written);
         });
     }
@@ -1187,7 +1240,10 @@ public class MemoryExtractor {
     private void runSafely(String userId, String operation, Runnable action) {
         try {
             action.run();
+            tally(operation, 1);
         } catch (Exception exception) {
+            // 失败也记一笔：不然审计里"落库"少一条时，分不清是"没写"还是"写失败被吞了"
+            tally("失败·" + operation, 1);
             log.warn("记忆提取单项操作失败 user={} operation={} reason={}", userId, operation,
                     exception.getClass().getSimpleName());
         }

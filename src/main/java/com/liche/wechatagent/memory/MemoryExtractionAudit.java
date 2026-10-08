@@ -49,12 +49,14 @@ public class MemoryExtractionAudit {
     /**
      * 落一行审计。
      *
-     * @param verdict 模型判定计数（形如 {@code core=1 work=0 ...}），没跑到模型时传 null
-     * @param reason  跳过的原因（{@code WINDOW_EMPTY}/{@code PRECHECK}/{@code STALE}/{@code FAILED}），正常跑完传 null
+     * @param verdict      模型**提议**了多少条（形如 {@code core=1 work=0 ...}），没跑到模型时传 null
+     * @param writeSummary 实际**落库**了多少条（形如 {@code 新增核心记忆=1,事实条数=4}），见
+     *                     {@link MemoryExtractionRun#getWrittenIds()}；一条没写成传空串或 null
+     * @param reason       跳过的原因（{@code WINDOW_EMPTY}/{@code PRECHECK}/{@code STALE}/{@code FAILED}），正常跑完传 null
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finish(String userId, String trigger, Span span, int windowTurns, int windowChars,
-                       String verdict, String writtenIds, String reason) {
+                       String verdict, String writeSummary, String reason) {
         if (userId == null || userId.isBlank()) {
             return;
         }
@@ -83,12 +85,13 @@ public class MemoryExtractionAudit {
             run.setCostYuan(BigDecimal.valueOf(yuan).setScale(6, java.math.RoundingMode.HALF_UP));
             run.setDurationMs((int) Math.min(Integer.MAX_VALUE, millis));
             run.setVerdictJson(clip(verdict, 512));
-            run.setWrittenIds(clip(writtenIds, 512));
+            run.setWrittenIds(clip(writeSummary, 512));
             run.setSkipReason(reason);
             run.setCreatedAt(LocalDateTime.now());
             repository.save(run);
-            log.info("记忆提取审计 #{} user={} window={}轮/{}字 verdict={} written={} reason={} tokens={}/{} 钱={}元 用时={}ms",
-                    run.getId(), userId, windowTurns, windowChars, verdict, writtenIds,
+            log.info("记忆提取审计 #{} user={} window={}轮/{}字 提议[{}] 落库[{}] reason={} tokens={}/{} 钱={}元 用时={}ms",
+                    run.getId(), userId, windowTurns, windowChars, verdict,
+                    writeSummary == null || writeSummary.isBlank() ? "无" : writeSummary,
                     reason == null ? "-" : reason, used.prompt(), used.completion(),
                     String.format("%.4f", yuan), millis);
         } catch (RuntimeException exception) {

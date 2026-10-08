@@ -81,11 +81,21 @@ public class MemoryExtractionRun {
     @Column(name = "duration_ms", nullable = false)
     private Integer durationMs = 0;
 
-    /** 模型判定的计数，形如 {@code core=1 work=0 episode=1 updates=0 completed=0 duplicates=3} */
+    /** 模型**提议**了多少条，形如 {@code core=1 work=0 episode=1 updates=0 completed=0 duplicates=3} */
     @Column(name = "verdict_json", length = 512)
     private String verdictJson;
 
-    /** 实际写入的 id 列表（逗号分隔，形如 {@code core:137,work:88}） */
+    /**
+     * **实际落库清单**（按操作计数，逗号分隔，形如 {@code 新增核心记忆=1,新增情景记忆=1,事实条数=4}）。
+     *
+     * <p>列名虽然叫 ids，但存的**不是 id**：写入统一走 {@code runSafely(..., Runnable)}，
+     * lambda 不返回实体、拿不到自增 id；要拿 id 得把 6 个 applyXxx 的 14 个调用点全改成带返回值。
+     * 而"模型提议了多少条 vs 实际落了几条"这个对照**只要计数就能回答**，所以先按计数落。
+     *
+     * <p>空串 = 这次一条都没写成（和 {@code skip_reason} 一起看）。
+     * <p>⚠️ 2026-10-09 之前这一列**一直是 null**——MemoryExtractor 调用审计时硬编码传了 null，
+     * 所以那段时期的"落库"信息在库里是缺失的，**不能用它做历史对比**。
+     */
     @Column(name = "written_ids", length = 512)
     private String writtenIds;
 

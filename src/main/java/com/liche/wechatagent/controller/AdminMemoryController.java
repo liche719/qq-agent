@@ -106,6 +106,10 @@ public class AdminMemoryController {
             item.put("trigger", trigger(run.getTriggerSource()));
             item.put("window", run.getWindowTurns() + " 轮 / " + run.getWindowChars() + " 字");
             item.put("verdict", run.getVerdictJson() == null ? "-" : run.getVerdictJson());
+            // 实际落库清单（按操作计数）。和上面的 verdict（模型提议）对着看才知道提取质量：
+            // 提议了 5 条为什么只落 1 条、更新类为什么从不落库，都靠这两栏对照（2026-10-09 补）
+            item.put("written", run.getWrittenIds() == null || run.getWrittenIds().isBlank()
+                    ? "无" : run.getWrittenIds());
             item.put("reason", run.getSkipReason() == null ? "—" : reason(run.getSkipReason()));
             item.put("tokens", (run.getPromptTokens() == null ? 0 : run.getPromptTokens()) + " / "
                     + (run.getCompletionTokens() == null ? 0 : run.getCompletionTokens())
