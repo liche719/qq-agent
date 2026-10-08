@@ -130,11 +130,17 @@ jobs:
           done
           failed=0
           for p in $pids; do wait "$p" || failed=1; done
-          [ "$failed" = "0" ] || { echo "❌ 有分片上传失败"; exit 1; }
-          echo "分片上传完成：$(( $(date +%s) - started )) 秒"
+          [ "$failed" = "0" ] || echo "⚠️ 有分片报告失败，仍然尝试合并——由整包 sha256 当裁判"
 
-          ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
-            "wechat-deploy join-image ${GITHUB_SHA} ${COUNT} ${image_sha} $(mac "$image_sha")"
+          # **不管上面成没成都走合并**：全传上去了 → 整包 sha256 对得上 → 继续部署；
+          # 少一片 → join-image 自己报"缺少分片"并**顺手把分片清掉**（否则失败一次就在服务器上
+          # 留 200MB 残片，2026-10-08 踩到过：失败那次的 14 个分片躺了一小时）。
+          if ! ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
+               "wechat-deploy join-image ${GITHUB_SHA} ${COUNT} ${image_sha} $(mac "$image_sha")"; then
+            echo "❌ 分片合并/整包校验失败（服务端已清理分片）"
+            exit 1
+          fi
+          echo "分片上传完成：$(( $(date +%s) - started )) 秒"
 
           compose_sha=$(sha256sum docker-compose.remote.yml | cut -d' ' -f1)
           ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
