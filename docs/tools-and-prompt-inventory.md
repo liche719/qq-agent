@@ -15,6 +15,13 @@
 
 ## 1. 工具清单（53 个现役）
 
+> ⚠️ **2026-10-09 更正：下面这一节的绝对次数是重复计数的，按「砍半」读。**
+> 2026-10-09 晚用**单一口径**重查（`role='system' AND content LIKE 'tool=%phase=result%'`）得到 **522 条**，
+> 而 `phase=call` 也是 **522 条**——两者完全对称，说明当初把 call 与 result **两条都算了一次**。
+> 逐一核对：`listReminders` 20→10、`parseReminder` 22→11、`sendDownloadedFile` 12→6、
+> `listExamTasks` 12→6、`createScheduledTask` 6→3……**基本都是精确的 2 倍**。
+> **排序与「零调用」结论不受影响**（0 的两倍还是 0）。真实数据见下方 §6。
+
 ### 高频（>40 次）
 
 | 工具 | 次数 | 属于 |
@@ -144,12 +151,98 @@
 加上"有备考计划就 early return"，**它实际上几乎从不生效**；② 工具 schema 已在前缀缓存里，裁掉省不到单轮成本的 3%；
 ③ 硬编码关键词一旦误裁，代价是"模型说我没有这个能力"，比多带几个工具严重得多。
 
-### 5.3 留下的死代码（待收尾，没清是因为牵连面大）
+### 5.3 死代码已于当天清掉（2026-10-09，commit `383d09f`）
 
-`LlmEscalation` / `LlmScenario.DIALOG_DEEP` / `AgentLoop` 里 `effectiveMaxRounds` 与升档超时 /
-`agent.deep-*` 三个配置 / 面板「思考强度」里的"对话（模型申请升档）"那一行 —— **触发它们的
-`thinkDeeper` 已经没了，所以这一整条链现在不可达**。没顺手删的原因：它横跨 AgentLoop 的轮数与超时逻辑、
-LlmScenarioSettings、以及前端滑块，属于独立一次改动。**代码里和 yml 里都留了 `⚠️ 已不可达` 的注释。**
+`LlmEscalation` / `LlmScenario.DIALOG_DEEP` / `AgentLoop` 的 `effectiveMaxRounds` 与升档超时 /
+`agent.deep-*` 三个配置 / 面板「思考强度」的"对话（模型申请升档）"那一行 —— 触发它们的 `thinkDeeper`
+已经没了，**整条链不可达，当天全部删除**（10 个文件，+16/-93）。
+
+顺带一起清的：
+
+- `AgentLoop` 的"只在问时间时才拼时间"正则（`currentTimePattern`/`requestsCurrentTime`）——实测**一次都没命中**，
+  而模型为此白调了 150 次 `getCurrentTime`；现在改成**每轮都拼**。
+- `application.yml` / `docker-compose.remote.yml` 里随之作废的键，以及 `LLM_REASONING_EFFORT` 默认串里的 `dialog_deep=low`。
+- `web/src/labels.js` 的 `dialog_deep`。
+
+**生产实证**：镜像 `wechat-agent:383d09f`、0 重启、`工具注册完成：11 个类 / 51 个工具`、
+近 40 分钟 0 条 ERROR、面板思考强度接口正好 **5 个场景**（dialog/extract/reflect/reminder_parse/schedule_parse）。
+
+### 5.5 下一步的候选（**未做，等判断**）
+
+盘点时只统计了「调用**次数**」，**没有统计失败率**。而工具失败在库里是有标记可判的——
+`conversation_memory` 的 `system` 行、`phase=result`，内容以 `【工具执行失败】` / `【工具执行已中断】` 开头，
+或 `工具执行抛出异常：<异常类>`（见 `ToolExecutionOutcome` / `AgentLoop.executeTool`）。
+当初算出的唯一一条"高失败率"是 `inspectRecentUnstoredMedia` **8 次里 6 次失败（75%）**，
+而那正是 2026-10-09 修掉的那个 bug（`pending == null` 时抛 `IllegalStateException` 而不是返回说明）。
+**所以很可能还有别的工具在静默失败** —— 一条按工具分组的 SQL 就能查出来，这是目前最有价值的下一步。
+
+提示词侧还剩两条**有数据支持**可砍的长规则（工具 5 周 0 调用，规则却每轮都在付钱）：
+规则 **8（下载**，`findDownloadableLinks`/`downloadWebFile` 0 次**）**、规则 **19（面试**，`startInterviewPractice`/`recordInterviewRound` 0 次，本条 220 字是全文最长之一**）**。
+注意规则 19 不是冗余——它是坑 27（模型漏调 `recordInterviewRound`）的补丁；砍它等于退保，
+所以这是"功能你还用不用"的判断，不是"技术上该不该"。
+
+---
+
+## 6. 按工具的失败率（2026-10-09 晚实测，**只读 SQL，未改任何东西**）
+
+口径：`conversation_memory` 的 `role='system' AND content LIKE 'tool=%phase=result%'`；
+失败判据＝内容含 `【工具执行失败` / `【工具执行已中断` / `工具执行抛出异常`。
+时间窗 **2026-09-02 17:14 ~ 2026-10-09 23:17**，result 行 **522**、call 行 **522**。
+**总失败率 26/522 = 5.0%**。
+
+| 工具 | 调用 | 失败 | 失败率 |
+|---|---|---|---|
+| `readWebPage` | 24 | 8 | **33.3%** |
+| `inspectRecentUnstoredMedia` | 8 | 6 | **75.0%** |
+| `readStoredMedia` | 30 | 5 | 16.7% |
+| `searchLatestWeb` | 11 | 3 | 27.3% |
+| `parseReminder` | 11 | 2 | 18.2% |
+| `searchWeb` | 24 | 1 | 4.2% |
+| `replaceReminder` | 4 | 1 | 25.0% |
+
+其余 **40 个工具有调用、0 失败**（`recallMemoryFacts` 83、`listStoredMedia` 78、`getCurrentTime` 75…）。
+
+### 6.1 **结论：26 次"失败"里 14 次（54%）根本不是失败，或不该重试**
+
+逐个看失败原因（不是猜，是库里的原文）：
+
+| 类别 | 次数 | 原文 | 判定 |
+|---|---|---|---|
+| **需要用户补充信息**，却被标成失败 | 3 | `parseReminder`「我需要确认一下：上午1-2节的具体上课时间？…」、`parseReminder`「我还不知道具体在什么时候提醒你，告诉我个时间？」、`replaceReminder`「我没听清要提醒你什么事，再说一遍？」 | **误标**。这三条正文本来就是**给用户的话术**，却被包成 `【工具执行失败】` |
+| **正常说明**，却抛异常走了失败通道 | 6 | `inspectRecentUnstoredMedia`「没有可查看的近期未保存图片或文件」 | **误标**（`pending==null` 抛 `IllegalStateException`）——**2026-10-09 已修**（返回说明字符串） |
+| **确定性失败却被自动重试** | 8 | `readWebPage`：HTTP 404 ×2、HTTP 403 ×2、"这个链接不安全或格式不正确"、"不是可读取的网页文本"、"网页暂时无法访问" ×2 | **白重试**。4xx / 参数非法重试必然还失败，却等了一轮再报 |
+| **文件真丢了**（历史伤痕） | 5 | `readStoredMedia`「文件记录存在，但磁盘文件已丢失」 | 全在 **2026-09-13 20:07~20:26**，正是坑 38（媒体落在容器可写层、部署即清空）造成的；挂载修好后再没出现 |
+| **搜索服务不可用**（历史伤痕） | 4 | `searchWeb`/`searchLatestWeb`「搜索服务暂时不可用」 | 全在 **2026-09-12 15:52~15:53**，正是修 SearXNG 引擎配置（坑 3）那天；之后没再出现 |
+
+### 6.2 为什么"误标"是**用户可见的真 bug**（不只是观感）
+
+提示词**第 9 条**白纸黑字写着：「工具结果会明确标为'工具执行成功'或'工具执行失败'。**只能依据成功结果声称完成**；
+失败时如实说明失败阶段和原因」。
+
+于是用户说「上午 1-2 节提醒我一下」→ `parseReminder` 想追问具体时间 → 被标成**失败** → 模型按第 9 条办事，
+很可能回「设置提醒失败了」而不是「上午 1-2 节是几点？」。**澄清被降级成了故障。**
+
+### 6.3 为什么 `readWebPage` 的重试是纯浪费
+
+`WebPageTool.readWebPage` 对 HTTP 4xx / 非法链接**抛 `IllegalStateException`**（第 60、64 行），
+而 `@ToolExecutionPolicy(SLOW_EXTERNAL)` 既没 `retryable=false` 也不是 `NonIdempotentTool`
+→ `ToolInvocationService.invokeWithRetry` **必然重试一次**。确定性的 404 等一轮再 404，
+用户白等一个往返，日志还留下误导性的「已自动重试 1 次」。
+
+> **对比**：`MediaMemoryTool.readStoredMedia` 的 catch 里**已经写了注释**「文件不会自己出现…
+> 不要被工具框架当成瞬时故障再重试一轮」，但它用的是 `ToolBusinessResult.failure(...)`——
+> 这个工厂方法**恰好**是 `retryable=false`，所以意图达成了。**修法是"用什么返回类型"，不是改注释。**
+
+### 6.4 建议的动作（**未做，等确认**）
+
+| # | 动作 | 证据 | 风险 |
+|---|---|---|---|
+| **A1** | `readWebPage` 把**确定性失败**（4xx / 非法链接 / 非文本）改成 `ToolBusinessResult.failure(...)` 返回，**保留**超时 / 5xx / 网络异常继续抛异常走重试 | §6.1 第三行 8 次 | 低：只改返回通道，不改抓取逻辑 |
+| **A2** | 给「需要用户补充信息」一个**非失败状态**（输出换标签，如 `【需要用户补充信息】`），`ReminderService` 里**属于追问**的那几处 `notCompleted` 走它；提示词第 9 条补一句"标为『需要用户补充信息』时把问题原样转述给用户，不要说失败" | §6.1 第一行 3 次 + 第 9 条 | 中：动的是**工具结果契约文本 + 提示词**，两边必须一起改并真机验一次 |
+| **A3** | 查「记录存在但磁盘文件丢失」的媒体还有多少行（**涉及存量数据，先给方案**） | 09-13 之后未再出现 | 待查 |
+
+**已不需要做的**（本次数据确认已随历史修复消失）：`inspectRecentUnstoredMedia` 假失败、
+`getCurrentTime` 白调 75 次、搜索不可用、`readStoredMedia` 重试。
 
 ### 5.4 提示词整理：只做了"编号重排 + 一组真合并"
 

@@ -47,6 +47,15 @@ public record ToolExecutionOutcome(String content, boolean successful, int attem
         return new ToolExecutionOutcome(label + "\n原因：" + reason, false, attempts, reason);
     }
 
+    /**
+     * 需要用户补一句才能继续——**不是失败**。正文直接就是该问用户的那句话，所以不加「原因：」前缀。
+     */
+    public static ToolExecutionOutcome needsInput(String message, int attempts) {
+        String reason = normalizeReason(message);
+        return new ToolExecutionOutcome("【需要用户补充信息】\n" + reason, false,
+                attempts, reason, ToolExecutionStatus.NEEDS_INPUT);
+    }
+
     public static ToolExecutionOutcome partial(String message, int attempts) {
         String reason = normalizeReason(message);
         return new ToolExecutionOutcome("【工具部分完成】\n原因：" + reason, false,

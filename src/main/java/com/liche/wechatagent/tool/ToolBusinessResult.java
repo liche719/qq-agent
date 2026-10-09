@@ -40,6 +40,11 @@ public record ToolBusinessResult(boolean successful, String content, String fail
         return new ToolBusinessResult(false, reason, reason, true);
     }
 
+    /** 不是失败，是"这事得用户再补一句"（提醒缺时间/指代不明）。不重试，也不该被说成故障。 */
+    public static ToolBusinessResult needsInput(String message) {
+        return new ToolBusinessResult(false, message, message, false, ToolExecutionStatus.NEEDS_INPUT);
+    }
+
     public static ToolBusinessResult partial(String message) {
         return new ToolBusinessResult(false, message, message, false, ToolExecutionStatus.PARTIALLY_SUCCEEDED);
     }

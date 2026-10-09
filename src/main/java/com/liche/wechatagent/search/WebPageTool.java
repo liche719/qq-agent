@@ -2,6 +2,7 @@ package com.liche.wechatagent.search;
 
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.network.PublicUrlValidator;
+import com.liche.wechatagent.tool.ToolBusinessResult;
 import com.liche.wechatagent.tool.ToolExecutionPolicy;
 import com.liche.wechatagent.tool.ToolExecutionClass;
 import dev.langchain4j.agent.tool.Tool;
@@ -34,51 +35,73 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     private final String userAgent;
     private final PublicUrlValidator urlValidator;
 
+    /**
+     * 确定性不可读：链接非法、HTTP 4xx、不是网页文本、跳转异常……同一个链接再试多少次都一样。
+     *
+     * <p>**为什么要单独分一类**（2026-10-09 实测修）：原来这些情况一律 `throw IllegalStateException`，
+     * 而本工具的策略是 {@code SLOW_EXTERNAL}（可重试），于是框架**必然重试一次**——404 等一轮还是 404，
+     * 用户白等一个往返，失败记录里也留下误导性的「已自动重试 1 次」。实测 24 次 `readWebPage` 有 8 次失败
+     * （33%），全是这一类。瞬时故障（超时 / 连接失败 / DNS / 5xx）仍然抛异常，继续享受重试。
+     */
+    private static final class UnreadablePageException extends RuntimeException {
+        UnreadablePageException(String message) {
+            super(message);
+        }
+    }
+
     @Tool(value = "读取指定公开网页的正文。当用户给出 URL，或需要查看搜索结果中的具体页面、文章详情时调用。只支持公开 HTTP/HTTPS 页面。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public String readWebPage(String url) {
+    public ToolBusinessResult readWebPage(String url) {
         status("我正在打开这个网页…");
         try {
-            URI current = urlValidator.validate(url);
-            for (int redirects = 0; redirects <= maxRedirects; redirects++) {
-                Request request = new Request.Builder()
-                        .url(current.toString())
-                        .header("User-Agent", userAgent)
-                        .header("Accept", "text/html,text/plain,application/json;q=0.9,*/*;q=0.1")
-                        .get()
-                        .build();
-                try (Response response = client.newCall(request).execute()) {
-                    if (response.isRedirect()) {
-                        String location = response.header("Location");
-                        if (location == null || location.isBlank()) {
-                            throw new IllegalStateException("网页跳转失败：服务端没有提供跳转地址");
-                        }
-                        current = urlValidator.validate(current.resolve(location).toString());
-                        continue;
-                    }
-                    if (!response.isSuccessful() || response.body() == null) {
-                        throw new IllegalStateException("网页访问失败：HTTP " + response.code());
-                    }
-                    String contentType = response.header("Content-Type", "").toLowerCase();
-                    if (!contentType.startsWith("text/") && !contentType.contains("json")) {
-                        throw new IllegalStateException("这个链接不是可读取的网页文本，当前只支持 HTML、纯文本或 JSON 页面");
-                    }
-                    String body = readBody(response);
-                    return extractText(current.toString(), contentType, body);
-                }
-            }
-            throw new IllegalStateException("网页跳转次数过多，无法继续访问");
-        } catch (IllegalStateException exception) {
-            throw exception;
+            return ToolBusinessResult.success(openAndExtract(url));
+        } catch (UnreadablePageException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
         } catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("这个链接不安全或格式不正确，无法访问", exception);
-        } catch (Exception exception) {
+            return ToolBusinessResult.failure("这个链接不安全或格式不正确，无法访问");
+        } catch (IOException exception) {
             if (hasCauseMessage(exception, "response too large")) {
-                throw new IllegalStateException("网页内容超过安全读取上限（"
-                        + readableSize(maxResponseBytes) + "），无法读取", exception);
+                return ToolBusinessResult.failure("网页内容超过安全读取上限（"
+                        + readableSize(maxResponseBytes) + "），无法读取");
             }
+            // 超时 / 连接失败 / DNS：瞬时故障，抛出去让工具框架重试
             throw new IllegalStateException("网页暂时无法访问，请稍后重试或换一个链接", exception);
         }
+    }
+
+    private String openAndExtract(String url) throws IOException {
+        URI current = urlValidator.validate(url);
+        for (int redirects = 0; redirects <= maxRedirects; redirects++) {
+            Request request = new Request.Builder()
+                    .url(current.toString())
+                    .header("User-Agent", userAgent)
+                    .header("Accept", "text/html,text/plain,application/json;q=0.9,*/*;q=0.1")
+                    .get()
+                    .build();
+            try (Response response = client.newCall(request).execute()) {
+                if (response.isRedirect()) {
+                    String location = response.header("Location");
+                    if (location == null || location.isBlank()) {
+                        throw new UnreadablePageException("网页跳转失败：服务端没有提供跳转地址");
+                    }
+                    current = urlValidator.validate(current.resolve(location).toString());
+                    continue;
+                }
+                if (!response.isSuccessful() || response.body() == null) {
+                    int code = response.code();
+                    if (code >= 400 && code < 500) {
+                        throw new UnreadablePageException("网页访问失败：HTTP " + code);
+                    }
+                    throw new IllegalStateException("网页访问失败：HTTP " + code);
+                }
+                String contentType = response.header("Content-Type", "").toLowerCase();
+                if (!contentType.startsWith("text/") && !contentType.contains("json")) {
+                    throw new UnreadablePageException("这个链接不是可读取的网页文本，当前只支持 HTML、纯文本或 JSON 页面");
+                }
+                return extractText(current.toString(), contentType, readBody(response));
+            }
+        }
+        throw new UnreadablePageException("网页跳转次数过多，无法继续访问");
     }
 
     private boolean hasCauseMessage(Throwable throwable, String expected) {

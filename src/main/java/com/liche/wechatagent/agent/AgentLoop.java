@@ -548,6 +548,10 @@ public class AgentLoop {
             if (outcome == null || outcome.successful()) {
                 continue;
             }
+            // 「需要用户补充信息」不是未完成：工具在正常等用户回话，不该进"工具调用未完成"的留痕。
+            if (outcome.status() == com.liche.wechatagent.tool.ToolExecutionStatus.NEEDS_INPUT) {
+                continue;
+            }
             if (hasDetails) {
                 notice.append("；");
             }

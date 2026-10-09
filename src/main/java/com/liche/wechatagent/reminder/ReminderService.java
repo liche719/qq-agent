@@ -156,22 +156,26 @@ public class ReminderService {
         }
     }
 
+    /**
+     * 解析结果的校验：这里的"没通过"全是**要用户再补一句话**，不是故障——所以一律走 {@code needsInput}。
+     * 真失败（落库/调度出错）在下面的 catch 里，仍然是 {@code notCompleted}。
+     */
     private ReminderOperationResult validateParsed(ReminderParseService.ParsedReminder parsed) {
         if (parsed == null) {
-            return ReminderOperationResult.notCompleted("我没听清要提醒你什么事，再说一遍？");
+            return ReminderOperationResult.needsInput("我没听清要提醒你什么事，再说一遍？");
         }
         if (parsed.missing() != null && !parsed.missing().isEmpty()) {
-            return ReminderOperationResult.notCompleted("我需要确认一下：" + String.join("；", parsed.missing())
+            return ReminderOperationResult.needsInput("我需要确认一下：" + String.join("；", parsed.missing())
                     + "（请补充具体事项和时间）");
         }
         if (parsed.content() == null || parsed.content().isBlank()) {
-            return ReminderOperationResult.notCompleted("我没听清要提醒你什么事，再说一遍？");
+            return ReminderOperationResult.needsInput("我没听清要提醒你什么事，再说一遍？");
         }
         if (parsed.triggerAt() == null) {
-            return ReminderOperationResult.notCompleted("我还不知道具体在什么时候提醒你，告诉我个时间？");
+            return ReminderOperationResult.needsInput("我还不知道具体在什么时候提醒你，告诉我个时间？");
         }
         if (!parsed.triggerAt().isAfter(now())) {
-            return ReminderOperationResult.notCompleted("这个时间已经过去了，换个未来的时间试试？");
+            return ReminderOperationResult.needsInput("这个时间已经过去了，换个未来的时间试试？");
         }
         return ReminderOperationResult.completed("");
     }
@@ -204,11 +208,11 @@ public class ReminderService {
     private ReminderOperationResult replaceFromParsedLocked(ReminderParseService.ParsedReminder parsed,
                                                              String userId, Long reminderId) {
         if (reminderId == null) {
-            return ReminderOperationResult.notCompleted("还没有要调整的提醒 ID，请先查看当前提醒。");
+            return ReminderOperationResult.needsInput("还没有要调整的提醒 ID，请先查看当前提醒。");
         }
         ReminderTask oldTask = repository.findByIdAndUserId(reminderId, userId).orElse(null);
         if (oldTask == null) {
-            return ReminderOperationResult.notCompleted("没有找到这个提醒，确认一下 ID？");
+            return ReminderOperationResult.needsInput("没有找到这个提醒，确认一下 ID？");
         }
         if (!ReminderTask.STATUS_PENDING.equals(oldTask.getStatus())) {
             return ReminderOperationResult.notCompleted("这个提醒已经结束了，不能再调整。");
@@ -335,12 +339,12 @@ public class ReminderService {
 
     private ReminderOperationResult cancelResultLocked(String userId, Long reminderId) {
         if (reminderId == null || reminderId <= 0) {
-            return ReminderOperationResult.notCompleted("提醒 ID 无效，请先查看当前提醒。");
+            return ReminderOperationResult.needsInput("提醒 ID 无效，请先查看当前提醒。");
         }
         ReminderTask task = repository.findByIdAndUserId(reminderId, userId)
                 .orElse(null);
         if (task == null) {
-            return ReminderOperationResult.notCompleted("没有找到这个提醒，确认一下 ID？");
+            return ReminderOperationResult.needsInput("没有找到这个提醒，确认一下 ID？");
         }
         if (!ReminderTask.STATUS_PENDING.equals(task.getStatus())) {
             return ReminderOperationResult.notCompleted("这个提醒已经结束了，不用取消。");

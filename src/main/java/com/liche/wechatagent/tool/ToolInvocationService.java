@@ -97,6 +97,8 @@ public class ToolInvocationService {
                                 ? ToolExecutionOutcome.partial(business.failureReason(), attempt)
                                 : business.status() == ToolExecutionStatus.UNKNOWN_RESULT
                                 ? ToolExecutionOutcome.unknown(business.failureReason(), attempt)
+                                : business.status() == ToolExecutionStatus.NEEDS_INPUT
+                                ? ToolExecutionOutcome.needsInput(business.failureReason(), attempt)
                                 : ToolExecutionOutcome.failure(business.failureReason(), attempt);
                     }
                 } else {
