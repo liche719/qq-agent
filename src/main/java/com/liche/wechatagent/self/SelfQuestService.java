@@ -52,11 +52,11 @@ public class SelfQuestService {
      * <p>给到它自己能做的事：写自己那侧、管自己的方向与笔记、搜索、读网页、
      * 下载资料、管自己的资料库。
      *
-     * <p>（原来还有 **深想** `thinkDeeper`；2026-10-09 连同工具本身一起撤了——它在生产上 5 周零调用，
-     * 而且面板已经有「思考强度」滑块替代它。）
+     * <p>（原来还有 **深想** `thinkDeeper` 与 `TimeTool`；两者都在 2026-10-09 撤了——前者 5 周零调用、
+     * 面板已有「思考强度」滑块替代，后者是因为当前时间改成**每轮直接写进输入**，不再需要工具。）
      */
     private static final Set<String> QUEST_TOOL_PROVIDERS = Set.of(
-            "AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool",
+            "AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool",
             "WebFileTool", "MediaMemoryTool");
 
     /**

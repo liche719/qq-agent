@@ -108,7 +108,6 @@ public class AgentLoop {
     private final String imageUserAgent;
     /** 工具失败详情要不要拼进给用户的回复（2026-09-14 默认关：只打 WARN 日志） */
     private final boolean toolFailureNoticeEnabled;
-    private final Pattern currentTimePattern;
 
     /** 问时间时给它的时间格式（与 TimeTool 同一时区来源） */
     private static final DateTimeFormatter CURRENT_TIME_FORMAT =
@@ -163,7 +162,6 @@ public class AgentLoop {
                 ? DEFAULT_IMAGE_USER_AGENT : imageUserAgent.trim();
         this.toolFailureNoticeEnabled = toolFailureNoticeEnabled;
         AgentPolicyProperties policies = policyProperties == null ? new AgentPolicyProperties() : policyProperties;
-        this.currentTimePattern = compileCurrentTimePattern(policies.getCurrentTimePattern());
         Map<String, String> configuredDisplayNames = policies.getToolDisplayNames();
         this.toolDisplayNames = configuredDisplayNames == null
                 ? AgentPolicyProperties.defaultToolDisplayNames() : Map.copyOf(configuredDisplayNames);
@@ -238,8 +236,11 @@ public class AgentLoop {
             // 但思考模式下上游要求 assistant 消息必须回传 reasoning_content，
             // 伪造的那条没有 → HTTP 400（症状：用户一问「今天几号」就收到"出错了"，是线上真 bug）。
             // 现在改成把时间作为**本轮输入的一部分**给它：不伪造历史、不动消息结构。
-            String effectiveText = requestsCurrentTime(userText, currentTimePattern)
-                    ? appendCurrentTime(userText) : userText;
+            // **每一轮都带当前时间**（2026-10-09 改）。原来只在用户"问时间"时才拼（正则匹配），
+            // 但实测那条正则 5 周 517 条消息里**一次都没命中过**——而模型为了算「明天 / 后天 / 这周 / 还有几天」
+            // 这类相对日期，自己调了 **150 次** `getCurrentTime`：每调一次就多一整轮 LLM 往返（多 1~2 秒）。
+            // 把时间直接写进输入，这 150 次就没了；代价是每轮约 40 个 token（在未命中的尾巴上，约 0.00004 元）。
+            String effectiveText = appendCurrentTime(userText);
             List<ChatMessage> messages = buildConversationMessages(userId, persona, coreSection, workSection,
                     history, effectiveText, images, documents);
             Set<String> successfulTools = new LinkedHashSet<>();
@@ -626,22 +627,14 @@ public class AgentLoop {
         return stripped ? kept.toString().strip() : reply;
     }
 
-    static boolean requestsCurrentTime(String userText) {
-        return requestsCurrentTime(userText, Pattern.compile(AgentPolicyProperties.DEFAULT_CURRENT_TIME_PATTERN));
-    }
-
-    private static boolean requestsCurrentTime(String userText, Pattern pattern) {
-        if (userText == null || userText.isBlank()) {
-            return false;
-        }
-        return pattern != null && pattern.matcher(userText).matches();
-    }
-
     /**
      * 把当前时间拼进本轮输入（原来是把一条伪造的工具调用塞进消息历史，见 chat 里的注释）。
      *
      * <p>为什么不做成工具结果：模型可能"看到了却不用"，所以这里用陈述句把事实直接给它，
      * 并明确要求直接采用——这类问题不该靠模型自己想起来调工具。
+     *
+     * <p>**2026-10-09 起改成每轮都拼**：见 {@code chat} 里的说明（那条"只在问时间时才拼"的正则
+     * 一次都没命中过，而模型为此白调了 150 次 `getCurrentTime`）。
      */
     private String appendCurrentTime(String userText) {
         LocalDateTime now = LocalDateTime.now(currentZone());
@@ -766,16 +759,6 @@ public class AgentLoop {
 
     private static long bounded(long value, long minimum, long maximum, long fallback) {
         return value < minimum || value > maximum ? fallback : value;
-    }
-
-    private static Pattern compileCurrentTimePattern(String expression) {
-        String value = expression == null || expression.isBlank()
-                ? AgentPolicyProperties.DEFAULT_CURRENT_TIME_PATTERN : expression.trim();
-        try {
-            return Pattern.compile(value, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-        } catch (RuntimeException exception) {
-            return Pattern.compile(AgentPolicyProperties.DEFAULT_CURRENT_TIME_PATTERN);
-        }
     }
 
     /**

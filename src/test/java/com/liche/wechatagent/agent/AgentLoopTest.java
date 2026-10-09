@@ -110,13 +110,6 @@ class AgentLoopTest {
     }
 
     @Test
-    void recognizesDirectCurrentTimeRequestsForMandatoryFreshness() {
-        assertEquals(true, AgentLoop.requestsCurrentTime("现在几点了？"));
-        assertEquals(true, AgentLoop.requestsCurrentTime("今天是星期几？"));
-        assertEquals(false, AgentLoop.requestsCurrentTime("明天上午九点提醒我开会。"));
-    }
-
-    @Test
     void acceptsOnlyBoundedSupportedImageDataUrls() {
         AgentLoop loop = new AgentLoop(Mockito.mock(StreamingChatModel.class), Mockito.mock(ToolRegistry.class),
                 Mockito.mock(ToolStatusService.class), Mockito.mock(MediaToolContextService.class),

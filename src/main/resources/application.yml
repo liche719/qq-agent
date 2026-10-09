@@ -155,8 +155,9 @@ agent:
   tool-progress-enabled: ${AGENT_TOOL_PROGRESS_ENABLED:false}
   message-idempotency-ttl-hours: ${AGENT_MESSAGE_IDEMPOTENCY_TTL_HOURS:24}
   policy:
-    # 可按部署语言覆盖；留空或非法表达式时回退到内置安全规则。
-    current-time-pattern: '${AGENT_CURRENT_TIME_PATTERN:(?s).*?(?:现在(?:是)?几点|当前(?:是)?几点|(?:现在|当前)(?:的)?时间|今天(?:是)?(?:几号|星期几|周几|日期)).*}'
+    # 注意：原来这里有个 `current-time-pattern`（"只在用户问时间时才把时间拼进输入"）。
+    # 2026-10-09 删掉了：那条正则 5 周 517 条消息里一次都没命中过，而模型为了算相对日期
+    # 自己调了 150 次 getCurrentTime（每次多一整轮往返）。现在**每轮都直接把时间拼进输入**。
     default-persona: '${AGENT_DEFAULT_PERSONA:你是用户的专属长期智能助手，说话自然口语化，像真人一样沟通，拒绝生硬机械的机器人话术。你会自动记住用户的重要信息和目标，帮用户设置提醒、搜索资料。用户可以随时用 /set-prompt 指令重新设定你的身份和性格。}'
     max-persona-chars: ${AGENT_MAX_PERSONA_CHARS:2000}
     tool-display-names:
@@ -164,7 +165,6 @@ agent:
       searchLatestWeb: 搜索
       searchVerifiedWeb: 核验搜索
       readWebPage: 读取网页
-      getCurrentTime: 获取时间
       parseReminder: 创建提醒
       replaceReminder: 调整提醒
       cancelReminder: 取消提醒

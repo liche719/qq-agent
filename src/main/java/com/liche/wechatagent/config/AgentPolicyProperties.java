@@ -13,13 +13,10 @@ public class AgentPolicyProperties {
             "你是用户的专属长期智能助手，说话自然口语化，像真人一样沟通，拒绝生硬机械的机器人话术。"
                     + "你会自动记住用户的重要信息和目标，帮用户设置提醒、搜索资料。"
                     + "用户可以随时用 /set-prompt 指令重新设定你的身份和性格。";
-    public static final String DEFAULT_CURRENT_TIME_PATTERN =
-            "(?s).*?(?:现在(?:是)?几点|当前(?:是)?几点|(?:现在|当前)(?:的)?时间|今天(?:是)?(?:几号|星期几|周几|日期)).*";
     private static final Map<String, String> DEFAULT_TOOL_DISPLAY_NAMES = Map.ofEntries(
             Map.entry("searchWeb", "搜索"),
             Map.entry("searchLatestWeb", "搜索"),
             Map.entry("readWebPage", "读取网页"),
-            Map.entry("getCurrentTime", "获取时间"),
             Map.entry("parseReminder", "创建提醒"),
             Map.entry("replaceReminder", "调整提醒"),
             Map.entry("cancelReminder", "取消提醒"),
@@ -66,7 +63,6 @@ public class AgentPolicyProperties {
             Map.entry("sendDownloadedFile", "发送文件"));
 
     private String defaultPersona = DEFAULT_PERSONA;
-    private String currentTimePattern = DEFAULT_CURRENT_TIME_PATTERN;
     private int maxPersonaChars = 2_000;
     private Map<String, String> toolDisplayNames = new LinkedHashMap<>(DEFAULT_TOOL_DISPLAY_NAMES);
 
@@ -77,16 +73,6 @@ public class AgentPolicyProperties {
     public void setDefaultPersona(String defaultPersona) {
         if (defaultPersona != null && !defaultPersona.isBlank()) {
             this.defaultPersona = defaultPersona.trim();
-        }
-    }
-
-    public String getCurrentTimePattern() {
-        return currentTimePattern;
-    }
-
-    public void setCurrentTimePattern(String currentTimePattern) {
-        if (currentTimePattern != null && !currentTimePattern.isBlank()) {
-            this.currentTimePattern = currentTimePattern.trim();
         }
     }
 

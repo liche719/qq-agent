@@ -154,7 +154,14 @@ public class MediaToolContextService {
         PendingMediaKey key = findMostRecentPending(media, now);
         PendingMedia pending = key == null ? null : pendingBySource.get(key);
         if (pending == null) {
-            throw new IllegalStateException("没有可查看的近期未保存图片或文件");
+            // **这不是"失败"，是一次正常且明确的回答**（2026-10-09 改）。
+            // 原来这里抛 IllegalStateException，而 ToolInvocationService 对未声明策略的工具默认
+            // `retryable=true` → 白白重试一轮，结果里还写着「工具执行失败」，模型就会跟用户说
+            // "工具出错了"。实测 8 次调用里 6 次都是这条，用户说的只是"你找找""我好像给你发过的"。
+            // 返回一句正常的说明，模型才能正确告诉用户"那你得再发一次"。
+            return "没有可查看的此前未保存媒体。如果他指的东西就在**当前这条消息**里，你本来就能直接看到，"
+                    + "不需要再查；如果是更早发的、又没保存过，那需要他重新发一次。"
+                    + "**不要把这件事说成工具失败。**";
         }
 
         CurrentMedia activated = new CurrentMedia(media.userId(), media.scope(), media.taskId(), media.messageId(),
