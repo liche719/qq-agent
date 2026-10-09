@@ -114,15 +114,13 @@ services:
       MEMORY_CONVERSATION_TOOL_RECALL_LIMIT: ${MEMORY_CONVERSATION_TOOL_RECALL_LIMIT:-8}
       MEMORY_CONVERSATION_TOOL_MIN_SCORE: ${MEMORY_CONVERSATION_TOOL_MIN_SCORE:-0.45}
       MEMORY_EPISODE_VECTOR_FLOOR: ${MEMORY_EPISODE_VECTOR_FLOOR:-0.45}
-      # thinkDeeper（模型自己申请升档）的预算与额度
+      # 升档相关的三个配置：**2026-10-09 起已不可达**（触发升档的 thinkDeeper 工具已删除，
+      # 5 周零调用、面板「思考强度」滑块替代）。留着是为了不动 LlmEscalation 那条链，属待收尾死代码。
       AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
       AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
-      THINKING_DAILY_LIMIT_PER_USER: ${THINKING_DAILY_LIMIT_PER_USER:-5}
-      # 工具集裁剪（可一键关掉）
-      AGENT_TOOL_TRIM_ENABLED: ${AGENT_TOOL_TRIM_ENABLED:-true}
-      AGENT_TOOL_TRIM_HISTORY_TURNS: ${AGENT_TOOL_TRIM_HISTORY_TURNS:-4}
-      # 升档后要不要先发一句"稍等，我仔细想想"（否则用户会盯着 10~30 秒没有任何反馈）
       AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
+      # 工具集裁剪：现在只按模块自己声明的可见性规则裁（每个用户历史轮数那个键已随考试关键词裁剪一起删）
+      AGENT_TOOL_TRIM_ENABLED: ${AGENT_TOOL_TRIM_ENABLED:-true}
       # 工具失败详情要不要拼进用户可见的回复（默认 false，只进日志）
       AGENT_TOOL_FAILURE_NOTICE_ENABLED: ${AGENT_TOOL_FAILURE_NOTICE_ENABLED:-false}
       QQ_ENABLED: ${QQ_ENABLED:-false}

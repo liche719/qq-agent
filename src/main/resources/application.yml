@@ -130,16 +130,17 @@ agent:
   tool-retry-delay-ms: ${AGENT_TOOL_RETRY_DELAY_MS:0}
   tool-max-result-chars: ${AGENT_TOOL_MAX_RESULT_CHARS:8000}
   max-tool-rounds: ${AGENT_MAX_TOOL_ROUNDS:8}
-  # thinkDeeper 升档后放宽的预算：更多工具轮 + 更长的流式超时（复杂任务不至于半路 fallback）
+  # 升档后放宽的预算：更多工具轮 + 更长的流式超时（复杂任务不至于半路 fallback）。
+  # ⚠️ 2026-10-09 起**已不可达**：触发升档的 thinkDeeper 工具已删（5 周零调用，面板「思考强度」滑块替代它）。
+  # 这两行连同 LlmEscalation / LlmScenario.DIALOG_DEEP 一起留着没清，属于**待收尾的死代码**（见 docs）。
   deep-tool-rounds: ${AGENT_DEEP_TOOL_ROUNDS:16}
   deep-stream-timeout-seconds: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:240}
-  # thinkDeeper 的按用户日额度：0 = 不限（只观测）
-  thinking-daily-limit-per-user: ${THINKING_DAILY_LIMIT_PER_USER:5}
-  # 按用户状态裁剪工具集：没有备考计划、近期也没聊考研的用户不下发 18 个考试工具 schema
-  # （saveExamPlan / viewExamPlan 永远保留，否则新用户建不出计划）
+  # 工具集裁剪：现在只按**模块自己声明的可见性规则**裁（如自主体那组只在它自己的作用域下发）。
+  # 原来还有一套"按关键词裁 18 个考试工具"的逻辑，2026-10-09 整块删除——理由见 ToolSetTrimmer 的类注释：
+  # 它几乎从不生效（关键词太宽 + 有备考计划就 early return）、工具 schema 已在缓存里所以省不到钱、
+  # 而硬编码关键词一旦误裁就是"模型说我没有这个能力"。
   tool-trim:
     enabled: ${AGENT_TOOL_TRIM_ENABLED:true}
-    history-turns: ${AGENT_TOOL_TRIM_HISTORY_TURNS:4}
   # 工具失败详情（"⚠️ 工具调用未完成：…"）要不要拼进给用户的回复。
   # 默认 false：只打 WARN 日志——模型在正文里本来就会自然说明失败，程序再追加内部状态既重复又难看
   tool-failure-notice:

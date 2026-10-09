@@ -50,12 +50,14 @@ public class SelfQuestService {
      * 作业里允许的工具类（简单类名）——"权限给大一些，但不可逆的动作不给"。
      *
      * <p>给到它自己能做的事：写自己那侧、管自己的方向与笔记、搜索、读网页、
-     * **深想**（`thinkDeeper`——以前被挡在门外，很讽刺：它脑子里最深的工具它自己用不了）、
      * 下载资料、管自己的资料库。
+     *
+     * <p>（原来还有 **深想** `thinkDeeper`；2026-10-09 连同工具本身一起撤了——它在生产上 5 周零调用，
+     * 而且面板已经有「思考强度」滑块替代它。）
      */
     private static final Set<String> QUEST_TOOL_PROVIDERS = Set.of(
             "AgentSelfTool", "AgentQuestTool", "SearchTool", "WebPageTool", "TimeTool",
-            "ThinkingTool", "WebFileTool", "MediaMemoryTool");
+            "WebFileTool", "MediaMemoryTool");
 
     /**
      * 即便在上面那些类里也**不许**下发的两样。

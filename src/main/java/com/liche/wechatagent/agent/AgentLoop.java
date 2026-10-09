@@ -285,7 +285,7 @@ public class AgentLoop {
                                Map<String, ToolExecutionOutcome> failedTools,
                                Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink,
                                TurnScope scope) {
-        List<ToolSpecification> specifications = trimmedSpecifications(messages, userId, scope);
+        List<ToolSpecification> specifications = trimmedSpecifications(userId, scope);
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();
         double budgetYuan = scope == null ? 0 : scope.budgetYuan();
@@ -331,38 +331,10 @@ public class AgentLoop {
         return fallbackReply(failedTools, successfulTools, toolResults, sink);
     }
 
-    /** 按用户状态裁剪工具集：没有备考计划、近期也没聊考研的用户，不必背着 18 个考试工具 schema */
-    private List<ToolSpecification> trimmedSpecifications(List<ChatMessage> messages, String userId,
-                                                          TurnScope scope) {
+    /** 按模块自己声明的规则裁剪工具集（2026-10-09 起只剩这一件事，考试那套关键词裁剪已删除） */
+    private List<ToolSpecification> trimmedSpecifications(String userId, TurnScope scope) {
         List<ToolSpecification> all = toolRegistry.specificationsOf(scope);
-        if (toolSetTrimmer == null) {
-            return all;
-        }
-        List<String> userTexts = new ArrayList<>();
-        for (ChatMessage message : messages) {
-            String text = userMessageText(message);
-            if (text != null && !text.isBlank()) {
-                userTexts.add(text);
-            }
-        }
-        int keep = Math.min(userTexts.size(), toolSetTrimmer.historyTurnsToScan() + 1);
-        List<String> recent = keep <= 0 ? List.of() : userTexts.subList(userTexts.size() - keep, userTexts.size());
-        return toolSetTrimmer.trim(all, userId, recent.isEmpty() ? "" : recent.get(recent.size() - 1), recent)
-                .specifications();
-    }
-
-    /** 取一条 user 消息里的纯文本（带图片/附件时也不能炸） */
-    private String userMessageText(ChatMessage message) {
-        if (!(message instanceof UserMessage userMessage)) {
-            return null;
-        }
-        StringBuilder text = new StringBuilder();
-        for (Content content : userMessage.contents()) {
-            if (content instanceof TextContent textContent) {
-                text.append(textContent.text()).append(' ');
-            }
-        }
-        return text.toString();
+        return toolSetTrimmer == null ? all : toolSetTrimmer.trim(all, userId).specifications();
     }
 
     /** 升档（thinkDeeper）后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */
