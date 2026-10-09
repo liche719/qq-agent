@@ -74,7 +74,7 @@ services:
       # 没列的场景不传该字段、用上游默认。实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s。
       # 2026-09-29：extract 从 high 降到 low（账本显示它是最大单项开销，71% 是输出、思考占 4178 token）。
       # 这里的默认值只是兜底，面板上的滑块优先（落库、改完立刻生效）。
-      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,dialog_deep=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，
       # 4096 会把正文挤没 → JSON 解析失败、这一趟白跑（上限不计费，放宽没有额外成本）
@@ -82,7 +82,6 @@ services:
       # 反思单独一档：输出只有一句话、思考很重（4096 会被思考吃满 → 整条反思作废）
       LLM_MAX_TOKENS_REFLECT: ${LLM_MAX_TOKENS_REFLECT:-16384}
       LLM_MAX_TOKENS_DIALOG: ${LLM_MAX_TOKENS_DIALOG:-0}
-      LLM_MAX_TOKENS_DIALOG_DEEP: ${LLM_MAX_TOKENS_DIALOG_DEEP:-0}
       # 每次 LLM 调用的落库审计（llm_call_audit）；要临时关掉写库审计就把它设成 false（坑 36：不透传就改不动）
       LLM_AUDIT_ENABLED: ${LLM_AUDIT_ENABLED:-true}
       # 向量模型（记忆事实层的语义召回，2026-09-18）：**api-key 在服务器 .env 里留空占位**，
@@ -114,11 +113,6 @@ services:
       MEMORY_CONVERSATION_TOOL_RECALL_LIMIT: ${MEMORY_CONVERSATION_TOOL_RECALL_LIMIT:-8}
       MEMORY_CONVERSATION_TOOL_MIN_SCORE: ${MEMORY_CONVERSATION_TOOL_MIN_SCORE:-0.45}
       MEMORY_EPISODE_VECTOR_FLOOR: ${MEMORY_EPISODE_VECTOR_FLOOR:-0.45}
-      # 升档相关的三个配置：**2026-10-09 起已不可达**（触发升档的 thinkDeeper 工具已删除，
-      # 5 周零调用、面板「思考强度」滑块替代）。留着是为了不动 LlmEscalation 那条链，属待收尾死代码。
-      AGENT_DEEP_TOOL_ROUNDS: ${AGENT_DEEP_TOOL_ROUNDS:-16}
-      AGENT_DEEP_STREAM_TIMEOUT_SECONDS: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:-240}
-      AGENT_DEEP_NOTICE_ENABLED: ${AGENT_DEEP_NOTICE_ENABLED:-true}
       # 工具集裁剪：现在只按模块自己声明的可见性规则裁（每个用户历史轮数那个键已随考试关键词裁剪一起删）
       AGENT_TOOL_TRIM_ENABLED: ${AGENT_TOOL_TRIM_ENABLED:-true}
       # 工具失败详情要不要拼进用户可见的回复（默认 false，只进日志）

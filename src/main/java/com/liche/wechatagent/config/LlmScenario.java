@@ -20,8 +20,6 @@ public enum LlmScenario {
 
     /** 对话回复（流式） */
     DIALOG,
-    /** 对话回复 + 模型自己申请了升档（thinkDeeper）：更多工具轮 + 更长的流式超时 */
-    DIALOG_DEEP,
     /** 记忆提取 */
     EXTRACT,
     /**

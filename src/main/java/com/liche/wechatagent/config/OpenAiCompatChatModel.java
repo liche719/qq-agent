@@ -82,8 +82,7 @@ public class OpenAiCompatChatModel implements ChatModel {
     @Override
     public ChatResponse chat(ChatRequest request) {
         long started = System.nanoTime();
-        // 模型可以用 thinkDeeper 申请升档：升档后按 DIALOG_DEEP 取设置（更宽松的 max_tokens）
-        LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
+        LlmScenario scenario = LlmScenario.current();
         double effectiveTemperature = temperatureFor(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);

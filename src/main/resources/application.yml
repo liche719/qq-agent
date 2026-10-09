@@ -86,7 +86,7 @@ llm:
   # 深度思考**不再按场景开关**（2026-09-14 按用户要求整块删除：全部场景都用模型默认的思考）。
   # 原实现与实测数据保留在 docs/llm-call-modes.md（结论：这个模型默认就在思考，唯一有效的关闭方式是
   # thinking:{"type":"disabled"}；只有对话省电档能省到用户的等待时间，其余场景省的只是后台 token）。
-  # 场景见 LlmScenario：dialog / dialog_deep / extract / reflect / reminder_parse / schedule_parse
+  # 场景见 LlmScenario：dialog / extract / reflect / reminder_parse / schedule_parse
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
   # （extract,reflect,reminder_parse,schedule_parse）
   zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse}
@@ -97,7 +97,7 @@ llm:
   # **2026-09-29 改**：账本显示提取单次 0.026 元、成了最大单项开销，其中 71% 是输出、思考占 4178 token
   # （high 档）。用户决定把 extract 也从 high 降到 low——实测 low 的思考只有 high 的 1/3。
   # 这个默认值只是**兜底**：面板「模型与搜索」页每个场景都有滑块，改了立刻生效（落库，见 V19）。
-  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,dialog_deep=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
+  reasoning-effort: ${LLM_REASONING_EFFORT:dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
   # 每个场景的 max_tokens 上限（0 = 不设，保持上游默认）。**思考 token 也算进这个上限**，所以结构化场景
   # 给的是宽松兜底（防极端长思考），对话档默认不设以免截断正常长回复。
   # reflect 单独一档：输出只有一句结论、但思考很重——实测 4096 会被思考吃满、正文为空（整条反思作废）。
@@ -108,7 +108,6 @@ llm:
     structured: ${LLM_MAX_TOKENS_STRUCTURED:16384}
     reflect: ${LLM_MAX_TOKENS_REFLECT:16384}
     dialog: ${LLM_MAX_TOKENS_DIALOG:0}
-    dialog-deep: ${LLM_MAX_TOKENS_DIALOG_DEEP:0}
 
   # 每次调用的落库审计（`llm_call_audit`，2026-09-21 加）：场景/成败/耗时/命中与未命中 token/花的钱。
   # 为什么要有开关：写库挂在模型调用路径上，真出问题时得能一行环境变量关掉，而不是等重新部署。
@@ -130,11 +129,6 @@ agent:
   tool-retry-delay-ms: ${AGENT_TOOL_RETRY_DELAY_MS:0}
   tool-max-result-chars: ${AGENT_TOOL_MAX_RESULT_CHARS:8000}
   max-tool-rounds: ${AGENT_MAX_TOOL_ROUNDS:8}
-  # 升档后放宽的预算：更多工具轮 + 更长的流式超时（复杂任务不至于半路 fallback）。
-  # ⚠️ 2026-10-09 起**已不可达**：触发升档的 thinkDeeper 工具已删（5 周零调用，面板「思考强度」滑块替代它）。
-  # 这两行连同 LlmEscalation / LlmScenario.DIALOG_DEEP 一起留着没清，属于**待收尾的死代码**（见 docs）。
-  deep-tool-rounds: ${AGENT_DEEP_TOOL_ROUNDS:16}
-  deep-stream-timeout-seconds: ${AGENT_DEEP_STREAM_TIMEOUT_SECONDS:240}
   # 工具集裁剪：现在只按**模块自己声明的可见性规则**裁（如自主体那组只在它自己的作用域下发）。
   # 原来还有一套"按关键词裁 18 个考试工具"的逻辑，2026-10-09 整块删除——理由见 ToolSetTrimmer 的类注释：
   # 它几乎从不生效（关键词太宽 + 有备考计划就 early return）、工具 schema 已在缓存里所以省不到钱、

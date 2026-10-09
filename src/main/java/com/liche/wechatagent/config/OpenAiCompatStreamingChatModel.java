@@ -92,7 +92,7 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     @Override
     public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
         long started = System.nanoTime();
-        LlmScenario scenario = LlmEscalation.effective(LlmScenario.current());
+        LlmScenario scenario = LlmScenario.current();
         double effectiveTemperature = temperatureFor(scenario);
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);

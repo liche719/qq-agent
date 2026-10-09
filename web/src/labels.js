@@ -39,7 +39,6 @@ const DICTIONARY = {
   // LLM 调用场景（面板「模型与搜索」的按场景表格、思考强度滑块）
   scenario: {
     dialog: '对话（默认档）',
-    dialog_deep: '对话（模型申请升档）',
     extract: '记忆提取',
     reflect: '自主反思',
     reminder_parse: '提醒解析',

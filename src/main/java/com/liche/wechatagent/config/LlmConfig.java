@@ -22,11 +22,10 @@ public class LlmConfig {
             @Value("${llm.zero-temperature-scenarios:}") String zeroTemperatureScenarios,
             @Value("${llm.max-tokens.structured:16384}") int structuredMaxTokens,
             @Value("${llm.max-tokens.dialog:0}") int dialogMaxTokens,
-            @Value("${llm.max-tokens.dialog-deep:0}") int dialogDeepMaxTokens,
             @Value("${llm.max-tokens.reflect:16384}") int reflectMaxTokens,
-            @Value("${llm.reasoning-effort:dialog=low,dialog_deep=low,extract=high}") String reasoningEffortScenarios) {
+            @Value("${llm.reasoning-effort:dialog=low,extract=high}") String reasoningEffortScenarios) {
         return new LlmScenarioSettings(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens,
-                dialogDeepMaxTokens, reflectMaxTokens, reasoningEffortScenarios);
+                reflectMaxTokens, reasoningEffortScenarios);
     }
 
     /** 非流式模型：记忆提取 / 反思 / 提醒解析 / 排程解析等一次性调用 */

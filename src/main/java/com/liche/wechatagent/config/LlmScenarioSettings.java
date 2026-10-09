@@ -24,7 +24,6 @@ public class LlmScenarioSettings {
     private final int structuredMaxTokens;
     private final int reflectMaxTokens;
     private final int dialogMaxTokens;
-    private final int dialogDeepMaxTokens;
     /**
      * 每个场景的"思考档位"（请求体的 {@code reasoning_effort}）：2026-09-18 用户要求「对话 low、提取 high」。
      * 实测（同一道题各 4 次采样）：low 思考 984 token / 4.8s，不传 3004 / 14.0s，high 2368 / 11.2s——差别是真的。
@@ -33,24 +32,23 @@ public class LlmScenarioSettings {
     private final java.util.Map<LlmScenario, String> reasoningEffort;
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
-                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens) {
-        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, 16384, null);
+                               int structuredMaxTokens, int dialogMaxTokens) {
+        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, 16384, null);
     }
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
-                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
+                               int structuredMaxTokens, int dialogMaxTokens,
                                int reflectMaxTokens) {
-        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, dialogDeepMaxTokens, reflectMaxTokens,
+        this(zeroTemperatureScenarios, structuredMaxTokens, dialogMaxTokens, reflectMaxTokens,
                 null);
     }
 
     public LlmScenarioSettings(String zeroTemperatureScenarios,
-                               int structuredMaxTokens, int dialogMaxTokens, int dialogDeepMaxTokens,
+                               int structuredMaxTokens, int dialogMaxTokens,
                                int reflectMaxTokens, String reasoningEffortScenarios) {
         this.structuredMaxTokens = Math.max(0, structuredMaxTokens);
         this.reflectMaxTokens = Math.max(0, reflectMaxTokens);
         this.dialogMaxTokens = Math.max(0, dialogMaxTokens);
-        this.dialogDeepMaxTokens = Math.max(0, dialogDeepMaxTokens);
         this.zeroTemperature = parseScenarios(zeroTemperatureScenarios, DEFAULT_ZERO_TEMPERATURE);
         this.reasoningEffort = parseReasoningEffort(reasoningEffortScenarios);
     }
@@ -116,10 +114,6 @@ public class LlmScenarioSettings {
      * 而对话档默认仍然不设，免得把正常长回复截断。
      */
     public int maxTokensFor(LlmScenario scenario) {
-        if (scenario == LlmScenario.DIALOG_DEEP) {
-            // 升档是"要更多预算"，所以默认**不设上限**（与普通对话一致）；要限制就显式配 dialog-deep
-            return dialogDeepMaxTokens;
-        }
         if (scenario == LlmScenario.DIALOG) {
             // 对话档默认不设上限：思考 token 也算进 max_tokens，加了会截断正常长回复
             return dialogMaxTokens;
