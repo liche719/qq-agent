@@ -220,7 +220,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
   ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-10）：`wechat-agent:fdfc8b742f3e…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR、容器内 `BILI_SESSDATA` 就位。
+- **最近一次部署**（2026-10-10）：`wechat-agent:fa1d4eac39a9…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR、容器内 `BILI_SESSDATA` 就位。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。

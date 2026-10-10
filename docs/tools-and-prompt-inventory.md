@@ -339,9 +339,11 @@
 - 用户转发的 B站视频，**平台渲染进 `content` 的文本里没有链接**，卡片数据在 `ark_data` 里（详见坑 68）。
   新增 `QqArkCard` 解析它，并把封面 `preview` 当图片喂视觉模型。
   **⚠️ 实测（2026-10-10 拿真实卡片）：B站这种 `ark_type=miniapp` 卡片的 `fields` 只有
-  `[preview, source, source_logo, title]`，没有 `jump_url`** —— 拿不到 BV，也就**没法自动取字幕**。
-  落地做法：卡片没链接时**按标题搜**（`searchWeb` 搜 `site:bilibili.com <标题>`，且要求标题完全一致），
-  搜不到就让用户把链接发来——这两条都写进提示词规则 26 了。
+  `[preview, source, source_logo, title]`，没有 `jump_url`** —— 拿不到 BV。
+  **✅ 解法：拿卡片给的标题去 B站自己的搜索接口找**（`readBilibiliVideo` 收到不是链接的输入时
+  自动走这条路），要求**标题逐字一致**；实测 3 条真实转发标题全部在第 1 位命中。
+  ⚠️ **外网搜索引擎不行**：`searchWeb` 搜 `site:bilibili.com <标题>` 完全没用（引擎不认 `site:`，
+  返回一堆无关结果）——**要搜 B站就用 B站自己的接口**。
 - 新增工具 **`readBilibiliVideo`**（`bilibili/` 包）：BV/av/b23 短链 → `/x/web-interface/view` 拿 cid →
   `/x/player/wbi/v2` 拿字幕轨（失败退回 `/x/player/v2`）→ 下载字幕 → `[分:秒] 文本`。
   **取字幕要登录态**（`BILI_SESSDATA`，2026-10-10 已从用户本地那份 `config.json` 搬到服务器并验过

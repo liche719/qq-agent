@@ -164,6 +164,16 @@
    **教训：压缩日志的历史要比未压缩的久，查历史事件别只信 `agent.log`。**
    **顺带确认**：B站的 AI 字幕**要登录态**才取得到（不带 Cookie 时 `player/wbi/v2` 返回的字幕轨是 0 条），
    凭据放服务器 `.env` 的 `BILI_SESSDATA`，代码见 `bilibili/BilibiliClient`、`bilibili/BilibiliTool`。
+   **✅ 那"只转发"怎么办——用卡片给的标题去 B站自己的搜索接口找**：
+   `GET /x/web-interface/search/type?search_type=video&keyword=<标题>`，带我们的 Cookie 即可，
+   **不需要 wbi 签名**（2026-10-10 实测 `code:0`）。解析 `data.result[].bvid`，并且**要求标题逐字一致**
+   （返回的 `title` 带 `<em>` 高亮标签，比较前要去掉；空白与大小写忽略）。
+   **实测 3 条真实转发标题全部在第 1 位命中逐字一致的结果**，所以这条路可靠。
+   ⚠️ **别用外网搜索引擎**：`searchWeb` 搜 `site:bilibili.com <标题>` **完全没用**——我们配的
+   6 个引擎（yandex/naver/resulthunter/searchmysite/mwmbl/bing-cn）根本不认 `site:`，返回一堆无关结果；
+   纯标题更是只有垃圾站。**要搜 B站就用 B站自己的接口。**
+   ⚠️ **必须逐字一致**：拿错视频比没拿到更糟——模型会对着不相干的视频侃侃而谈，而回复里看不出异常；
+   不一致就返回 null，让上游如实说"搜不到，把链接发我"。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
