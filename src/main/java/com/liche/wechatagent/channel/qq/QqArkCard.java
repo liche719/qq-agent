@@ -83,8 +83,9 @@ record QqArkCard(String arkType, String arkName, String title, String desc, Stri
      * 或者干脆凭标题编视频内容。
      */
     private static final String NO_LINK_HINT =
-            "\n（这张卡片**没有携带链接**。上面是它的标题和封面；要看内容可以先按标题搜一下，"
-                    + "或者直接让他把链接/BV 号发过来。**不要凭标题猜视频里讲了什么**。）";
+            "\n（这张卡片**没有携带链接**。上面那行 `title:` 就是它的完整标题——"
+                    + "**把那个标题原样传给 readBilibiliVideo 就能读它的字幕**，不用再让他发链接；"
+                    + "万一工具说搜不到标题一致的视频，再如实告诉他并要链接。**不要凭标题猜视频里讲了什么**。）";
 
     private String renderFull() {
         StringBuilder text = new StringBuilder("[卡片消息] ").append(arkName.isBlank() ? arkType : arkName);

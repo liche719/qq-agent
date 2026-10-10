@@ -9,6 +9,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -132,6 +134,53 @@ public class BilibiliClient {
         return new VideoInfo(data.path("bvid").asText(ref.bvid() == null ? "" : ref.bvid()),
                 data.path("aid").asLong(0L), data.path("title").asText(""), data.path("desc").asText(""),
                 data.path("owner").path("name").asText(""), data.path("duration").asInt(0), List.copyOf(pages));
+    }
+
+    /**
+     * 用**标题**去 B 站搜一个视频，返回 BV 号；**只有标题逐字一致才认**，否则返回 {@code null}。
+     *
+     * <p><b>为什么要它</b>（2026-10-10）：用户转发的 B站卡片**不带链接**（实测 {@code ark_data.fields}
+     * 只有 {@code [preview, source, source_logo, title]}），所以拿不到 BV。但卡片给了**完整标题**，
+     * 而 B站自己的搜索很准——实测三条真实的转发标题**全部在第一位就搜到逐字一致的结果**。
+     *
+     * <p><b>为什么要求逐字一致</b>：拿错视频比没拿到更糟——模型会对着一个不相干的视频侃侃而谈，
+     * 而且从回复里看不出任何异常。宁可返回 null，让上游如实说"搜不到，把链接发我"。
+     *
+     * <p>这个接口**不需要 wbi 签名**（2026-10-10 实测带 Cookie 直接 {@code code:0}）；
+     * 返回的 {@code title} 里带 {@code <em>} 高亮标签，比较前要去掉。
+     */
+    public String searchByTitle(String title) throws IOException {
+        String keyword = title == null ? "" : title.trim();
+        if (keyword.isBlank()) {
+            return null;
+        }
+        String encoded = URLEncoder.encode(keyword, StandardCharsets.UTF_8).replace("+", "%20");
+        JsonNode root = get(API + "/x/web-interface/search/type?search_type=video&keyword=" + encoded, HOME);
+        if (root.path("code").asInt(-1) != 0) {
+            return null;
+        }
+        String wanted = normalizeTitle(keyword);
+        for (JsonNode item : root.path("data").path("result")) {
+            if (normalizeTitle(deTag(item.path("title").asText(""))).equals(wanted)) {
+                String bvid = item.path("bvid").asText("");
+                if (!bvid.isBlank()) {
+                    return bvid;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 去掉搜索结果标题里的 {@code <em class="keyword">} 高亮标签，并还原常见实体。 */
+    private static String deTag(String title) {
+        String text = title == null ? "" : title.replaceAll("<[^>]+>", "");
+        return text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ");
+    }
+
+    /** 比标题时忽略空白与大小写——推送里偶尔多个空格，那不该算"不一致"。 */
+    private static String normalizeTitle(String title) {
+        return title == null ? "" : title.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
 
     /** 取字幕正文。拿不到就返回 {@code available=false} 并说明原因——**上层要如实转告，不许编**。 */

@@ -33,17 +33,36 @@ public class BilibiliTool implements AgentToolProvider {
     }
 
     @Tool(value = "读取一个 B 站视频的字幕，用来知道视频里到底讲了什么。用户转发 B 站视频、"
-            + "发来 B 站链接或 BV 号时调用。参数 url 传链接或 BV 号都行。"
+            + "发来 B 站链接或 BV 号时调用。参数 url 传链接或 BV 号都行；"
+            + "**如果只有标题（比如他转发过来的卡片没有带链接），直接把那个标题原样传进来**——"
+            + "我会拿标题去 B 站搜，只有搜到标题逐字一致的视频才会用。"
             + "返回标题、UP 主、时长、简介和带时间戳的字幕正文。"
             + "如果这个视频没有字幕（或接口拿不到），结果会明确写出来——"
             + "**这时只能依据标题和简介，不要编造视频里的内容**。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult readBilibiliVideo(String url) {
         try {
-            BilibiliClient.VideoRef ref = client.parse(url);
+            String matchedByTitle = null;
+            BilibiliClient.VideoRef ref;
+            try {
+                ref = client.parse(url);
+            } catch (BilibiliClient.BilibiliException notALink) {
+                // 转发的卡片没有链接：模型会把卡片标题传进来，去 B 站搜，**只有标题逐字一致才认**
+                String bvid = client.searchByTitle(url);
+                if (bvid == null) {
+                    return ToolBusinessResult.failure("这个输入既不是链接/BV 号，按标题去 B 站搜也没有"
+                            + "标题完全一致的视频。问他要一下链接或 BV 号，别自己猜是哪个视频。");
+                }
+                matchedByTitle = url == null ? "" : url.trim();
+                ref = new BilibiliClient.VideoRef(bvid, null, null);
+            }
             BilibiliClient.VideoInfo info = client.videoInfo(ref);
 
             StringBuilder out = new StringBuilder("【B站视频】").append(info.title()).append('\n');
+            if (matchedByTitle != null && !matchedByTitle.isBlank()) {
+                out.append("（这是按他转发过来的标题搜到的，原标题：「").append(matchedByTitle)
+                        .append("」，已核对**逐字一致**）\n");
+            }
             out.append("UP主：").append(info.owner().isBlank() ? "未知" : info.owner())
                     .append("，时长：").append(duration(info.durationSeconds())).append('\n');
 
