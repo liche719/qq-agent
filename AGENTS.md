@@ -2,7 +2,7 @@
 
 > 本文件是给 AI 编码代理（Codex / DeepSeek harness / Claude Code 等）的项目记忆。
 > 换 harness 时，把本文件内容作为项目规则或系统提示加载，即可继承全部上下文。
-> 最后更新：2026-10-10（文档整理：§5 的 65 条坑搬到 `docs/pitfalls.md`、时校后补到 67 条，本文件从 68 KB 压到 33 KB）
+> 最后更新：2026-10-10（文档整理：§5 的 65 条坑搬到 `docs/pitfalls.md`、时校后补到 68 条，本文件从 68 KB 压到 33 KB）
 > **本文件刻意保持在 64 KB 以下**——超过 harness 的读取上限就会被**静默截断尾部**，写在末尾的内容等于没写。
 > 所以：细节一律进 `docs/`（见 §6 文档索引），这里只留「每次都要用」的。
 
@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-10）**：工具 **51 个 / 11 个类**、系统提示词 **25 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-10）**：工具 **52 个 / 12 个类**、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -140,7 +140,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 **运维告警**（`alert/` 包）：`AlertNotifier` 每 60 秒查 QQ 网关 / PostgreSQL / Redis / Quartz / 磁盘 / 堆，**只在问题新出现或恢复时**推送（同问题 `repeat-minutes` 内不重复，启动 2 分钟宽限期避免误报）；只发给 `.env` 的 `ALERT_QQ_OPENID`（**是 openid 不是 QQ 号**）。QQ 主动消息有额度限制，所以推送是"尽力而为"，**面板状态才是准的**。测试按钮在「QQ 通道」页，或 `POST /api/admin/actions/alerts/test`、`POST /api/admin/actions/alerts/notify`（CI 失败告警用）。**2026-09-20 起"备份太旧"也进这套告警**（`BackupFreshnessChecker`：`backup/` 下最新一份备份超过 `BACKUP_MAX_AGE_HOURS`（默认 26 小时）没更新就推 QQ，并且面板总览会变 `DEGRADED`；详见 `docs/backup.md`）——因为备份是应用自己在 03:00 跑的，撞上部署重启就会整天没有备份而无人知晓。
 
-**考研规划**（`exam/` 包，2026-09-13 两批都上线并端到端验证）：第一批备考计划（院校/科目/目标分/阶段）+ 每日任务 + 打卡 + 早计划 / 晚收尾 / 周日复盘三条推送；第二批**执行面**——章节/轮次进度、错题本（1/3/7/15/30 天回收）、阶段里程碑、正计时（`开始学习`/`结束学习`，结束时长进当天打卡）、任务自动结转（`exam.carry-over`，**只在早推送里跑**）、科目分组（`科目名@组`）、面板**编辑计划表单**与**行内动作**。数据落 `exam_plan`/`exam_task`/`exam_checkin`/`exam_progress`/`exam_mistake`/`exam_milestone`（建表脚本是 MySQL 时代的 `deploy/mysql/V3__`、`V4__create_exam_tracking_tables.sql`；**pg 迁移后表结构以现库为准**。**必须先建表再部署**，否则 `validate` 会让容器起不来）。入口：中文指令「考研 / 今日任务 / 打卡 150 / 考研进度 / 开始学习 / 结束学习 / 错题」，或自然语言让模型调 `ExamTool`（51 个工具里的 20 个）。**顺手做的三处插件化（工具自动注册 `AgentToolProvider`、别名随处理器走 + `exactOnly`、面板页签后端描述 + `form`/`rowActions` 契约 v2）以及「怎么加下一个模块」，详见 `docs/exam-module.md`。**
+**考研规划**（`exam/` 包，2026-09-13 两批都上线并端到端验证）：第一批备考计划（院校/科目/目标分/阶段）+ 每日任务 + 打卡 + 早计划 / 晚收尾 / 周日复盘三条推送；第二批**执行面**——章节/轮次进度、错题本（1/3/7/15/30 天回收）、阶段里程碑、正计时（`开始学习`/`结束学习`，结束时长进当天打卡）、任务自动结转（`exam.carry-over`，**只在早推送里跑**）、科目分组（`科目名@组`）、面板**编辑计划表单**与**行内动作**。数据落 `exam_plan`/`exam_task`/`exam_checkin`/`exam_progress`/`exam_mistake`/`exam_milestone`（建表脚本是 MySQL 时代的 `deploy/mysql/V3__`、`V4__create_exam_tracking_tables.sql`；**pg 迁移后表结构以现库为准**。**必须先建表再部署**，否则 `validate` 会让容器起不来）。入口：中文指令「考研 / 今日任务 / 打卡 150 / 考研进度 / 开始学习 / 结束学习 / 错题」，或自然语言让模型调 `ExamTool`（52 个工具里的 20 个）。**顺手做的三处插件化（工具自动注册 `AgentToolProvider`、别名随处理器走 + `exactOnly`、面板页签后端描述 + `form`/`rowActions` 契约 v2）以及「怎么加下一个模块」，详见 `docs/exam-module.md`。**
 
 ### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
@@ -163,10 +163,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 67 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 68 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 67）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 68）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -192,7 +192,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：67 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：68 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -219,7 +219,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
   ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-09 晚）：`wechat-agent:9cd34564294e…`，启动日志 `工具注册完成：11 个类 / 51 个工具`、0 重启、0 ERROR。
+- **最近一次部署**（2026-10-10）：`wechat-agent:fffdd0113926…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
