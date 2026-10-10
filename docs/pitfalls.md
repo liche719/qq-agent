@@ -150,10 +150,15 @@
    `[卡片消息] 小程序` / `摘要:` / `source: 哔哩哔哩` / `source_logo:` / `title:` / `preview:`，
    **跳转链接不在里面**。按官方文档（[单聊消息事件](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_message_create.html)），
    `message_type=3` 时卡片数据在 **`ark_data`**：`ark_type`（`miniapp`/`feed`/`video_share`…）、
-   `ark_name`、以及 **`fields{title, desc, jump_url, preview, source, source_logo, …}`**。
+   `ark_name`、以及 `fields{…}`（官方文档举例的键名包含 `title`/`desc`/**`jump_url`**/`preview`/`source`/`source_logo`）。
    而我们的频道层原来**完全没解析 `ark_data`**（`QqAttachmentParser` 只按 `content_type` 是否以 `image/` 开头分流），
-   所以转发过来的链接等于丢了。修法：`QqArkCard` 解析 `ark_data`、把 `jump_url` 补进消息、
-   封面 `preview` 当图片喂视觉模型（见坑 68 那条工具的落地）。
+   所以卡片里的东西整个丢了。修法：`QqArkCard` 解析 `ark_data`——**有 `jump_url` 就补进消息，
+   封面 `preview` 一律当图片喂视觉模型**。
+   **⚠️ 但别指望 `jump_url` 一定有**：2026-10-10 拿真实卡片验过，B站转发过来的是 `ark_type=miniapp`、
+   `fields=[preview, source, source_logo, title]`——**里面没有 `jump_url`**（官方文档只是把它列为"常见键名"）。
+   所以"顺着链接去取字幕"对这类卡片走不通；实际做法是**按标题搜**
+   （`searchWeb` 搜 `site:bilibili.com <标题>`，要求**标题完全一致**才认），搜不到就如实说只看到封面和标题、
+   让用户把链接发来。以后遇到别的 `ark_type`（比如 `video_share`）再看它带不带。
    **排查时踩的第二个坑**：我用 `grep -r logs/` 搜 `ark_data` 没命中，就下结论"链接被平台剥掉了"——**错的**。
    那几天的日志是 **`.gz`**，而 **`grep -r` 不进压缩包**；要 `zgrep` 或 `zcat | grep`。
    **教训：压缩日志的历史要比未压缩的久，查历史事件别只信 `agent.log`。**

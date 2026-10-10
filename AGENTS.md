@@ -40,6 +40,7 @@
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key`/`SAVED_Ali_Secret`） |
 | 墨墨 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`，或面板「背单词」页存进 `maimemo_setting`（后者优先）；**有效期约一天** |
 | 墨墨 OIDC 凭据（长期方案） | 服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`（600）；换来的 token 存 `maimemo_setting` 表 |
+| B站登录凭据（取字幕用） | 服务器 `.env` 的 **`BILI_SESSDATA`**（600）；整条 Cookie 串或只填 SESSDATA 的值都认。**2026-10-10 从用户本地「哔哩哔哩视频总结」的 `config.json` 搬过去**（那是他自己扫码登录存的）。过期后重新扫码、再搬一次即可；**取字幕必须要它**——不带登录时 `player/wbi/v2` 返回的字幕轨恒为 0 |
 | 部署私钥 / 上传验签密钥 | GitHub Secrets `DEPLOY_SSH_KEY`、`DEPLOY_TAR_SECRET`（后者服务器副本 `/etc/wechat-deploy.secret` 600） |
 
 ## 2. 本地开发与运行
@@ -219,7 +220,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
   ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-10）：`wechat-agent:fffdd0113926…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR。
+- **最近一次部署**（2026-10-10）：`wechat-agent:fdfc8b742f3e…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR、容器内 `BILI_SESSDATA` 就位。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
