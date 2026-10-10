@@ -1,3 +1,19 @@
+-- ============================================================
+-- ⚠️⚠️ 历史文件，**不要执行**：这是 **2026-09-01 的 MySQL 8 迁移** ⚠️⚠️
+--
+-- 现状（2026-10-10）：
+--   · 生产早已是 **PostgreSQL 16 + pgvector**（2026-09-18 整库迁过来）——下面这些
+--     `TINYINT(1)` / `AUTO_INCREMENT` / `LONGTEXT` / `UNIQUE KEY` / `INDEX` 全是 MySQL 方言，
+--     **拿到现在的库里跑一定失败**。
+--   · `user_core_memory` / `user_work_memory` 两张表 **2026-09-19 已由 `V17` 删除**；记忆现在只有
+--     `memory`（kind=PROFILE/TASK/EXPERIENCE）/ `memory_fact` / `conversation_memory` 三张
+--     （见 `docs/memory-vector-plan.md` §20）。
+--   · 现在要建库/补结构：`deploy/postgres/V11 ~ V19*.sql`；看完整表结构：`deploy/postgres/schema-generated.sql`。
+--
+-- 保留它的唯一价值：`conversation_memory` 与 `stored_media` 这两张核心表最早就是这份文件建的，
+-- 想追溯"它们最初长什么样"时看这里。
+-- ============================================================
+--
 -- 记忆演化迁移（MySQL 8.0.29+）
 -- 仅供 production profile 使用：该 profile 的 Hibernate 为 validate，不会自动建表或加列。
 -- 执行前先完成数据库备份；本迁移只新增表、列和索引，不修改或删除既有记忆数据。
