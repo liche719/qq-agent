@@ -60,6 +60,13 @@ record QqArkCard(String arkType, String arkName, String title, String desc, Stri
      *
      * <p>平台已经把标题/摘要渲染进 {@code content} 了，所以**正常情况下只补链接**；
      * 只有当 content 里什么都没有（卡片渲染缺失）时才退回完整渲染。
+     *
+     * <p><b>为什么没链接时什么都不补（2026-10-10 实测后改的）</b>：实测 B站转发过来的是
+     * {@code ark_type=miniapp} 的小程序卡片，{@code fields} 只有
+     * {@code [preview, source, source_logo, title]} —— 官方文档点名的 {@code jump_url} **并没有给**。
+     * 一度在这里追加过一段"没有链接、请把 title 传给 readBilibiliVideo"的提示，结果模型把这句
+     * 上下文话术复述进了回复（"这次带上链接了"「卡片的标题和你平时发的不一样」），而这件事
+     * **系统提示词规则 26 已经写死了**，内容里那段是冗余的 —— 所以撤掉，用户消息保持干净。
      */
     String applyTo(String existingContent) {
         if (isEmpty()) {
@@ -67,25 +74,11 @@ record QqArkCard(String arkType, String arkName, String title, String desc, Stri
         }
         String base = existingContent == null ? "" : existingContent;
         String body = base.isBlank() ? renderFull() : base;
-        if (!jumpUrl.isBlank()) {
-            return base.contains(jumpUrl) ? body : body + "\n链接：" + jumpUrl;
+        if (jumpUrl.isBlank() || base.contains(jumpUrl)) {
+            return body;
         }
-        return body + NO_LINK_HINT;
+        return body + "\n链接：" + jumpUrl;
     }
-
-    /**
-     * 卡片没带链接时的固定提示。
-     *
-     * <p>**实测（2026-10-10）**：B站转发过来的是 {@code ark_type=miniapp} 的小程序卡片，
-     * 它的 {@code fields} 只有 {@code [preview, source, source_logo, title]}——官方文档里点名的
-     * {@code jump_url} **并没有给**。所以"顺着链接去取字幕"对这类卡片走不通，只能靠标题去搜、
-     * 或者让用户把链接发过来。这里把这件事**明确写进给模型的文本**，免得它对着一个不存在的链接瞎试，
-     * 或者干脆凭标题编视频内容。
-     */
-    private static final String NO_LINK_HINT =
-            "\n（这张卡片**没有携带链接**。上面那行 `title:` 就是它的完整标题——"
-                    + "**把那个标题原样传给 readBilibiliVideo 就能读它的字幕**，不用再让他发链接；"
-                    + "万一工具说搜不到标题一致的视频，再如实告诉他并要链接。**不要凭标题猜视频里讲了什么**。）";
 
     private String renderFull() {
         StringBuilder text = new StringBuilder("[卡片消息] ").append(arkName.isBlank() ? arkType : arkName);
