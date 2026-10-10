@@ -284,6 +284,16 @@ embedding:
   timeout-seconds: ${EMBEDDING_TIMEOUT_SECONDS:20}
   connect-timeout-seconds: ${EMBEDDING_CONNECT_TIMEOUT_SECONDS:5}
 
+# B 站视频字幕（2026-10-10 加）：用户在 QQ 里转发 B站视频时，卡片只给标题和封面，
+# 真正的视频内容只有字幕拿得到——`readBilibiliVideo` 工具顺着链接去取字幕。
+# **sessdata 留空也能跑**，但拿不到 AI 字幕（B站要求登录态），这时工具会如实说"没字幕"、不编内容。
+# 凭据只从服务器 .env 的 BILI_SESSDATA 来：整条 Cookie 串或只填 SESSDATA 的值都认。
+bilibili:
+  sessdata: ${BILI_SESSDATA:}
+  timeout-seconds: ${BILIBILI_TIMEOUT_SECONDS:20}
+  # 单次塞给模型的字幕上限（字符）：字幕是线性文本，太长会挤掉别的上下文
+  max-transcript-chars: ${BILIBILI_MAX_TRANSCRIPT_CHARS:6000}
+
 memory:
   extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}
   extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
