@@ -181,9 +181,32 @@ public class ToolInvocationService {
         return objectMapper.convertValue(value, type);
     }
 
+    /**
+     * 超长结果截断。
+     *
+     * <p>2026-10-10 改：原来直接 {@code substring(0, max)}，模型经常拿到**半句话**——实测
+     * {@code readWebPage}/{@code searchWeb}/{@code searchVerifiedWeb} 的最大值都正好卡在 8000 上，
+     * 也就是每次都在截断，而被截掉的往往是结论所在的后半段，这是幻觉的直接来源之一。
+     * 现在改成**在段落或句子边界截断**，并且明确告诉模型"这只是前面一部分、可以再要"。
+     */
     private String clip(String text) {
-        if (text == null || text.length() <= maxResultChars) return text == null ? "" : text;
-        return text.substring(0, maxResultChars) + "…（结果过长已截断）";
+        if (text == null) return "";
+        if (text.length() <= maxResultChars) return text;
+        int cut = boundaryBefore(text, maxResultChars);
+        return text.substring(0, cut)
+                + "\n\n…（结果太长，这里只给了前面一部分；需要更多就再调一次、或把要问的点说得更具体）";
+    }
+
+    /** 在 max 之前找最近的段落/句子边界；找不到就退回按 80% 硬截，避免全篇没有标点时截得过短。 */
+    private int boundaryBefore(String text, int max) {
+        int floor = Math.max(1, (int) (max * 0.8));
+        for (int i = max - 1; i >= floor; i--) {
+            char c = text.charAt(i);
+            if (c == '\n' || c == '。' || c == '！' || c == '？' || c == '；' || c == '!' || c == '?' || c == ';') {
+                return i + 1;
+            }
+        }
+        return max;
     }
 
     private String safeMessage(Throwable throwable) {

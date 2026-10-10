@@ -186,7 +186,7 @@ searxng:
 
 document:
   max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}
-  max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:60000}
+  max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:20000}
   max-pdf-pages: ${DOCUMENT_MAX_PDF_PAGES:10}
   max-redirects: ${DOCUMENT_MAX_REDIRECTS:3}
   connect-timeout-seconds: ${DOCUMENT_CONNECT_TIMEOUT_SECONDS:8}

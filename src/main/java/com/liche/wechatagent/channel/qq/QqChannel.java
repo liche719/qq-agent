@@ -685,11 +685,23 @@ public class QqChannel implements WeChatChannel {
         QqMessageMapper.DirectMessage message = QqMessageMapper.direct(data, selfOpenid);
         String openid = message.openid();
         String msgId = message.messageId();
-        String content = message.content();
         if (message.bot()) { log.info("[qq] ignore bot-self msg -> {}", openid); return; }
         if (openid.isBlank()) return;
         QqAttachmentParser.Payload payload = message.attachments();
-        if (payload.empty() && content.isBlank()) { log.info("[qq] recv (empty, no attachments) -> {}", openid); return; }
+        // 结构化卡片（message_type=3）：平台渲染进 content 的文本里**没有跳转链接**，
+        // 而 ark_data.fields.jump_url 里通常有——转发的 B站/小程序分享全靠它才谈得上"看内容"（2026-10-10 加）
+        QqArkCard card = QqArkCard.fromEvent(data);
+        String content = card.applyTo(message.content());
+        java.util.List<String> images = card.withPreview(payload.images());
+        if (!card.isEmpty()) {
+            // 只记类型与字段名，不记正文：既要能判断"有没有 jump_url"，又不要把用户转发的内容写进日志
+            log.info("[qq] ark card user={} msg={} type={} name={} fields={}", openid, msgId,
+                    card.arkType(), card.arkName(), card.fieldNames());
+        }
+        if (payload.empty() && images.isEmpty() && content.isBlank()) {
+            log.info("[qq] recv (empty, no attachments) -> {}", openid);
+            return;
+        }
         if (!allowInbound(openid, msgId)) return;
         // 先记住被动窗口再处理「继续」：分页回复同样是对这条 msg_id 的被动回复，
         // 原来放在后面会让每一页都走主动消息（白耗主动配额，配额用光后分页直接发不出去）
@@ -697,17 +709,18 @@ public class QqChannel implements WeChatChannel {
         if (handleContinuationRequest(openid, content, data.path("id").asText(""))) return;
         pendingPages.remove(openid);
         startTyping(openid);
-        rememberReceivedMessage(openid, msgId, content, payload.images(), payload.attachments());
+        rememberReceivedMessage(openid, msgId, content, images, payload.attachments());
         log.info("[qq] inbound metadata user={} msg={} fields={}", openid, msgId, fieldNames(data));
         log.info("[qq] inbound element schema user={} msg={} schema={}", openid, msgId,
                 describeJsonShape(data.path("msg_elements"), 0));
         QqQuoteMessage quote = resolveQuote(openid, data);
-        InboundMessage inbound = payload.empty() && quoteEmpty(quote)
+        InboundMessage inbound = payload.empty() && images.isEmpty() && quoteEmpty(quote)
                 ? InboundMessage.text(msgId, openid, content, "qq", "qq")
-                : InboundMessage.textWithQuote(msgId, openid, content, "qq", "qq", payload.images(), payload.attachments(),
+                : InboundMessage.textWithQuote(msgId, openid, content, "qq", "qq", images, payload.attachments(),
                 quote.content(), quote.imageUrls(), quote.attachments());
-        log.info("[qq] recv(image x{}, file x{}, quote={} chars/{} images) -> {}", payload.images().size(),
-                payload.attachments().size(), quote.content().length(), quote.imageUrls().size(), openid);
+        log.info("[qq] recv(image x{}, file x{}[{}], quote={} chars/{} images) -> {}", images.size(),
+                payload.attachments().size(), attachmentTypes(payload.attachments()),
+                quote.content().length(), quote.imageUrls().size(), openid);
         orchestrator.onInbound(inbound);
     }
 
@@ -1148,6 +1161,18 @@ public class QqChannel implements WeChatChannel {
             log.warn("[qq] delete message failed user={} messageId={} reason={}", userId, messageId, exception.getMessage());
             return false;
         }
+    }
+
+    /** 附件类型清单（2026-10-10 加）：原来日志只有 `file x N`，看不出类型，没法判断视频到底有没有到达。 */
+    private static String attachmentTypes(java.util.List<InboundAttachment> attachments) {
+        if (attachments == null || attachments.isEmpty()) return "";
+        StringBuilder types = new StringBuilder();
+        for (InboundAttachment attachment : attachments) {
+            if (types.length() > 0) types.append(',');
+            String type = attachment.contentType();
+            types.append(type == null || type.isBlank() ? "?" : type);
+        }
+        return types.toString();
     }
 
     private int qqFileType(String contentType) {

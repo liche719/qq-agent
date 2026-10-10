@@ -181,17 +181,38 @@ public class MediaStorageService {
         }
         if (matches.isEmpty()) return "没有找到已保存的文件。";
         StringBuilder result = new StringBuilder(fallback
-                ? "没有精确匹配，以下是最近保存的文件，请结合文件名和摘要核对：\n"
-                : "当前用户已保存的文件：\n");
+                ? "没有精确匹配，以下是最近保存的文件，请结合文件名和摘要核对（**这里只给索引**；要看详情或已提取内容，先 inspectStoredMedia）：\n"
+                : "当前用户已保存的文件（**这里只给索引**；要看详情或已提取内容，先 inspectStoredMedia）：\n");
         for (StoredMedia media : matches) {
             result.append("- ID=").append(media.getId())
-                    .append("，文件名=").append(media.getFileName())
-                    .append(blankToEmpty(media.getOriginalName()).isBlank() ? "" : "，原文件名=" + media.getOriginalName())
-                    .append("，保存于=").append(formatTime(media.getCreatedAt()))
-                    .append("，最近更新=").append(formatTime(media.getUpdatedAt()))
-                    .append("，摘要=").append(media.getSummary()).append('\n');
+                    .append("，").append(media.getFileName())
+                    .append("，保存于=").append(formatTime(media.getCreatedAt()));
+            String preview = summaryPreview(media);
+            if (!preview.isBlank()) {
+                result.append("，摘要=").append(preview);
+            }
+            result.append('\n');
         }
         return result.toString().trim();
+    }
+
+    /**
+     * 列表里的摘要只留个"能认出这是哪个文件"的头。
+     *
+     * <p>2026-10-10 改：原来列表把**完整摘要 + 原文件名 + 更新时间**都倒出来，实测
+     * {@code listStoredMedia} 占全部工具输出的 **31%**（78 次共 18.4 万字符，均 2359 字符），
+     * 而其中大部分内容模型当轮根本用不上——它只需要"认出是哪个文件"，然后按 ID 去看详情。
+     * 原文件名往往和文件名只差几个字，纯冗余；更新时间在 {@code inspectStoredMedia} 里有。
+     */
+    private static final int SUMMARY_PREVIEW_CHARS = 40;
+
+    private String summaryPreview(StoredMedia media) {
+        String summary = blankToEmpty(media.getSummary());
+        if (summary.isBlank()) {
+            return "";
+        }
+        String flat = summary.replaceAll("\\s+", " ").trim();
+        return flat.length() <= SUMMARY_PREVIEW_CHARS ? flat : flat.substring(0, SUMMARY_PREVIEW_CHARS) + "…";
     }
 
     @Transactional(readOnly = true)
