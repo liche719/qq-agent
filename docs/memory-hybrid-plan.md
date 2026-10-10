@@ -79,7 +79,7 @@
 | `forgetMemory` | `id`（必填）、`reason`（必填）、`confirm`（必须显式 true，否则拒绝） | `已停用 #137（保留原文，可回滚）` | `没确认，未动：需要用户明确同意` |
 
 - **kind 由谁定**：模型给建议，程序按内容归位——含长期身份/偏好/原则 → CORE；含期限/未完成任务 → WORK；一段经历 → EPISODE；判不出来按 WORK。
-- **写谁**：复用现成服务 `CoreMemoryService.add/replaceFromExtraction`、`WorkMemoryService.add/updateFromExtraction`、`EpisodicMemoryService.add`，`operator="TOOL"`，`MemoryProvenance(sourceMessageIds)` 带上真实来源。
+- **写谁**：复用现成服务 `CoreMemoryService.add/replaceFromExtraction`、`WorkMemoryService.add/updateFromExtraction`、`EpisodicMemoryService.add`，`operator="TOOL"`，`MemoryProvenance(sourceMessageIds)` 带上真实来源。（**2026-10-10 现状：这三个 Service 2026-09-18 已合并进 `MemoryService`（按 `kind` 分派），名字不存在了，见 `memory-vector-plan.md` §20。**）
 - **证据**：`evidence` 走 `conv:<id>`（对话行）——现有 `selfRecall` 已证明这条死锁解法（坑 64①）；用户侧照抄，`AgentSelfTool.selfRecall` 是现成范本。
 - **不主动推送**：工具只在被调用时产生回执，写进当轮回复；不做任何后台通知。
 
@@ -97,7 +97,7 @@ WriteVerdict write(String userId, Candidate candidate, MemoryProvenance provenan
 1. `confidence >= memory.min-confidence`（默认 60）且内容长度合法；
 2. 语义重复：与已有记忆相似度 ≥ `memory.dedup-threshold`（0.8）→ **不新增**，返回 duplicate（模型据此回执"没记，已有 #137"）；核心记忆的"新说法"仍走第二次小调用判定（`reconcileCoreWithModel` 逻辑复用）；
 3. **规则 12/13 的程序化镜像**（只挡"明确会变"的，宽松优先）：正则命中「第X节 / 周X第 / 教室号形如 8B304 / x月x日上课 / 今天学了几小时」→ rejected(rule 12)；命中「记住/记一下/以后都」→ 直接放行（显式要求优先）；
-4. 留痕：任何写入/停用都写 `memory_change_log`（before/after），`forgetMemory` 走 `CoreMemoryService.delete` → `ForgottenMemory`（**不删行**，可回滚）。
+4. 留痕：任何写入/停用都写 `memory_change_log`（before/after），`forgetMemory` 走 `CoreMemoryService.delete`（**2026-10-10：该 Service 已并入 `MemoryService`，见上**）→ `ForgottenMemory`（**不删行**，可回滚）。
 
 ### 4.3 后台提取改造（三处，全部无内容风险）
 
@@ -190,6 +190,8 @@ CREATE TABLE memory_extraction_run (
 | `MEMORY_EXTRACTION_PREFILTER` | 新增 **transactional-only**（可设 `off` 完全不过滤） | ❌ 要加 |
 | `MEMORY_WRITE_TOOLS_ENABLED` | 新增 **true**（关掉 = 三个工具不注册） | ❌ 要加 |
 
+> **2026-10-10 现状：这张表里的四个键后来都被删了**——`MEMORY_EXTRACTION_WINDOW_SECONDS`、`MEMORY_EXTRACTION_MAX_DELAY_SECONDS`、`MEMORY_EXTRACTION_PREFILTER`、`MEMORY_WRITE_TOOLS_ENABLED` 已不存在（触发改成轮次驱动：`MEMORY_EXTRACTION_ROUNDS` / `MEMORY_EXTRACTION_MAX_IDLE_HOURS` 等，见 `memory-vector-plan.md` §15.1）；`LLM_MAX_TOKENS_STRUCTURED` 的现值是 **16384**。
+
 > 坑 36：compose 只透传 `environment:` 里列出的变量，漏一个就"改了 .env 却不生效"，且不报错。
 
 ## 7. 实施顺序（每步独立可验证、可回滚）
@@ -243,7 +245,7 @@ CREATE TABLE memory_extraction_run (
 - ✅ `LLM_MAX_TOKENS_STRUCTURED=4096 → 8192`（服务器 `.env` + 重建）：堵住"思考吃满 4096、正文为空"的白烧。
 - ✅ **事务型窄跳过**：`MemoryExtractionScheduler` 记住"这一轮静默窗口里用户说了什么"（`burstTexts`），
   提取时按**新消息**判定（不是按最近 20 轮整窗），命中规则就跳过、**一次模型调用都不发**。
-  回退开关 `MEMORY_EXTRACTION_PREFILTER=off`（退回旧门槛）。
+  回退开关 `MEMORY_EXTRACTION_PREFILTER=off`（退回旧门槛）。（**2026-10-10：前置过滤与这个键 2026-09-18 已整块删除，回退开关没有了。**）
 - ✅ 窗口 `45→180` / 最长 `150→300` + 新增 `extraction-min-interval-seconds=180`（四个键都进了 compose 透传）。
 - ✅ 本地端到端实测（窗口临时调成 8 秒）：
   - 事务型消息「今天几号」→ 审计 `skip_reason=TRANSACTIONAL，tokens=0/0，cost=0`（**一次调用都没发**）

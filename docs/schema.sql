@@ -1,4 +1,22 @@
 -- ============================================================
+-- ⚠️⚠️ 已作废：这是 **MySQL 时代（2026-09-18 之前）** 的 DDL 快照 ⚠️⚠️
+--
+-- 生产自 2026-09-18 起是 **PostgreSQL 16 + pgvector**。下面这些 DDL 里的
+-- `BIT(1)` / `TINYINT(1)` / `AUTO_INCREMENT` / `show create table` 全是 MySQL 方言，
+-- **照着建库会建出一个错的库**（`ddl-auto: validate` 下应用起不来）。
+--
+-- **现在该看的是：**
+--   · 建库/补结构  → `deploy/postgres/V11 ~ V19*.sql`（迁移脚本，按序号跑）
+--   · 完整表结构   → `deploy/postgres/schema-generated.sql`
+--   · 迁移来龙去脉 → `docs/pg-migration.md`
+--
+-- 本文件保留**只作为历史记录**（想回看 MySQL 时代的表长什么样时用）。
+-- 连下面这段原说明也一并作废了：Quartz 表现在由 Spring 在空库上按 pg 方言创建，
+-- 见 `AGENTS.md` §2 的本地配方（`SPRING_QUARTZ_JDBC_INITIALIZE_SCHEMA=always`）。
+-- ============================================================
+-- 以下为原文（历史），请勿执行：
+-- ============================================================
+--
 -- 参考 DDL（文档用途，**不会自动执行**）
 --
 -- 生产用的是 production profile → `ddl-auto: validate`：Hibernate **只校验不改表**，

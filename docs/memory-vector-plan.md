@@ -17,7 +17,7 @@
 
 | 问题 | 选择 | 落地方式 |
 |---|---|---|
-| 向量库 | **A：MySQL 存向量 + 应用内检索，抽接口** | 新增 `MemoryVectorStore` 接口（`upsert/search/delete/rebuild`）+ MySQL 表 `memory_vector` + 启动加载进内存做点积；换 pgvector 只换实现 |
+| 向量库 | **A：MySQL 存向量 + 应用内检索，抽接口** | 新增 `MemoryVectorStore` 接口（`upsert/search/delete/rebuild`）+ MySQL 表 `memory_vector` + 启动加载进内存做点积；换 pgvector 只换实现（**最终没这么做**：2026-09-18 整库迁到 pg 后直接用 pgvector，`MemoryVectorStore` 与 `memory_vector` 都没落地；见 §14/§20） |
 | embedding | **阿里云百炼（qwen3 系列向量模型 / text-embedding-v4，0.0005 元/千 token）** | key 只放服务器 `.env`；**必须有降级路径**（provider 不可用 → 退回字面/关键词召回，且降级时只新增、不做合并） |
 | 记忆粒度 | **一条一句事实（Mem0 默认）** | 见 §2.3 的定稿：存原子、**注入时按 subject 聚合**、按 `subject+predicate` 精确更新 |
 | 时间兜底 | **6 小时**（见 §2.4 的算账） | 频率高一点、反馈快；多花的钱 < 1 元/月 |
@@ -58,12 +58,12 @@
 
 ### 2.1 向量库放哪：pgsql+pgvector，还是先在 MySQL 里做？
 
-**事实**：自建 `mysql:8.0.46` **没有** `VECTOR` 类型/向量索引（阿里云 RDS MySQL、AliSQL 有，但我们跑的是社区版镜像）；`pgvector` 是 LangChain4j 的一等公民（`PgVectorEmbeddingStore`）。
+**事实**：自建 `mysql:8.0.46` **没有** `VECTOR` 类型/向量索引（阿里云 RDS MySQL、AliSQL 有，但我们跑的是社区版镜像）；`pgvector` 是 LangChain4j 的一等公民（`PgVectorEmbeddingStore`——**2026-10-10 现状：我们最终没用它，向量是自研的原生 SQL `PgVectorStore` / `MemoryFactVectorStore` 读写的**）。
 
 **规模算一下**：现在活跃记忆 ≈ 25 core + 28 work ≈ 50 条。就算涨到 **5000 条 × 1024 维 float**，全量在内存里算 cosine ≈ 20MB、单次查询 < 10ms。也就是说**在可预见的规模内，向量索引并不是瓶颈**。
 
 **我的建议（推荐 A）**
-- **A. 先抽接口 + MySQL 存向量 + 应用内 cosine**：新增 `MemoryVectorStore` 接口（`upsert / search / delete / rebuild`），实现先用一张 MySQL 表（`memory_vector(memory_id, model, dim, vec blob, text_hash)`）+ 启动时加载进内存做点积。**换 pgvector 时只换实现**，业务代码零改动。
+- **A. 先抽接口 + MySQL 存向量 + 应用内 cosine**：新增 `MemoryVectorStore` 接口（`upsert / search / delete / rebuild`），实现先用一张 MySQL 表（`memory_vector(memory_id, model, dim, vec blob, text_hash)`）+ 启动时加载进内存做点积。**换 pgvector 时只换实现**，业务代码零改动。（**最终没这么做**，见 §0.5 的注与 §14）
 - **B. 现在就上 pgsql + pgvector**：多一个容器、一个数据卷、一套口令、一份备份、一个迁移目录、一份连接池配置。功能收益在 50~5000 条规模内**基本为零**，但运维面翻倍。
 
 **为什么我倾向 A 而不是直接上 B**：这个项目的**第一优先级是"用户长期记忆不丢失"**，现在记忆只有一套 MySQL + 每日 zip 备份这一条命。多一套库 = 多一个会丢/会忘备份的地方。等真的到万级或要多用户隔离，再切 pgvector（接口已经抽好，成本可控）。
@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS memory_fact (
 | **`MemoryFactIndex`（接口）** | **唯一检索入口**：`search(userId, query, limit)` / `upsert(fact)` / `delete(id)` / `rebuild(userId)` |
 | `LiteralFactIndex`（步 2 实现） | 关键词 + `MemoryTextSimilarity` 字面召回 |
 | `EmbeddingFactIndex`（步 3）/ `PgVectorFactIndex`（将来） | 同接口换实现，业务代码零改动 |
-| `MemoryFactLoader`（`PromptSectionProvider`） | 按 subject 聚合成"卡片视图"注入提示词，受字数上限（与 core/work 同级预算） |
+| `MemoryFactLoader`（`PromptSectionProvider`） | 按 subject 聚合成"卡片视图"注入提示词，受字数上限（与 core/work 同级预算）——**最终没这么做**：这个类没落地，事实改成模型主动调 `recallMemoryFacts` 召回（见 §14.1） |
 | `MemoryExtractor` | `ExtractionResult` 增 `facts[]`；提示词增"事实"段（subject/predicate/object 写法与来源标注） |
 | `AdminMemoryController` | 新增 `/api/admin/memory/facts`（卡片视图：基线值 / 补丁值 / 来源 / 状态） |
 
@@ -266,13 +266,13 @@ CREATE TABLE IF NOT EXISTS memory_fact (
 3. **DOC 不被抹掉**（按你的澄清）：用户的话是**补丁**；基线行保留，`memory_change_log` 记 before → after，回答时可回溯"图上写的是 X，你后来补充 Y"。
 4. **作废不删行**：整条不再成立 → `status=SUPERSEDED` + `superseded_by` 指向新行。
 5. **降级**：`MemoryFactIndex` 抛异常或不可用时 → **只新增、不合并**（宁可多一条，也不猜着改）。
-6. **开关**：`MEMORY_FACT_ENABLED`（默认 true）；关掉后提取器不产出 facts、注入不加事实段，行为回到今天。
+6. **开关**：`MEMORY_FACT_ENABLED`（默认 true）；关掉后提取器不产出 facts、注入不加事实段，行为回到今天。**（2026-10-10 现状：这个键已删除，事实层常开、没有开关了。）**
 
 ### 12.4 验证与回滚
 
 - **本地**：造 3 条事实 → 你补一句"教室是 303" → 断言：只改教室、时间未动、DOC 原值还在、`memory_change_log` 有 before→after。
 - **生产**：建表 → 部署 → 面板 facts 页签能看到抽取结果 → **观察一周**"新增 / 补丁 / 作废"的比例（比例失衡说明更新路径没生效）。
-- **回滚**：`MEMORY_FACT_ENABLED=false`（一行 env + 重建 40 秒）；表留着无害，旧链路（core/work/episode）完全没被改动。
+- **回滚**：`MEMORY_FACT_ENABLED=false`（一行 env + 重建 40 秒）；表留着无害，旧链路（core/work/episode）完全没被改动。**（2026-10-10 现状：该键已删除，这条回滚路径不存在；core/work/episode 三张老表也已在 2026-09-19 由 `V17` 删掉。）**
 
 ### 12.5 这一步明确不做
 
@@ -297,10 +297,10 @@ CREATE TABLE IF NOT EXISTS memory_fact (
 |---|---|
 | `deploy/postgres/V11__create_memory_fact.sql` | `memory_fact` 表（`embedding vector(1024)` + HNSW `vector_cosine_ops` 索引）+ 本文件 §12 的键 |
 | `memory/MemoryFact.java` | 实体；**故意不映射 `embedding`/`embedding_model`**（Hibernate 不认 vector，映射了 `validate` 会失败） |
-| `memory/MemoryFactVectorStore.java` | **全项目唯一写原生 SQL 的地方**：`saveEmbedding` / `search`（`1 - (embedding <=> q)`）/ `idsWithEmbedding` |
+| `memory/MemoryFactVectorStore.java` | **原生 SQL 读写向量**（**2026-10-10 现状：它已不是"全项目唯一"——通用的 `PgVectorStore` 同样写原生 SQL**）：`saveEmbedding` / `search`（`1 - (embedding <=> q)`）/ `idsWithEmbedding` |
 | `memory/MemoryFactCandidate.java` | 一条候选（subject/predicate/object/content/source/confidence/docMediaId/keywords/证据 id），构造时就按列宽截断（**省略号留一位**，坑 40） |
 | `memory/MemoryFactService.java` | `apply()`：向量召回 → 模型四分类（SAME/SUPERSEDES/SUPPLEMENT/UNRELATED）→ 新增 / 刷新 / 置 SUPERSEDED；`recallFacts()` 供注入用；`reindexMissing()` 自愈补齐向量 |
-| `memory/MemoryFactTool.java` | **召回工具**（2026-09-18 按用户要求从"每轮注入"改成"模型主动查"）：`recallMemoryFacts(query)` 用这一轮的问题做向量召回、按 subject 聚合成卡片（同槽 USER/AUTO 压过 DOC，DOC 值以"（图上写的是 X）"保留）；`recentExtractions()` 给模型自查最近几次提取。每轮注入的那段（`MemoryFactLoader`）已删除 |
+| `memory/MemoryFactTool.java` | **召回工具**（2026-09-18 按用户要求从"每轮注入"改成"模型主动查"）：`recallMemoryFacts(query)` 用这一轮的问题做向量召回、按 subject 聚合成卡片（同槽 USER/AUTO 压过 DOC，DOC 值以"（图上写的是 X）"保留）；`recentExtractions()` 给模型自查最近几次提取。每轮注入的那段（方案里叫 `MemoryFactLoader`，**这个名字最终没落地**）已删除 |
 | `config/EmbeddingClient.java` | 自研 OpenAI 兼容 `/embeddings` 客户端；**api-key 空 = 降级"只新增不合并"**，不报错 |
 | `MemoryExtractor` | `ExtractionResult` 加 `facts[]`；提示词规则 12/13 改写、规则 1 开一个"图片事实"例外；`applyFacts()` 只按 confidence 把关（**不能**用 core/work 那道长度门槛，`303` 这种值会被滤掉） |
 | `AdminMemoryController` | `/facts`（基线/补丁/状态/有无向量）+ overview 加一行"事实 N 条有效，缺向量 M 条" |
@@ -343,7 +343,7 @@ v2 要记的恰恰是这些值，于是"第一周周二晚数学课在 303"这�
 |---|---|
 | 说"第一周周二晚数学课在303，老师王老师" | 生成 2 条事实（教室=303 / 教师=王老师），subject 由模型写成 `第一周·周二晚·数学课`；向量已写（`embedding_model=text-embedding-v4`） |
 | 说"教室改成305了" | 语义召回命中 303 那条 → 判 SUPERSEDES：**303 → SUPERSEDED（superseded_by=305 那行）**，305 → ACTIVE，**教师那条一动没动** |
-| 问"数学课在哪间教室" | 无工具调用，直接答 305 —— 注入段（`MemoryFactLoader`）生效 |
+| 问"数学课在哪间教室" | 无工具调用，直接答 305 —— 注入段（方案里叫 `MemoryFactLoader`，**这个名字没落地**；该注入 2026-09-18 之后改成了模型主动调 `recallMemoryFacts`）生效 |
 | 手工插一条 `DOC` 基线（图上 402）+ 用户说"改成405" | 402 保持 ACTIVE（基线），405 ACTIVE（补丁）；再问时模型答"图上写的是 402，按你后来改的 405" |
 | 再说"又改到406" | 405 → SUPERSEDED，406 → ACTIVE，**402 基线仍在**（历史 402/405/406 全可回溯） |
 | 同一窗口重复提取 | 已有事实判 SAME → `CONFIRM`，不新增行 |
@@ -551,7 +551,7 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 
 **做了什么**
 1. `deploy/postgres/V14__work_memory_embedding.sql`：给 `user_work_memory` 加 `embedding vector(1024)` + `embedding_model`（**不映射进 JPA 实体**，同 `memory_fact`）+ HNSW 余弦索引。
-2. `WorkMemoryVectorStore`：只做"写向量"和"按余弦打分"两件事（原生 SQL），`MemoryRetrievalService` 一次 `embedOne(query)` + 一条 SQL 拿回该用户全部候选的相似度。
+2. `WorkMemoryVectorStore`：只做"写向量"和"按余弦打分"两件事（原生 SQL），`MemoryRetrievalService` 一次 `embedOne(query)` + 一条 SQL 拿回该用户全部候选的相似度。**（2026-10-10 现状：这个 store 与 `user_work_memory` 表都已随 §20 的分层合并删除——向量改用通用的 `PgVectorStore`，记忆统一落 `memory` 表。）**
 3. 写路径（新增 / 被替代后新行）算一次向量；**启动时补齐**存量（`backfillVectorsOnStartup`，每个用户一批）——因为**没有字面兜底这条路**：算不出向量的行不注入，所以活跃行必须有向量（用户明确要求"向量服务绝对可用，不要兜底方案"）。
 4. 注入资格 = **余弦相似度 ≥ `memory.work-vector-floor`**（默认 0.45），低于门槛的不注入（宁可少注入，不再填坑）；字面得分只留作同分时的次序。
 
@@ -587,13 +587,13 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 
 ## 19. 原始对话与情景记忆也按向量检索 + `searchConversation` 工具（P3，2026-09-18；已上线并实测）
 
-**要解决什么**：`conversation_memory`（生产 1100+ 行原始对话）和 `episodic_memory` 还在靠**字面**匹配。最难受的表现是历史兜底：没有任何活跃记忆匹配时，系统按字面词捞旧对话并把**1500 字**硬灌进提示词——实测"今天心情不错，随便聊聊"这种毫无信息量的消息也会被灌满旧课表。而且模型**没有手**：它只能看注入给它的东西，没法自己翻旧账。
+**要解决什么**：`conversation_memory`（生产 1100+ 行原始对话）和 `episodic_memory`（**2026-10-10 现状：已在 §20 并进 `memory`（`kind`=EXPERIENCE），2026-09-19 由 `V17` 删除**）还在靠**字面**匹配。最难受的表现是历史兜底：没有任何活跃记忆匹配时，系统按字面词捞旧对话并把**1500 字**硬灌进提示词——实测"今天心情不错，随便聊聊"这种毫无信息量的消息也会被灌满旧课表。而且模型**没有手**：它只能看注入给它的东西，没法自己翻旧账。
 
 **做了什么**
 1. `deploy/postgres/V15__conversation_and_episode_embedding.sql`：`conversation_memory` 与 `episodic_memory` 各加 `embedding vector(1024)` + `embedding_model` + HNSW（不映射进实体，同 V11/V14）。
-2. 新的 `PgVectorStore`：**通用**的 pgvector 读写（写向量 / 打分 / top-K / 缺向量统计），表名参数化 + 白名单。**事实层与工作记忆那两个 store 这次没动**（已验证的路径不碰），以后要合并把它们改成委托本类即可。
+2. 新的 `PgVectorStore`：**通用**的 pgvector 读写（写向量 / 打分 / top-K / 缺向量统计），表名参数化 + 白名单。**事实层与工作记忆那两个 store 这次没动**（已验证的路径不碰），以后要合并把它们改成委托本类即可。**（2026-10-10 现状：这个合并已经做了——`WorkMemoryVectorStore` 已删除，项目里只剩"事实用"`MemoryFactVectorStore` 与"通用"`PgVectorStore` 两个；见 §20。）**
 3. 写路径：对话证据落库后给 **user/assistant 正文**算一次向量（工具轨迹那些 system 行不算——它们只是执行记录，全库 542 行永远没有向量，这是设计而不是漏）；情景记忆落库/合并时算一次。都发生在回复发出**之后**，用户无感。
-4. 启动补齐：`ConversationMemoryService` / `EpisodicMemoryService` 各在 `ApplicationReadyEvent` 分批补存量（本地实测 `对话证据向量补齐完成：571 条`，user/assistant 行补齐率 100%）。
+4. 启动补齐：`ConversationMemoryService` / `EpisodicMemoryService`（**2026-10-10：后者 2026-09-18 已并入 `MemoryService`**）各在 `ApplicationReadyEvent` 分批补存量（本地实测 `对话证据向量补齐完成：571 条`，user/assistant 行补齐率 100%）。
 5. 检索：情景记忆的候选改成 `rankByVector`（向量 ≥ 门槛）；**历史兜底那条 LIKE 路线整块删除**（`relevantForRetrieval` / `recentForRetrieval` / `searchHistoricalTerms` / `retrievalTerms` / `likeLiteral` 以及 `conversation-search-per-term`、`conversation-max-retrieval-terms` 两个配置键），改成"向量 top-K 且 ≥ 门槛"。
 6. 新工具 **`searchConversation(query)`**（只读、无副作用）：模型自己按语义搜原始对话，返回带时间的片段。
 
@@ -608,7 +608,7 @@ subject **原始拼法**（免得同一件事两种写法各成一张卡）后�
 
 `searchConversation` 的工具轨迹在库里可查（`tool=searchConversation phase=call/result`）：两次调用的 query 是模型自己组织的（`考研目标 目标院校 分数`、`挂科重修 体育 走在前列的广东实践`），返回 5~7 条真实旧轮。
 
-**已知边界**：① 工具轨迹（system 行）永不参与语义检索，所以"工具执行记录"标签只可能来自工作记忆的历史条目；② 情景记忆生产上只有 19 行、本地副本 0 行，`episode-vector-floor` 还没在真实 episodes 数据上校准过（现在与 work/conversation 同用 0.45）；③ 三个向量 store（fact / work / 通用）有重复代码，合并留作后续机械改动。
+**已知边界**：① 工具轨迹（system 行）永不参与语义检索，所以"工具执行记录"标签只可能来自工作记忆的历史条目；② 情景记忆生产上只有 19 行、本地副本 0 行，`episode-vector-floor` 还没在真实 episodes 数据上校准过（现在与 work/conversation 同用 0.45）；③ 三个向量 store（fact / work / 通用）有重复代码，合并留作后续机械改动。**（2026-10-10 现状：已合并——`WorkMemoryVectorStore` 随 §20 删除，现在只剩"事实用"`MemoryFactVectorStore` 与"通用"`PgVectorStore` 两个。）**
 
 ### 19.1 对话向量的成本实测与"要不要砍"的决定（2026-09-18，用户问的）
 

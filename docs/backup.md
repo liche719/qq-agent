@@ -19,8 +19,10 @@ backup/
    └─ <sha256>.bin              # 媒体本体，跨天共享；名字就是内容的哈希
 ```
 
-- `state.json` 里一个用户一份，字段：`userId / profile / coreMemories / workMemories / archives /
-  changeLogs / conversationMemories / episodicMemories / reminders / storedMedia / mediaArtifacts`。
+- `state.json` 里一个用户一份，字段：`userId / profile / memories / changeLogs / conversationMemories /
+  conversationMemoryBackupLimit / reminders / storedMedia / mediaArtifacts`。
+  （**2026-09-18 记忆三表合并**后记忆只剩一个 `memories` 数组；`coreMemories` / `workMemories` /
+  `episodicMemories` / `archives` 都是老备份包的字段，清理逻辑仍认前三个。）
 - `mediaArtifacts[]` 记录每份媒体的 `status`（`OK / MISSING_SOURCE / MISSING_HASH / HASH_MISMATCH /
   COPY_FAILED`）、`path`（`media/<sha256>.bin`）、`sizeBytes`，以及复用时才有的 `reused: true`。
 - **为什么是 zip 不是 tar.gz**：Java 标准库没有 tar，用 `java.util.zip` 零依赖；

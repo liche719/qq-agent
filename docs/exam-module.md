@@ -24,7 +24,7 @@
 | `tool/ExamTool.java` | 约 20 个给大模型用的工具 |
 | `controller/AdminExamController.java` | 面板「考研」页的数据接口（含编辑计划表单） |
 | `controller/AdminPanelController.java` | 面板页签清单（模块页签由后端描述，前端通用渲染） |
-| `deploy/mysql/V3__create_exam_tables.sql` / `V4__create_exam_tracking_tables.sql` | 建表脚本（生产是 `validate`，缺表启动即失败） |
+| `deploy/mysql/V3__create_exam_tables.sql` / `V4__create_exam_tracking_tables.sql` | 建表脚本（**MySQL 时代**；2026-09-18 整库迁 pg 后表结构以现库为准，`deploy/postgres/` 下没有单独的 exam 建表脚本。生产是 `validate`，缺表启动即失败） |
 
 ## 表结构（`docs/schema.sql` 里也留了索引）
 
@@ -39,14 +39,16 @@
   `status` 取 `OPEN/REVIEWING/MASTERED`；`review_stage` 是 `REVIEW_INTERVALS = {1,3,7,15,30}` 的下标。
 - `exam_milestone`：阶段里程碑（`title / due_date / subject / done / note`），给「XX 月底过完一轮」这类硬节点用。
 
-建表（**必须先建表再部署**，否则 `ddl-auto=validate` 会让容器起不来）：
+建表（**必须先建表再部署**，否则 `ddl-auto=validate` 会让容器起不来）。下面两条是 **MySQL 时代**的命令，
+**2026-09-18 整库迁到 PostgreSQL 后已不适用**——`wechat-agent-mysql` 容器 2026-09-20 已退役，
+`exam_*` 六张表是随整库迁移过去的（见 `docs/pg-migration.md`），这里留作历史记录：
 
 ```bash
 docker exec -i wechat-agent-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" wechat_agent < V3__create_exam_tables.sql
 docker exec -i wechat-agent-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" wechat_agent < V4__create_exam_tracking_tables.sql
 ```
 
-> 用 mysql CLI 手动插中文数据时**必须加 `--default-character-set=utf8mb4`**，否则中文会被按 latin1 写进去变乱码
+> （MySQL 时代）用 mysql CLI 手动插中文数据时**必须加 `--default-character-set=utf8mb4`**，否则中文会被按 latin1 写进去变乱码
 > （我用 demo 数据验证时就踩了这条，页面显示成 `æ•°å¦`）。
 
 ## 配置（`application.yml` 的 `exam:` 段 + compose 透传）

@@ -6,7 +6,7 @@
 
 | 验证项 | 结果 |
 |---|---|
-| 容器 env | `DB_URL=jdbc:postgresql://127.0.0.1:5432/wechat_agent`、`DB_DRIVER=org.postgresql.Driver`、`DB_USER=wechat_app`、`QUARTZ_DELEGATE=PostgreSQLDelegate` |
+| 容器 env | `DB_URL=jdbc:postgresql://127.0.0.1:5432/wechat_agent`、`DB_DRIVER=org.postgresql.Driver`、`DB_USER=wechat_app`、`QUARTZ_DELEGATE=PostgreSQLDelegate`（**这是迁移当时的简写值；当晚实测后按坑 9 改成全限定名 `org.quartz.impl.jdbcjobstore.PostgreSQLDelegate`**） |
 | 应用连在 pg 上 | `pg_stat_activity` 里 3 条 `PostgreSQL JDBC Driver` 空闲连接 |
 | 已离开 MySQL | MySQL 上 `wechat_app` 的连接数 = **0** |
 | 启动 | `Started ... in 44.077 seconds`（`production` + `validate`，无 schema 错误） |

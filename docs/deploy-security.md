@@ -30,6 +30,8 @@
 
 ```
 wechat-deploy upload-image    <git-sha> <sha256> <hmac>   # stdin = 镜像包
+wechat-deploy upload-image-part <git-sha> <序号> <分片 sha256> <hmac>   # stdin = 镜像分片（CI 走这条，见 §7）
+wechat-deploy join-image      <git-sha> <分片数> <整包 sha256> <hmac>   # 合并分片并校验整包
 wechat-deploy upload-compose  <sha256> <hmac>             # stdin = docker-compose.remote.yml
 wechat-deploy upload-settings <sha256> <hmac>             # stdin = docker/searxng/settings.yml
 wechat-deploy deploy          <git-sha>

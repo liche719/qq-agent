@@ -6,46 +6,51 @@
 
 ## 0. 一句话现状
 
-**对话结束后异步跑一次「记忆提取」，把值得长期保留的信息写进三类记忆（核心 / 中期 / 情景）；
-课表这类会变的信息一律不记；"归纳"这条路试过、不合格、已删除。**
+**对话结束后异步跑一次「记忆提取」，把值得长期保留的信息写进三类记忆（核心 / 中期 / 情景），
+会变的信息（课表这类）写进事实层 `memory_fact`；"归纳"这条路试过、不合格、已删除。**
+（**2026-09-18 起**三层已合并成 `memory`（`kind`=PROFILE/TASK/EXPERIENCE）+ `memory_fact` + `conversation_memory` 三张表，
+统一走 `MemoryService`，旧 `core`/`work`/`episode` 表与那三个 Service 都不存在了；课表的写法见 §2 规则 12。）
 
 ## 1. 什么时候写（触发）
 
 ```
 用户发消息 → 应用照常回复（记忆不在这条链路上，不影响首字延迟）
-          → 静默 45 秒（用户继续说话就一直往后推，最多推到 150 秒）→ 跑一次「记忆提取」
+          → 距上次提取又说了 15 条（或待提取窗口最老一条已放 6 小时）→ 再等 10 秒合并同一串消息 → 跑一次「记忆提取」
 ```
-
-- 参数：`memory.extraction-window-seconds`（默认 45）、`memory.extraction-max-delay-seconds`（默认 150）。
+（**2026-09-18 换成轮次驱动**：旧的 `memory.extraction-window-seconds` / `memory.extraction-max-delay-seconds` 两个键**已删除**。）
+- 参数：`memory.extraction-rounds`（默认 15）、`memory.extraction-max-idle-hours`（默认 6）、`memory.extraction-coalesce-seconds`（默认 10）、`memory.extraction-min-interval-seconds`（默认 180，同一用户两次提取的最小间隔）、`memory.extraction-overlap-turns`（默认 5）、`memory.extraction-window-rows`（默认 0 = 按轮次自动推导窗口行数）。
 - **为什么不是每轮一次**：3 秒窗口时，"两条消息间隔超过 3 秒"就会各触发一次提取。实测连发 3 条消息 → 3 次提取、
   三次输入窗口互相重叠（prompt 836 → 895 → 949）。改成 45 秒静默后同样的 3 条消息 → **1 次提取**。
-- **提取前还有一道门槛**（`MemoryExtractor.worthExtracting`）：窗口里没有"实质内容"就整个跳过——
-  去标点后 ≥5 个字、或含数字、或含「我/咱」。所以「好」「在吗」「嗯嗯」这类不再白跑一次（带思考）的模型调用。
-  **跳过不是漏记**：提取窗口是"最近 20 轮"，用户下一句有内容时会把这些短句一起带进去。
+  （45 秒静默这套 2026-09-18 又被上面的轮次驱动取代，这段留作当时的实测记录。）
+- **前置过滤 2026-09-18 已整块删除**：`MemoryExtractor.worthExtracting` 那套"窗口里没有实质内容就整个跳过"
+  （去标点后 ≥5 个字、或含数字、或含「我/咱」）连同 `MEMORY_EXTRACTION_PREFILTER` 键都不在了，该不该记全交给模型判断。
+  现在只剩"窗口里没有可读轮次就跳过"这一条（`WINDOW_EMPTY`，那是事实不是启发式）。
 
 ## 2. 写什么、不写什么（规则）
 
 提取器（`MemoryExtractor`）一次调用产出的候选类型：`episodes`（情景）、`newWorkItems`（中期）、
-`coreCandidates`（核心）、`coreUpdates`/`workConflicts`（修正已有）、`completedWorkItems`（完成）、`duplicates`（重复）。
+`coreCandidates`（核心）、`coreUpdates`/`workConflicts`（修正已有）、`completedWorkItems`（完成）、`duplicates`（重复）、
+`facts`（会变信息的事实层，2026-09-18 新增）。
 
 **必须遵守的几条硬规则**（都在提示词里写死）：
 
 | # | 规则 | 为什么 |
 |---|---|---|
-| 1 | 只能依据 **user 角色**的明确陈述；assistant 的话、工具结果、网页、推测都不能成为记忆 | 防幻觉 |
-| 12 | **课表、教室号/上课地点、第几节课的时间、临时日程、一次性数字**（今天学了几小时、几点下课）→ **一律不记**（核心/中期/情景都不写） | 这些"每周都在变"，记下来必然变成错信息。要看就现场读用户保存的课表图 |
-| 13 | **只有用户说「记一下/记住/以后都这样」才记**；你从图片里自己看出来的事实不入库 | 同上；也避免"它自己认定" |
+| 1 | 只能依据 **user 角色**的明确陈述；assistant 的话、工具结果、网页、推测都不能成为记忆（**唯一例外是 `facts`**：用户自己发来的图片/文件里确实看到的内容可以写进去，标 `source=DOC`） | 防幻觉 |
+| 12 | **课表、教室号/上课地点、第几节课的时间、临时日程、一次性数字**（今天学了几小时、几点下课）→ **不写进核心/中期/情景，改写事实层 `facts`**（每件事每次只写当前有效的那个值） | 这些"每周都在变"，但事实层会按「同一件事的同一个属性」自动用新值取代旧值，所以写进来是安全的、也是必须的；不写就永远想不起来 |
+| 13 | **facts 的写法**：subject=这件事的名字（同一件事每次必须完全一样）、predicate=属性、object=可被替换的具体值；`source=USER` 是用户自己说的、`source=DOC` 是你从用户发来的图片/文件里确实看到的 | 值能替换才叫"会变的信息"；「有课」这种状态没有信息量、也替换不了 |
 | 6 | 与已有核心记忆讲同一件事时**必须写 coreUpdates**，不许新增平行的条目 | 治"旧事实还留着" |
 
 > 规则 12/13 是 2026-09-14 加的。加之前库里躺着一批课表记忆（`晚上上课地点是8B304.305，必须记住`、
 > `第1-2节课的下课时间是10:10`、`课表节次时间…`），而用户后来用截图纠正过教室号（7B-301），**那条更正当年没进库**——
 > 因为当时的规则 1「只能依据 user 明确陈述」把"你从图片核对出来的事实"也挡住了。
 > 用户 2026-09-14 的决定是：**课表类干脆不记，每次看图**，所以没有再实现"允许记录图片核对结果"。
+> （**2026-09-18 已反转**：课表这类会变的信息改成写进事实层 `facts`，并且允许以 `source=DOC` 记录用户发来的图片/文件里确实看到的内容，见上面规则 12/13。）
 
 ## 3. 冲突/过期怎么处理（两层）
 
 1. **确定性兜底**（零成本）：`MemoryTextSimilarity` 算字符二元组 Jaccard，新候选与已有核心记忆相似度 ≥0.72 →
-   走 `CoreMemoryService.replaceFromExtraction`：**旧行 status=SUPERSEDED（不删除）、写变更日志、新建替代行**。
+   走 `MemoryService.replaceProfile`（原 `CoreMemoryService.replaceFromExtraction`；那个类 2026-09-18 已并入 `MemoryService`）：**旧行 status=SUPERSEDED（不删除）、写变更日志、新建替代行**。
 2. **第二次小调用**（`MemoryExtractor.reconcileCoreWithModel`）：字面不像、但可能是"同一件事换了个说法"时，
    问模型一次"这条新事实是不是已有某条的新版本？"（只回编号）。
    - **为什么必须有这一层**：实测「考研数学目标分是130」被改写成「用户在考研中设定的数学目标分数为140分，希望冲刺更高分数」，
@@ -56,13 +61,20 @@
 
 | 开关 | 默认 | 作用 |
 |---|---|---|
-| `MEMORY_EXTRACTION_WINDOW_SECONDS` | 45 | 静默多久算"聊完一轮" |
-| `MEMORY_EXTRACTION_MAX_DELAY_SECONDS` | 150 | 一直被推时的最长等待（防止一直不触发） |
-| `MEMORY_EXTRACTION_RECENT_TURNS` | 20 | 提取时看最近多少轮 |
+| `MEMORY_EXTRACTION_ROUNDS` | 15 | 距上次提取又说了这么多条就触发 |
+| `MEMORY_EXTRACTION_MAX_IDLE_HOURS` | 6 | 待提取窗口最老一条放了这么久就兜底触发 |
+| `MEMORY_EXTRACTION_COALESCE_SECONDS` | 10 | 到点后再等这么久，把同一串消息合并成一次 |
+| `MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS` | 180 | 同一用户两次提取的最小间隔 |
+| `MEMORY_EXTRACTION_OVERLAP_TURNS` | 5 | 窗口里额外带上的背景轮数（上次已处理） |
+| `MEMORY_EXTRACTION_WINDOW_ROWS` | 0 | 提取窗口取多少行；0 = 按 ROUNDS 自动推导 |
+| `MEMORY_EXTRACTION_RECENT_TURNS` | 40 | 读不到库时去 Redis 兜底读窗口的轮数 |
 | `MEMORY_MIN_CONFIDENCE` | 60 | 低于这个置信度不写 |
 | `MEMORY_DEDUP_THRESHOLD` | 0.8 | 与已有记忆重复度超过它就不新增 |
-| `LLM_MAX_TOKENS_STRUCTURED` | 4096 | 结构化调用（提取/提醒/排程/归档）的输出上限，**思考 token 也算在内** |
-| `THINKING_DAILY_LIMIT_PER_USER` | 5 | `thinkDeeper` 升档的每日额度 |
+| `LLM_MAX_TOKENS_STRUCTURED` | 16384 | 结构化调用（提取/提醒/排程/反思）的输出上限，**思考 token 也算在内** |
+
+> **已删除的键**（别再当"现在可配"用）：`MEMORY_EXTRACTION_WINDOW_SECONDS`、`MEMORY_EXTRACTION_MAX_DELAY_SECONDS`、
+> `MEMORY_EXTRACTION_PREFILTER`（2026-09-18 换成轮次驱动时一起删的）、`THINKING_DAILY_LIMIT_PER_USER`（随 `thinkDeeper` 于 2026-10-09 删除）。
+> 仍在的还有 `MEMORY_SELF_REFLECT_MODE`、`LLM_REASONING_EFFORT`、`AGENT_TOOL_TRIM_ENABLED` 等，权威默认值以 `application.yml` 为准。
 
 ## 5. 成本（2026-09-14 实测）
 
@@ -77,7 +89,7 @@
 ### 6.1 「按场景开关深度思考」——已删除
 实测这个模型（`deepseek-v4-flash-vision-exp`）**默认就在思考**，唯一有效的关闭方式是 `thinking:{"type":"disabled"}`。
 一度只对 `extract`/`schedule_parse`/短寒暄关掉，但用户体感是"省电档让它显得变傻"，2026-09-14 **整块删除**（含省电档
-和 `DialogModeDecider`），现在全部场景都按模型默认思考。历史实测数据留在 `docs/llm-call-modes.md`。
+和 `DialogModeDecider`）。（**现在**：2026-09-18 起又按场景分了 `reasoning_effort` 档位——用的不是当年那个 `thinking:{"type":"disabled"}` 开关，各场景默认档位多为 `low`，见 `docs/llm-call-modes.md` §16。）历史实测数据留在 `docs/llm-call-modes.md`。
 
 ### 6.2 「每天一次记忆归纳（consolidation）」——上线当天删除
 思路来自业界（ChatGPT 的后台 dreaming、斯坦福 Generative Agents 的 reflection）：把零碎记忆归纳成少量高层记忆。
@@ -108,10 +120,10 @@
 
 1. **存量里那条错的教室号还在**：`晚上上课地点是8B304.305，必须记住` 仍为 ACTIVE，而截图上是 7B-301。
    用户 2026-09-14 明确选择**暂时不动存量**（改法：置 SUPERSEDED + 保留旧行 + 快照可回滚）。
-2. **它可能嘴上说"记住了"但实际不存**：课表类按规则不记，但对话侧一度仍会回「记下了」。
+2. **它可能嘴上说"记住了"但实际不存**：课表类当时按规则不记（**2026-09-18 起改成写事实层 `facts`**），但对话侧一度仍会回「记下了」。
    已加提示词第 25 条（不许承诺做不到的事），**上线后需在真实对话里复验一次**。
 3. **没有画像层**：核心记忆是一堆平铺事实，没有"他是谁/当前主线"的汇总（见 6.3）。
-4. 记忆检索仍是"全量注入核心+按关键词取中期"，不是向量检索；库小的时候够用。
+4. 记忆检索**2026-09-18 起已是向量检索**：三层都带 `embedding`（不映射进 JPA，由 `PgVectorStore` 用原生 SQL 读写），工作记忆按当前消息的向量相似度注入（下限 `MEMORY_WORK_VECTOR_FLOOR`，默认 0.45）；不再是"全量注入核心 + 按关键词取中期"。
 
 ## 8. 下一步候选（按用户此前的判断排序）
 

@@ -6,7 +6,7 @@
 
 > 配套文档：`self-layer.md`（**骨架与决策**：网状模型、边表、图、分期、判据、算法清单）。
 > 本文件只写"**怎么做**"，不重复"为什么"。
-> 2026-09-14 · 纸面方案，**未实现**。放在 `next` 分支。
+> 2026-09-14 · ~~纸面方案，**未实现**。放在 `next` 分支。~~ **2026-10-10 校对：这句已作废——自主模块已全部实现并上线（`v1.1.0`~`v1.3.1`），见 `self-layer-plan.md`。**
 
 ## 1. 表结构（前缀 `agent_self_`，与 `user_*` 严格隔离）
 
@@ -16,6 +16,8 @@
 | `agent_self_event` | **它自己那侧的时间线**（也是倾向的证据链） | `id, kind(GOAL_SET/GOAL_CHANGED/GOAL_DROPPED/COMMIT/PREDICT/JUDGE/DISAGREE/REFLECT/STANCE_FORMED/STANCE_REVISED/NOTE), topic(判断类别), stance(方向), content, evidence(json: 引用的对话id或event id), importance, created_at` | [Generative Agents](https://arxiv.org/abs/2304.03442) 的 memory stream |
 | `agent_commitment` | **账**：许过的诺、做过的预测 | `id, content, due_at, status(OPEN/KEPT/BROKEN/ABANDONED), evidence, resolved_at` | 自研（无直接先例） |
 | `agent_reflection` | **反思产物**（带证据链，可回溯） | `id, level(1/2/3), input_event_ids(json), conclusion, importance, written_back(block_id), created_at` | Generative Agents 的 reflection |
+
+**（2026-10-10 现状：`agent_self_*` 这一族后来不止这四张——`agent_stance`（倾向的事实源，也在 `V5` 里）、`agent_lesson`（V6，教训清单）、`agent_self_utterance`（V8，"它想说的话"）；"它自己的时间"另有 `agent_quest` / `agent_quest_note` / `agent_quest_run`（V7，V9 补 `cost_yuan`）。见 `self-layer-plan.md` §7.2 ~ §7.6。）**
 
 **硬约束**（写进表和服务层，不靠提示词）：
 1. 任何写入**必须有 evidence**（引用真实存在的事件/对话 id），否则拒绝——直接针对上次"归纳"翻车
@@ -50,7 +52,7 @@
 ```
 ① 人设（不变）
 ② 它自己那侧：Persona 块 → 当前 TASK/PROJECT 块 → STANCE（活跃倾向）→ 未了承诺（按 due 排序，最多 N 条）
-③ 用户那侧（现有 user_core/user_work，不变）
+③ 用户那侧（当时是 user_core/user_work；**2026-10-10 现状：已合并成 `memory`（`kind`=PROFILE/TASK/EXPERIENCE），见 `memory-vector-plan.md` §20**）
 ④ 最近对话（不变）
 ```
 
@@ -91,7 +93,7 @@
 | 手动 | 用户或程序显式触发一次 | 兜底（也是排障入口） |
 
 **实现（2026-09-14）**：`SelfReflectionJob` 用 `@Scheduled` 每分钟看一眼「攒够没有」，判据是
-`turnsSinceLastReflection()`（自上次反思以来机主说了多少轮，`memory.self-reflect-turns` 默认 12）。
+`turnsSinceLastReflection()`（自上次反思以来机主说了多少轮，`memory.self-reflect-turns` 默认 12）。**（2026-10-10 现状：这已不是唯一判据——后来又加了「它自己事件的兴趣累积」（`interest`）与「闲置超时 + 手上有没结的事」（`idle`）两条**不依赖机主**的触发，见 `self-layer-plan.md` §7.6 与 `SelfReflectionJob`。）**
 **`compaction-event` 这一档没实现**——这个代码库没有"上下文压缩"事件，不假装支持。
 手动档走面板「立即反思一次」（`POST /api/admin/self/reflect`），**照常受预算与防抖约束**，不是绕过规则的旁路。
 **防抖必须有**（本节末的"最小反思间隔"）：实测定时与手动会前后脚各跑一次、内容几乎重复 →
@@ -363,8 +365,9 @@ disagreements / changelog / drift / cost）；趋势图复用总览页现有的�
 到点标「该复查了」）、`/blocks`、`/commitments`、`/disagreements`（含"后来改口了（近似）"）、
 `/reflections`（每次读了哪几条、结论、成本）、`/events`、`/changelog-bars`（**每日变更量**）、
 `/cost-bars`（每日 tokens），外加一个排障动作「立即反思一次」。
-**没做的**：上下文检查器（本轮实际注入的逐段字数/占比）与「这一轮的调用链」——那两块的答案在
-`AgentOrchestrator`/`AgentLoop` 的调用现场，属于独立的观测改造；**漂移曲线**先用"每日变更量"代替
+**当时没做的**：上下文检查器（本轮实际注入的逐段字数/占比）与「这一轮的调用链」——那两块的答案在
+`AgentOrchestrator`/`AgentLoop` 的调用现场，属于独立的观测改造（**2026-10-10 现状：这两块 2026-09-15 已补上**，
+见本节上面那段与 `self-layer-plan.md` §7.4）；**漂移曲线**先用"每日变更量"代替
 （真正的 self-state 距离要每天存快照，属于三期，**不放假距离**）。
 
 ## 13. 算法逐条备忘（按"不做会怎样 → 观测什么 → 最简形态 → 何时升级"）

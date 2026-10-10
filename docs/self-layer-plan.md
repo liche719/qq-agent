@@ -10,7 +10,7 @@
 > 配套：`self-layer.md`（骨架与决策）、`self-layer-spec.md`（细则）。
 > 本文件只覆盖**一期**：`spec §1`（表）、`§2`（工具）、`§3`（注入顺序）、`§8`（时间感）+ **只读面板最小集**。
 > **不碰**：反思流程（§4）、判断→倾向（§5）、FSRS 复查调度、领域/产出（§9）——那些是二期/三期。
-> 2026-09-14 · **一期已实现（分支 `next`，未部署）+ 本地端到端验证通过**。
+> 2026-09-14 · **一期已实现 + 本地端到端验证通过**；~~分支 `next`，未部署~~ **（2026-10-10 现状：一期 ~ 三期② 全部已上线，tag `v1.1.0` / `v1.2.0` / `v1.3.1`，见 §7.6。）**
 > **二期（反思流程 + 判断→倾向 + FSRS 复查 + 面板）同日实现并验证**（见 §7.2）。
 > 下面是原始施工图；实现时出现的偏差记在各节「实际」里，**验收结果见 §7.1 / §7.2**。
 
@@ -45,7 +45,7 @@
 | 类 | 职责 | 关键点 |
 |---|---|---|
 | `AgentSelfBlock` / `AgentSelfEvent` / `AgentCommitment` / `AgentReflection` + 各 `Repository` | 实体与仓库 | 照现有 JPA 风格，`LocalDateTime` |
-| **`SelfService`** | **唯一写入入口** | ① `evidence` 必须能解析成真实存在的 `conversation_memory.id` 或 `agent_self_event.id`，否则抛业务异常 ② 块写入按 `char_limit` 校验（超了要求先 summarize）③ 活跃承诺/倾向条数上限 ④ **事件只追加，不修改不删除** |
+| **`SelfService`** | **唯一写入入口** | ① `evidence` 必须能解析成真实存在的 `conversation_memory.id` 或 `agent_self_event.id`，否则抛业务异常 ② 块写入按 `char_limit` 校验（超了要求先 summarize）③ 活跃承诺/倾向条数上限 ④ **事件只追加，不修改不删除**。**（2026-10-10 现状：这个类 2026-09-15 已拆成 `SelfCoreService`（归属/证据门/事件/块/承诺）、`SelfStanceService`（判断与倾向）、`SelfLessonService`（教训）、`SelfQuestStore`（领域②与「口」），反思读写归 `SelfReflectionService`，`SelfService` 这个名字不存在了。）** |
 | **`SelfLoader`** | 只读，产出注入段落 | 实现为 `PromptSectionProvider`，产出 `PromptSection(order=-10, "【我自己那侧】", …)`；预算 `memory.self-max-chars`（800）；按「Persona → TASK → PROJECT → STANCE → 未结承诺 → 时间感」拼接；不写任何东西；**全空时返回 `null`** |
 | **`AgentSelfTool`** | 实现 `AgentToolProvider`（自动注册） | 方法见 §5；**写操作必须 `retryable = false` + `@NonIdempotentTool`**（坑 39：有副作用的工具默认会重试，会重复写入） |
 | `AdminSelfController` | 只读接口 | `/api/admin/self/overview`、`/blocks`、`/events`、`/commitments` |
@@ -82,8 +82,13 @@
   self-event-max-rows: ${MEMORY_SELF_EVENT_MAX_ROWS:200}
 ```
 
-⚠️ **`docker-compose.remote.yml` 的 `environment:` 必须补上这几个键**——现状是**一个 `MEMORY_*` 都没透传**，
+> **2026-10-10 现状**：上面四个键里 `self-enabled` / `self-max-chars` / `self-block-char-limit` 都落地了；
+> **`self-event-max-rows`（`MEMORY_SELF_EVENT_MAX_ROWS`）从来没落地**，别照着它去改配置。
+
+⚠️ **`docker-compose.remote.yml` 的 `environment:` 必须补上这几个键**——**（写这段时）**现状是**一个 `MEMORY_*` 都没透传**，
 线上只能吃 yml 默认值（坑 36：compose 只透传列出来的变量，漏了不会报错）。
+**2026-10-10 现状：已经补上了，compose 里现在透传了 30 个 `MEMORY_SELF_*` 键**（`MEMORY_SELF_ENABLED` /
+`_OWNER_OPENID` / `_MAX_CHARS` / 反思与作业那一整组…），这份警告已经完成使命、留作记录。
 服务器 `.env` 先不写（用默认值），要调再加。
 
 ## 5. 工具面（一期 **10** 个——比原计划多一个 `selfRecall`，原因见下）
@@ -109,7 +114,7 @@
 `POLICY_HINT` 改成「先调 selfRecall 拿真实编号」。**注意本轮消息要等回复完才落库，所以最新一条是上一轮。**
 
 **公共描述（每个都要写）**：这些是「**它自己的事**」，不是为用户做的事；`evidence` 缺失一律拒绝。
-**注册校验**：启动日志打「工具注册完成：N 个类 / M 个方法」——开＝**12 个类 / 60 个**，关＝**11 个类 / 50 个**。
+**注册校验**：启动日志打「工具注册完成：N 个类 / M 个方法」——开＝**12 个类 / 60 个**，关＝**11 个类 / 50 个**。**（2026-10-10 现状：生产日志是 `11 个类 / 51 个工具`，见 `docs/todo.md`。）**
 `AgentSelfTool` 与 `SelfLoader` **都要** `@ConditionalOnProperty(memory.self-enabled)`：
 只给 `SelfLoader` 加会"关不干净"（工具仍占着模型工具表，只是每次返回"已关闭"，实测踩到过）。
 
@@ -165,8 +170,8 @@
 
 **没验证（别当成已验证）**：
 - 判据 6「冷启动对比」（清空块前后问同一件事，回答不同）——只做了"暗号"这一个等价证据，没做前后对照
-- **服务器 / QQ 真机：模块未部署**（`next` 分支）；生产 `.env` **还没写 `MEMORY_SELF_OWNER_OPENID`**，不写＝整个模块不工作
-- 二期（反思流程、判断→倾向、FSRS 复查调度）、三期（领域/产出/额度）**一行代码没写**
+- ~~**服务器 / QQ 真机：模块未部署**（`next` 分支）~~ **（2026-10-10 现状：早已部署上线、跑在生产，`MEMORY_SELF_OWNER_OPENID` 也已配好，见 §7.6）**；生产 `.env` 不写 `MEMORY_SELF_OWNER_OPENID`＝整个模块不工作
+- 二期（反思流程、判断→倾向、FSRS 复查调度）、三期（领域/产出/额度）**一行代码没写**——**（2026-10-10 校对：这句已作废，二三期都实现并上线了，见 §7.2 ~ §7.6。）**
 
 ## 7.2 二期实际验收结果（2026-09-14/15 本地，`next` 分支）
 
@@ -270,9 +275,9 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 - **作业**：`SelfQuestService.run(trigger)` 用 `AgentLoop.chat(...)` 跑**完整一轮带工具的 agent**，
   而不是像反思那样做一次窄调用——领域要"做事"，做事就得有手。
 - **工具作用域**（"给它工具"的边界）：`AgentLoop.chat` 多了一个 `allowedToolProviders` 参数，作用域内
-  **只下发也只允许执行**这五类工具：`AgentSelfTool`、`AgentQuestTool`、`SearchTool`、`WebPageTool`、`TimeTool`。
+  **只下发也只允许执行**这五类工具（当时的名单）：`AgentSelfTool`、`AgentQuestTool`、`SearchTool`、`WebPageTool`、`TimeTool`。**（2026-10-10 现状：`TimeTool` 已删除（当前时间改成每轮由 `AgentLoop.appendCurrentTime` 直接拼进输入），作用域现在是六类：`AgentSelfTool`、`AgentQuestTool`、`SearchTool`、`WebPageTool`、`WebFileTool`、`MediaMemoryTool`，见 `SelfQuestService.QUEST_TOOL_PROVIDERS`。）**
   执行侧另有一道 `ToolRegistry.isProvidedBy` 校验——**只藏 schema 不够，模型幻觉出一个被藏起来的工具名照样能调起来**。
-- **独立身份**：作业跑在 `SelfService.SELF_SCOPE`（`__self__`）而不是机主的 userId 上。借机主的 id 跑会
+- **独立身份**：作业跑在 `SelfService.SELF_SCOPE`（`__self__`）而不是机主的 userId 上。**（2026-10-10 现状：`SELF_SCOPE` 常量现在挂在 `SelfCoreService` 上，`SelfService` 已拆掉。）** 借机主的 id 跑会
   `userService.getOrCreate` + 写 `conversation_memory` + 调度记忆提取——等于把它夜里想的事灌进机主的
   用户档案与长期记忆（第一优先级是"用户长期记忆不丢失"，污染它就是损坏它）。
 - **证据死锁的第三次解法**：作业开始时先建一条 `agent_quest_run`，它的 id（`run:<id>`）就是这次作业的锚点证据。
@@ -354,8 +359,8 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 
 ### 权限（用户要求"给大一些"）
 
-- **可用工具 25 → 36 个**（作业开跑时打一行日志，把名单列出来——权限面不写出来就只能靠读代码判断）。
-- **给大**：`thinkDeeper`（以前被挡在门外，很讽刺：它脑子里最深的工具它自己用不了）、
+- **可用工具 25 → 36 个**（作业开跑时打一行日志，把名单列出来——权限面不写出来就只能靠读代码判断）。（**2026-10-10：`thinkDeeper` 与 `TimeTool` 已于 2026-10-09 撤掉，所以比这个数少 2 个。**）
+- **给大**：~~`thinkDeeper`（以前被挡在门外，很讽刺：它脑子里最深的工具它自己用不了）~~（**2026-10-10：`thinkDeeper` 已删除，不在可用工具名单里**）、
   `downloadWebFile` / `findDownloadableLinks`（能攒材料）、资料库 6 个（读 / 标重要 / 记内容）。
 - **不给**：`sendDownloadedFile`（会把文件推到机主 QQ 上——口先不开）、
   `deleteStoredMedia`（不可逆地删资料）。**"权限大一些"不等于把不可逆的动作也交出去。**
@@ -371,7 +376,8 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 
 - **触发式，不是整点式**：心跳每 10 分钟看一眼 `wantsToWork()`——
   ① 自上次作业以来它自己事件的**兴趣累积**过阈值（手上有事在推进）；
-  ② 或**搁太久**（默认 10h）且手上还有没结的事（§8 的 open loop）；
+  ② 或**搁太久**（默认 10h，`MEMORY_SELF_QUEST_IDLE_HOURS`）且手上还有没结的事（§8 的 open loop）——
+  ⚠️ 别和**反思**那条 `MEMORY_SELF_REFLECT_IDLE_HOURS`（默认 20h）混了，是两个独立的闸；
   ③ 或**还从没动过**（先让它开个头，否则"没有上次"会把它永远锁在门外）。
 - **额度与防抖仍是硬闸**：它还能用 `selfQuestRest` 说"今天先到这"。触发式 ≠ 无限量。
 - **预算按钱算，不按次数**（同日用户定：**0.5 元/天，独立于对话**）：单次先给日预算的 60%、
@@ -417,9 +423,9 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 给它加条件会让"关掉模块"变成"整个应用起不来"。所以**数据层常驻、行为层（Job / Tool / Loader）才带条件**——
 面板还得能显示"模块已关闭"。这条和坑 64 的"两处都要加"是同一件事的两面：**行为入口必须全带条件，数据服务不能带**。
 
-**顺带发现的既有行为（没改，记下来）**：不触发时间注入的那一轮，它会**沿用上下文里的旧时间**
-（实测把上午 10:45 说成"凌晨两点半"）。时间只按需注入是为了不破坏前缀缓存（`TimeTool` 的注释写明了），
-这个取舍保留；它顺口提时间时说错属于提示词该管的事。
+**顺带发现的既有行为（当时没改，记下来）**：不触发时间注入的那一轮，它会**沿用上下文里的旧时间**
+（实测把上午 10:45 说成"凌晨两点半"）。时间只按需注入是为了不破坏前缀缓存（当时是靠 `TimeTool` 的注释写明的）。
+**2026-10-10 现状：`TimeTool` 已删除，当前时间改成每轮由 `AgentLoop.appendCurrentTime` 直接拼进用户消息，"沿用旧时间"这个问题不存在了。**
 
 ## 8. 风险
 
@@ -457,6 +463,6 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 | `self-layer.md` | 骨架、边表、图、判据、算法清单 |
 | `self-layer-spec.md` | 表 / 工具 / 注入 / 反思 / 倾向 / 分歧 / 产出 / 面板 / 算法逐条 |
 | `self-layer-plan.md`（本文） | 一期施工图 |
-| `deploy/mysql/V5__…sql` | **已写**：`V5__create_agent_self_tables.sql`（4 张表，纯新增，回滚＝drop） |
-| `src/main/java/…/self/` | 已写：4 实体 + 4 仓库 + `SelfService` + `SelfLoader` + `AgentSelfTool`（10 工具） |
+| `deploy/mysql/V5__…sql` | **已写**：`V5__create_agent_self_tables.sql`（4 张表，纯新增，回滚＝drop）——**2026-10-10 现状：`V5` 里后来还加了 `agent_stance`，另有 `agent_lesson`（V6）、`agent_quest{,_note,_run}`（V7）、`agent_self_utterance`（V8）与 `agent_quest_run.cost_yuan`（V9），见 §7.2 ~ §7.6** |
+| `src/main/java/…/self/` | 已写：4 实体 + 4 仓库 + `SelfService` + `SelfLoader` + `AgentSelfTool`（10 工具）——**2026-10-10 现状：`SelfService` 已按 §7.2/§7.3 拆成 `SelfCoreService` / `SelfStanceService` / `SelfLessonService` / `SelfQuestStore` / `SelfReflectionService`，实体与仓库也远不止 4 个** |
 | `src/main/java/…/agent/PromptSection*.java` | 已写：通用注入挂点（下个模块直接复用） |

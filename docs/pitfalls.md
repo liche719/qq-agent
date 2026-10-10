@@ -1,4 +1,4 @@
-# 已知坑与约定（完整版 · 65 条）
+# 已知坑与约定（完整版 · 67 条）
 
 > 本文件是 `AGENTS.md` 第 5 节的**完整版**。`AGENTS.md` 因为超过 harness 的 64 KB 读取上限会被截断，
 > 现在只保留「违反就出线上事故」的十几条硬约定；**细节、来龙去脉、实测证据全在这里**。
@@ -6,7 +6,13 @@
 > **编号是稳定契约：不要重排、不要插号、不要合并。** 全项目的代码注释和 `docs/` 其它文档都按
 > 「坑 38」「坑 52」这样引用；改了编号会让这些引用全部指错。
 >
-> 新踩的坑**追加到下一条编号**（现在最后一条是 65），别往中间插。
+> 新踩的坑**追加到下一条编号**（现在最后一条是 67），别往中间插。
+>
+> ⚠️ **这是一份按时间累积的记录，条目本身不改写**（改了就等于抹掉当时为什么这么做）。
+> 但凡某条的**结论/现状**后来变了，都在原条目后面用 `（日期 注：…）` 标注。
+> **2026-10-10 做过一轮时校**：给 MySQL 时代的条目（1、18、24、26、40、53）补了 pg 之后的现状，
+> 把已删除的机制（工具关键词裁剪、`THINKING_*` 那几个键、`thinkDeeper`/`dialog_deep`）标掉。
+> 看到没标注的旧条目时，先当"历史"读，再对着 `AGENTS.md` 和代码确认。
 
 ## 主题索引
 
@@ -23,7 +29,7 @@
 | **通道与主动消息** | 30、51、54 |
 | **前端面板** | 11、13、15、33、44、57 |
 | **记忆与提示词** | 16、42、43、62、63 |
-| **工具框架与 AgentLoop** | 27、28、39、45、55、60、61 |
+| **工具框架与 AgentLoop** | 27、28、39、45、55、60、61、**66、67** |
 | **外部集成**（SearXNG / 墨墨 / 证书 / 域名） | 3、21、22、23、26 |
 | **自主模块「它自己」** | 64、65 |
 
@@ -32,6 +38,8 @@
 ## 原文（1 ~ 65）
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
+   **（2026-10-10 注：生产 2026-09-18 已迁到 PostgreSQL 16 + pgvector、MySQL 容器 2026-09-20 退役，
+   所以这条现在只对本地那份仍是 MySQL 的 `docker compose` 有意义。「镜像/数据卷必须钉版本」这条纪律不变，见坑 49。迁移见 `docs/pg-migration.md`。）**
 2. Quartz：`job-store-type: jdbc`，`initialize-schema` 必须 `never`（历史 `always` 有重建表风险，已修）。
 3. **SearXNG 引擎配置（2026-09-12 按实测重做，别再想当然）**：这台机器是阿里云大陆机房 IP，逐引擎实测结论——
    - **可用**：`yandex`、`naver`、`resulthunter`、`searchmysite`、`mwmbl`（英文索引）、`bing`（**必须 `base_url: https://cn.bing.com`**，走 `www.bing.com` 会 302 且解析不到结果）。
@@ -59,9 +67,10 @@
 21. **acme.sh 会带引号回写 `~/.acme.sh/account.conf`**：里面存的是 `SAVED_Ali_Key='<AccessKeyId>'`（单引号），自己写的诊断脚本若直接取 `=` 后面的字符串就会带上引号，拿去调阿里云 API 会得到 **`InvalidAccessKeyId`（"Specified access key is not found or invalid."）**，看着像密钥被删、其实是解析问题。acme.sh 自己 `source` 读无影响，Python 读时务必 `.strip().strip("'").strip('"')`。
 22. **新注册域名实名前会被注册局 `client hold`**：期间公网 DNS 是 NXDOMAIN、acme.sh **一直「Not valid yet」空转**（实测 10 分钟不停）→ 签发脚本用 `timeout 900` 包住；解除后还有约 5 分钟负缓存。
 23. **浏览器会记住"点过继续访问"的那次不安全状态**：换上有效证书后，如果用户在换证书**之前**打开过面板并点过"继续访问"，那个标签页会一直显示「不安全」，**与服务器无关**。判定：`tools/ui-verify/check_security.py`（真实 Chromium 直连）；处理：关旧标签页/换无痕窗口，并**清掉 IP 那个书签**（IP 访问永远提示证书不匹配）。另：本机 Steam++（Watt Toolkit）会劫持部分域名 DNS（如 github→127.0.0.1），排查网络先退它。
-24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 连库口令是随机的（坑 53），`-uroot -proot` **已失效**——口令在服务器 `/opt/wechat-agent-infra/.env` 的 `MYSQL_ROOT_PASSWORD`。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`；远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 要跑一次「消息→LLM→工具→回复」的端到端：把 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 重建容器（QQ 通道由 `QQ_ENABLED` 独立控制，不会被顶掉），`POST /api/sim/send {"userId":"sim-xxx","content":"…"}` 同步返回回复；测完改回 `disabled` 并**删掉测试用户的行**。
+24. **排查用的小知识（省时间）**：① 生产（QQ 模式）下 `/api/sim/*` **不会注册**（`SimulatorController` 上有 `@ConditionalOnProperty wechat.channel.mode=simulator`），直接用会 404——想跑"消息→LLM→工具→回复"的端到端链路只能在 QQ 里真发消息，之后看面板「模型与搜索」页签的计数（进程内计数，重启归零）。② 连库口令是随机的（坑 53），`-uroot -proot` **已失效**——**2026-09-18 迁 pg 之后**口令在服务器 `/opt/wechat-agent-infra/.env` 的 `POSTGRES_PASSWORD`（应用账号走 `POSTGRES_APP_USER`/`POSTGRES_APP_PASSWORD`；本条原本写的 `MYSQL_ROOT_PASSWORD` 已作废）。③ `mysql`/`redis`/`searxng` 都绑 `127.0.0.1`；远程脚本里 `docker exec -i` 会吞 stdin，要加 `< /dev/null`。④ SearXNG 容器里**没有 curl**，想测容器内出网得用 `python3` 或 `wget`。⑤ 要跑一次「消息→LLM→工具→回复」的端到端：把 `.env` 的 `WECHAT_CHANNEL_MODE` 改成 `simulator` 重建容器（QQ 通道由 `QQ_ENABLED` 独立控制，不会被顶掉），`POST /api/sim/send {"userId":"sim-xxx","content":"…"}` 同步返回回复；测完改回 `disabled` 并**删掉测试用户的行**。**（2026-10-10 更新：不必再动生产的通道模式了——本机起一套一次性 pg + redis 就能端到端跑完整链路，配方见 `AGENTS.md` §2「想端到端跑一轮」；生产保持 `disabled` + QQ。）**
 25. **中文文本指令是"整串别名"匹配**：`CommandRegistry` 原来只认完全相等的串（如「结束陪练」），写成「陪练 英语」这种"指令+参数"会**静默落到大模型**（看起来像功能生效了，其实只是模型自己在临场演，`user_profile.coach_mode` 一行都没写）。2026-09-12 已改成：整串不是别名时**退回按首词识别、余下作为参数**；`HelpHandler` 的指令清单是**写死的**（避免与 Registry 循环依赖），加新指令必须同时改它，否则 `/help` 里看不到。
 26. **墨墨开放 API 的三个特点**（2026-09-12 接入时实测）：① 个人 access token 在**墨墨 App** 里生成、**有效期只有一天左右**，过期返回 401——所以别把它当成长期密钥写死，本项目把 Token 存进 `maimemo_setting` 表并**优先于环境变量**，用户在面板「背单词」页粘贴即可；② 官方**限流**（10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次），面板自动刷新很快，必须带缓存（本项目 30 秒）；③ 接口只给"今日完成/总数"，**新学与复习要自己按今日单词列表拆**，列表没取全就不能拿条数当复习数。另外 `Spring Data Redis` 会对 id 为 String 的 JPA 仓库报 "Could not safely identify store assignment"（已 `spring.data.redis.repositories.enabled: false` 关掉）。
+   **（2026-10-10 注：现在**该走 OIDC**——2026-09-20 起 `MaimemoOidcService` 换 1 小时 access + 90 天 refresh，token 顺序 OIDC → 面板 → 环境变量，「一天过期」只剩手粘 token 那条老路才有。上面的限流、缓存、`study_time` 是毫秒这些结论仍然有效。）**
 27. **模型"每轮都要调工具"不牢靠**：面试陪练第一版实测模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）。凡是"每轮都必须记账"的场景，**要在提示词里把动作顺序写死并前置**（"先调工具、再说话，顺序不能反"），并在工具描述里再强调一次；只写"每轮都要调用"不够。
 28. **Bean 循环依赖会让整个应用起不来**（2026-09-12 定时任务上线时踩到，CI 自检因此报「首页 000」、容器反复重启）：`ScheduledTaskService → AgentOrchestrator → CommandRegistry → SchedulesHandler → ScheduledTaskService`。Spring Boot 3 默认禁止循环引用，**直接注入就会启动失败**。凡是"服务被工具/命令依赖、自己又要用 AgentOrchestrator"的场景，用 `ObjectProvider<AgentOrchestrator>` 延迟取（`getIfAvailable()`），执行时再解析。
 29. **容器 JVM 默认时区 UTC 会让 Cron 和落库时间偏 8 小时**（2026-09-12 修）：`new CronExpression(...)`、`CronScheduleBuilder.cronSchedule(...)`、Spring 的 `@Scheduled(cron=...)`、以及 JDBC 驱动对 `LocalDateTime` 的换算**都按 JVM 默认时区**。修法三层：① compose 里给 agent 加 `TZ: Asia/Shanghai`；② 代码里所有 Cron 计算**显式指定时区**（`CronScheduleBuilder.inTimeZone(...)`、`CronExpression.setTimeZone(...)`）；③ `WechatAgentApplication.main()` 启动最开始 **`TimeZone.setDefault(app.time-zone)`**，这样代码正确性不再依赖容器环境变量（compose 的 TZ 只是双保险）。
@@ -92,7 +101,7 @@
 51. **网关"半开连接"的自愈（2026-09-13 加）+ 造半开连接的正确姿势**：`QqChannel` 每次心跳（`startHeartbeat` 的定时任务）顺带体检：连续 `SILENT_INTERVALS`(3) 个心跳周期收不到**任何**帧（心跳 ACK 也算帧）就判定半开 → 关掉旧 socket（reason `heartbeat timeout`）并 `reconnect()`。判定与 `isGatewayConnected()` 共用 `gatewayWentSilent()`，所以"面板显示异常/告警"与"触发重连"是同一个条件。**为什么要自愈**：半开时 OkHttp 的 `onFailure`/`onClosed` **都不会回调**，只有告警的话机器人会一直聋着。**验证状态**：误判已排除（30+ 分钟无 `半开连接` 日志）；**"触发"那一步未实测到**（两次都没能稳定造出静默条件）。
     - **造半开连接的正确姿势**（含我那次用一条 DROP 把面板从外部整个封了的教训）已搬到 `docs/channel-robustness.md`（那篇本来就管通道健壮性）。
 52. **别用 `[regex]::Replace` 往文档里插含 `$` 的代码片段**（2026-09-13 我把 AGENTS.md 写坏过一次）：.NET 替换串里 `$1`/`$4` 是捕获组引用、`$` 加单引号是"匹配之后的内容"，我插进去的 awk/grep 片段让第 6、7 节被整段复制、文件从 57KB 涨到 81KB。**结论**：含 `$` 的文本用 `edit`/`String.Replace` 插；**文档坏了第一件事是 `git checkout <好提交> -- AGENTS.md` 回滚**。另：`docs/` 在 `.gitignore` 里，新文档要 `git add -f` 并用 `git ls-files docs/` 核实。
-53. **生产凭据加固（2026-09-13 做完）+ 两个必须知道的坑**：应用用**独立账号** `wechat_app`（只授 `wechat_agent.*`）、MySQL root 口令已随机化、Redis 已 `--requirepass`、agent 容器 `cap_drop: [ALL]` + `cap_add: [NET_BIND_SERVICE]` + `no-new-privileges`。随机口令**只在服务器 `.env`（600）**，由 `openssl rand -hex 24` 现场生成、从不外传、也不打印。
+53. **生产凭据加固（2026-09-13 做完）+ 两个必须知道的坑**：应用用**独立账号**（当时是 MySQL 的 `wechat_app`，只授 `wechat_agent.*`；**2026-09-18 迁 pg 后对应 `POSTGRES_APP_USER`，只授 `wechat_agent.*` 的权限模型不变**）、**数据库超级用户口令已随机化**（现为 `POSTGRES_PASSWORD`）、Redis 已 `--requirepass`、agent 容器 `cap_drop: [ALL]` + `cap_add: [NET_BIND_SERVICE]` + `no-new-privileges`。随机口令**只在服务器 `.env`（600）**，由 `openssl rand -hex 24` 现场生成、从不外传、也不打印。
     - **坑 ①（把我打挂过一次）**：应用连 MySQL 看到的来源 IP 是 **docker 网桥网关 `172.22.0.1`**（mysql 只绑 127.0.0.1，应用经宿主 docker-proxy 转进去），所以只建 `'wechat_app'@'127.0.0.1'` 会 `Access denied ...@'172.22.0.1'`、启动即 `Unable to determine Dialect without JDBC metadata`。**正确做法：同时建 `'wechat_app'@'172.%'`**（不用 `%` 是留一层保险）。
     - **坑 ②**：`MYSQL_PASSWORD` 原来是"应用口令 + mysql root 口令"同一个变量，直接改会让健康检查用新口令 ping 而库里还是旧的 → mysql unhealthy → agent 起不来。现在拆成 `MYSQL_ROOT_PASSWORD` / `MYSQL_APP_USER` / `MYSQL_APP_PASSWORD`；**换口令顺序**：先改库 → 立刻验证能连 → 再写 `.env` → 再 `up -d`。
     - **仍未做**：`read_only: true` 与镜像 `USER 10001`（三个挂载目录要先 chown）——收益明确但改动面大。
@@ -110,13 +119,31 @@
 59. **媒体记忆三件套（2026-09-13）**：① 一次任务最多读 10 个文件（`media.context.max-files-per-task`，超限拒读）；② 让模型用 `noteStoredMediaContent` 把"图里到底是什么"写回 `extracted_text`（**视觉理解只在模型脑子里，工具拿不到**）。**完整设计见 `docs/media-memory.md`**。
 
 60. **LLM 调用档位（09-15 定型）**：三条实测：① 这个模型**默认就在思考**；② **唯一有效的关闭方式是 `thinking:{"type":"disabled"}`**（其他写法被静默忽略）——用户要默认全部思考，所以 `LlmScenario` 只留温度（结构化 0）与每场景 max_tokens；③ **思考 token 也算进 `max_tokens`**：结构化档 4096 会被思考吃满、正文为空（反思整条作废过一次）→ 反思单开 `REFLECT`（16384），**compose 的 `LLM_ZERO_TEMPERATURE_SCENARIOS` 与 `LLM_MAX_TOKENS_REFLECT` 必须同步**（坑 61 重演）。**流式响应自带 usage**。详见 `docs/llm-call-modes.md`。
-61. **工具集裁剪 + 三条 UX 结论**：① 没有备考计划、近期也不提考研时不下发 18 个考试工具（**`saveExamPlan`/`viewExamPlan` 永远保留**）；开关 `AGENT_TOOL_TRIM_ENABLED`。② **yml/compose 的非空默认值会整体覆盖代码默认集合**——加新场景必须两处一起改并**看日志核对**。③ 回复里**不要出现「工具调用未完成」**（默认 false），而 `> _调用工具：…_` 的尾注**别删**；**回复默认要短**（提示词 23~25 条：300 字内、不把决定推回给用户、能自己查就别问、不承诺做不到的事）。
+61. **工具集裁剪 + 三条 UX 结论**：① ~~没有备考计划、近期也不提考研时不下发 18 个考试工具（**`saveExamPlan`/`viewExamPlan` 永远保留**）；开关 `AGENT_TOOL_TRIM_ENABLED`~~ —— **2026-10-09 整套关键词裁剪机制已删除**（实测它几乎从不生效、还容易误裁；考试工具现在**一个都不收**，用户明确说面试/下载/考试都还要用）。`ToolSetTrimmer` 类还在，但只剩 `trim(all, userId)` 这一件事。② **yml/compose 的非空默认值会整体覆盖代码默认集合**——加新场景必须两处一起改并**看日志核对**。③ 回复里**不要出现「工具调用未完成」**（默认 false），而 `> _调用工具：…_` 的尾注**别删**；**回复默认要短**（提示词 23~25 条：300 字内、不把决定推回给用户、能自己查就别问、不承诺做不到的事）。
 62. **会变的信息不记进记忆（2026-09-14 用户定的）**：提示词加规则 12/13——**课表/教室/节次时间/临时日程/一次性数字一律不记**（要看就现场读他存的课表图），**只有用户说「记住」才记**，agent 自己从图片看出来的事实不入库。起因：库里躺着一批课表记忆（`晚上上课地点是8B304.305，必须记住` 等），而用户用截图纠正过的 7B-301 **当年没进库**（旧规则"只能依据 user 明确陈述"把图片核对结果也挡了）。**同一天试过"每天一次记忆归纳"并当天删除**：模型把两条原文用「；」拼起来当归纳、思考吃满 16384 额度、`replaces` 对不上原文就退化成重复新增——**完整版（含成本账）见 `docs/memory-extraction.md`**。
 63. **记忆写入的两层冲突处理（已上线验证）**：字面相似度 ≥0.72（`MemoryTextSimilarity`）→ 直接 `replaceFromExtraction`（旧行 SUPERSEDED 不删 + 变更日志）；**字面不像但可能是"换了说法"**（实测「数学目标分是130」→「…目标分数为140分」只有 0.3）→ `reconcileCoreWithModel()` 的**第二次小调用**只问"是不是已有某条的新版本"。**教训**：别在真实数据上做实验、先算预算、**先定方案再写代码**。**另**：`listActive` 用 `isExplicit` 过滤 `source_type`（只认 null/USER_EXPLICIT/USER_DERIVED），写错这个字段记忆会"凭空消失"。
 
 64. **自主模块一期~三期①（2026-09-14/15，v1.1.0/v1.2.0 已上线）**：`self/` 包 + V5/V6 迁移 + 通用注入挂点 `agent/PromptSection{,Provider}`（`SelfLoader` order=-10）+ 面板页签「它自己」。反思＝攒够 12 轮触发（防抖 30 分钟、每天 ≤4 次）；**倾向只由程序提升**（模型只能记判断）；教训上限 30、同类合并＝DOWNVOTE、复查没再犯＝UPVOTE。**四个坑**：① **证据死锁**——模型看不到 `conversation_memory.id`，「证据必须真实存在」让第一次写入永远失败 → 只读工具 `selfRecall` 递真实编号，**别删**；② `@ConditionalOnProperty(memory.self-enabled)` **`SelfLoader` 与 `AgentSelfTool` 两处都要**，只加一处关不干净；③ 反例优先＝反例侧独立达同一门槛即修订，且**只有比倾向 formedAt 更新的反例才算数**（否则翻烧饼）；④ 反思会从**它自己刚写的教训**里再推一条同类 → 反思输入排除 REFLECT/LESSON。详见 `docs/self-layer-plan.md` §7.1~7.4。
 
 65. **自主模块三期②「它自己的时间」（2026-09-15 已上线，tag v1.3.1）**：`agent_quest{,_note,_run}`（V7）+ `agent_self_utterance`（V8）+ 8 个 `selfQuest*` 工具 + `SelfQuestService` —— 用 `AgentLoop.chat` 跑**完整一轮带工具的 agent**（它自己的事要动手就得有手）。**重心是它自己**（用户 2026-09-15 定的："甚至没有我的也可以，不然和复读机没区别"）：独立作用域 `__self__`、可用工具 36 个（`thinkDeeper`/下载/资料库；**排除会给你发文件的 `sendDownloadedFile`、不可逆的 `deleteStoredMedia`**）、轮数 12、方向 2 个、**不看钟点**——心跳每 10 分钟判断"它想不想动"（自己事件的兴趣累积 / 搁太久还有没结的事），能自己说"今天先到这"（实测 11:18 **自己醒了**，`触发=triggered`）；**预算按钱算**（用户定 0.5 元/天、独立于对话）：单次给 60%、**没落产出才续一次**（判据是客观的：新笔记/新的一步/收掉方向）、当天封顶 ×1.5；**必须分 cache 命中计价**——命中输入便宜 50 倍，实测命中率 78%、单次 **0.055~0.066 元**（只按未命中算会高估 4 倍），峰谷 ×2 按调用时刻算，钱落 `agent_quest_run.cost_yuan`（内存计数一重启就等于免费）；**它有嘴**——想说的话**当场就发**（`SelfSpeakService`，每天 ≤1 条，发出去才算）；反思加了两条**不依赖机主**的触发（它自己事件的兴趣累积 / 闲置超时）。**四个坑**：① **思考模式下伪造 assistant 消息＝HTTP 400**——问时间的兜底会伪造 `assistant(tool_call)+tool` 塞进历史，思考模式要求 assistant 回传 `reasoning_content` → **用户一问「今天几号」就收到"出错了"**（**线上真 bug**）；② **`findById(null)` 抛异常、不是返回空**，`ifPresent` 兜不住；③ 光把工具收走不够，模型会把工具调用当文本吐出来；④ **借机主 userId 跑会污染用户档案与长期记忆**，必须用独立 scope；⑤ 反过来，`SelfQuestStore` 这类**数据层不能加 `@ConditionalOnProperty`**（面板注入了它，加了条件＝关模块就起不来）——行为层（Job/Tool/Loader）才带条件。详见 `docs/self-layer-plan.md` §7.5~7.6。**代码结构（2026-09-15 拆分，零行为改动、本地实跑一轮作业验证）**：`SelfService` 拆成 `SelfCoreService`（归属/证据门/事件/块/承诺）、`SelfStanceService`（判断与倾向）、`SelfLessonService`（教训）、`SelfQuestStore`（领域②与「口」），反思记录读写归 `SelfReflectionService`，截断统一走 `SelfText`。
+
+66. **「要用户再补一句」不是失败，别走失败通道**（2026-10-09 实测发现并修）：`parseReminder` 缺时间时返回的
+   「我需要确认一下：上午1-2节的具体上课时间？」本来是**给用户看的话术**，却被包成 `【工具执行失败】`；
+   而提示词第 9 条写着"只能依据成功结果声称完成；失败时如实说明失败阶段和原因"——于是模型把**澄清降级成了故障**，
+   很可能回一句"设置提醒失败了"而不是把问题问出来。实测 5 周里这类误标 3 次（`parseReminder` ×2、`replaceReminder` ×1），
+   **用户可见**。修法：加 `ToolExecutionStatus.NEEDS_INPUT` + `ToolBusinessResult.needsInput`（输出标签
+   `【需要用户补充信息】`），`ReminderOperationResult` 从二分改三分，提示词第 9 条补上第三种标签，
+   `AgentLoop` 的"工具调用未完成"留痕要跳过它。
+   **推广**：凡是工具返回的正文本身"就是该说给用户听的话"，它就不该被标成失败。
+
+67. **确定性失败不要交给重试**（2026-10-09 实测发现并修）：`WebPageTool.readWebPage` 对 HTTP 4xx、非网页文本、
+   非法链接一律 `throw`，而策略是 `SLOW_EXTERNAL`（可重试）→ 框架**必然再跑一遍**。404 等一轮还是 404，
+   用户白等一个往返，失败记录里还留下误导性的「已自动重试 1 次」。实测 24 次调用有 8 次失败（33%），**全是这一类**。
+   修法：确定性失败**返回** `ToolBusinessResult.failure(...)`（`retryable=false`），只有超时 / 连接失败 / DNS / 5xx
+   才继续抛异常走重试。
+   **反面参照**：`MediaMemoryTool.readStoredMedia` 的 catch 里早就写了注释"文件不会自己出现…不要被框架当成瞬时故障再重试"，
+   但它用的是 `ToolBusinessResult.failure(...)`——这个工厂方法**恰好**是 `retryable=false`，所以意图达成了。
+   **修法是选对返回类型，不是改注释。**（另见坑 39：`retryable` 默认是 true，写"有副作用"不等于不重试。）
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。

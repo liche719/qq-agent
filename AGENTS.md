@@ -2,7 +2,7 @@
 
 > 本文件是给 AI 编码代理（Codex / DeepSeek harness / Claude Code 等）的项目记忆。
 > 换 harness 时，把本文件内容作为项目规则或系统提示加载，即可继承全部上下文。
-> 最后更新：2026-10-10（文档整理：原 §5 的 65 条坑搬到 `docs/pitfalls.md`，本文件从 68 KB 压到 33 KB）
+> 最后更新：2026-10-10（文档整理：§5 的 65 条坑搬到 `docs/pitfalls.md`、时校后补到 67 条，本文件从 68 KB 压到 33 KB）
 > **本文件刻意保持在 64 KB 以下**——超过 harness 的读取上限就会被**静默截断尾部**，写在末尾的内容等于没写。
 > 所以：细节一律进 `docs/`（见 §6 文档索引），这里只留「每次都要用」的。
 
@@ -145,7 +145,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
 - 独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，hash 路由），构建产物写进 `src/main/resources/static/`（已 gitignore），**改完必须 `npm run build`**（或走 Dockerfile 的 node 阶段）才会进 jar。**改视觉只动 `web/src/style.css`**（两套主题的 token 都在 `:root` 与 `:root[data-theme="dark"]` 里，组件里不要写死颜色）。
-- 8 个页签：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
+- **8 个核心页签**：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志（兜底清单在 `web/src/panels/registry.js`）。**模块还能再挂自己的页签**——由后端 `GET /api/admin/panels` 声明，例如自主模块的「它自己」（`AdminPanelController` 里 `key=self`），所以实际页签数会多于 8。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
 - **记忆分层 2026-09-18 已合并成 3 张表**：`memory`（一条记忆=一段话；`kind`=PROFILE/TASK/EXPERIENCE，`always_inject` 决定是否每轮无条件注入）+ `memory_fact`（有槽位的当前值）+ `conversation_memory`（原文证据）。**core/work/episode 三张表和那三个 Service 都不存在了**，统一走 `MemoryService`/`MemoryRepository`；`/memory` 的编号改成 `M<id>`。**老表 2026-09-19 已用 V17 删掉**（删前做过双向逐条比对；备份在服务器 `/root/wechat-agent-memory-legacy-backup-20260919.sql`，⚠️ 回退旧镜像前必须先从这个 dump 恢复）。来龙去脉见 `docs/memory-vector-plan.md` §20。
 - **数字口径**：总览「工作记忆」＝全部（`count`）——**归档机制 2026-09-18 已整块删除**（`memory_archive` 表、`user_work_memory.archived` 列、面板的「已归档」数字与筛选都没了，存量 34 行恢复成活跃；详见 `docs/memory-vector-plan.md` §17）；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
 - **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
@@ -163,10 +163,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 65 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 67 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 65）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 67）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -192,7 +192,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：65 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：67 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -245,8 +245,9 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
   - `PROMPT.md` —— 协作规则，必须遵守
   - `DS-HARNESS-PROMPT.md` —— 给新 harness 的引导提示词（2026-10-10 清空重写成"去哪读权威信息"，不再存快照）
   - `.git-ca/` —— 导出的系统根证书，**push 依赖它，不能删**（坑 52 上面那条）
+  - `panel-app/` + `liche-panel-1.0.apk` —— 面板安卓壳与产物（**在这里，不在仓库里**；仓库只跟踪说明文档 `docs/panel-app.md`）
   - `wechat-agent-java/` —— 真正的 git 仓库
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
-  `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）/ `panel-app/`（安卓壳）。
+  `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
 

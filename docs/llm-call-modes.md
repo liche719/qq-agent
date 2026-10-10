@@ -1,8 +1,8 @@
 # LLM 调用档位：按场景决定要不要"深度思考"（2026-09-13 做，2026-09-14 **已整块删除**）
 
-> **现状（2026-09-14）**：用户看完实际体感后决定**不再按场景开关深度思考**，**全部场景都用模型默认的思考**。
+> **现状（2026-09-14）**：用户看完实际体感后决定**不再按场景开关深度思考**，**全部场景都用模型默认的思考**（**2026-09-18 起改为按场景的 `reasoning_effort` 档位，见 §16**）。
 > 代码侧 `llm.thinking.*`、`dialog_fast`、`DialogModeDecider` 都已删除，LlmScenario 只保留"温度 / max_tokens / 指标"
-> 这三种用途。本文件保留**当初的实测与决策过程**，因为它解释了"为什么这个模型不需要我们去开思考"，
+> 这三种用途（**2026-09-18 起还多一个 `reasoning_effort` 按场景档位，见 §16**）。本文件保留**当初的实测与决策过程**，因为它解释了"为什么这个模型不需要我们去开思考"，
 > 以及"哪些省电手段是免费的、哪些是要拿质量换的"。删除原因见 §15。
 
 ## 0. 一句话结论（当时的）
@@ -72,6 +72,8 @@ LLM_THINKING_ENABLED_BODY=                                                      
 LLM_ZERO_TEMPERATURE_SCENARIOS=extract,reminder_parse,schedule_parse,archive
 ```
 
+（**上面四个 `LLM_THINKING_*` 键 2026-09-14 起已整块删除**，见 §15；`LLM_ZERO_TEMPERATURE_SCENARIOS` 还在，但它现在的默认值是 `extract,reflect,reminder_parse,schedule_parse`——`archive` 场景已删、`reflect` 是新增的。）
+
 ## 3.5 顺带修掉的一个老漏洞：重复提醒"只给 cron 不给时间"会被反问
 
 这件事是查"关思考有没有副作用"时挖出来的，**和思考模式无关，但比它严重**：
@@ -106,7 +108,7 @@ LLM 调用（QQ 场景首字延迟直接翻倍），判错了还分不清是谁�
 | 指标 | `dialog` | **`dialog_deep`**（单独一档，方便看"升档值不值"） |
 
 **额度**：单轮最多 1 次（第二次直接告诉模型"已经升过了，把问题答完"）；按用户日额度
-`THINKING_DAILY_LIMIT_PER_USER`（默认 5，**0 = 不限**），账本在 Redis `llm:think:<yyyy-MM-dd>:<userId>`；
+`THINKING_DAILY_LIMIT_PER_USER`（默认 5，**0 = 不限**；**这个键随 `thinkDeeper` 于 2026-10-09 已删除**），账本在 Redis `llm:think:<yyyy-MM-dd>:<userId>`；
 用尽时工具返回"今天升不了档"，模型按当前档位继续——**不改变正确性**。Redis 异常时 **fail-open**（额度是防滥用、不是安全边界）。
 
 **实测（生产，2026-09-13 23:00）**：给一条"三件事排优先级并说明理由，要仔细分析"的消息——
@@ -124,7 +126,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 ## 5. 每场景 `max_tokens`（2026-09-13 做）
 
 之前**一个都没设**，极端长思考没有任何上限。现在：结构化场景（extract/parse/archive）给**宽松兜底**
-`LLM_MAX_TOKENS_STRUCTURED`（默认 4096）；**对话档默认不设**（`0`），因为**思考 token 也算进 max_tokens**，
+`LLM_MAX_TOKENS_STRUCTURED`（**2026-09-18 起默认 16384**，不再是 4096；`reflect` 另有 `LLM_MAX_TOKENS_REFLECT`，同样 16384；`archive` 场景已删除）；**对话档默认不设**（`0`），因为**思考 token 也算进 max_tokens**，
 给对话加上限有把正常长回复截断的风险。升档档位（`dialog_deep`）默认同样不设——升档是"要更多预算"，不该反而加个盖子。
 
 实测日志：`scenario=extract … thinking=off maxTokens=4096`。
@@ -183,7 +185,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 **`saveExamPlan` / `viewExamPlan` 永远保留**——否则用户第一次说"帮我建考研计划"时，建计划的工具恰好被裁掉，功能直接废了。
 这是这个方案最大的坑，写在 `ToolSetTrimmer` 的类注释里提醒后来人。
 
-**开关**：`agent.tool-trim.enabled`（默认 true）、`agent.tool-trim.history-turns`（默认 4）。
+**开关**：`agent.tool-trim.enabled`（默认 true）、`agent.tool-trim.history-turns`（默认 4）。（**2026-10-09 起上面这套"按关键词裁 18 个考试工具"已整块删除**，`agent.tool-trim.history-turns` 键一并移除；`ToolSetTrimmer` 现在只剩按模块自己声明的可见性规则裁剪，**考试工具一个都不裁**。）
 
 **实测**（生产）：
 
@@ -231,6 +233,7 @@ Redis 键 llm:think:2026-09-13:sim-escalate = 1
 3. 搜索深度（固定 3 篇正文 × 1200 字）与记忆召回预算（core 16/2200、work 15/1500、context 40 轮/12000）按问题类型动态调。
 4. ~~`dialog_deep`（升档）实测有过 28.5 秒一轮——要不要给它一个"超过 N 秒就先发一句缓冲"的体验设计。~~
    **已做**（§13）：升档成功时立刻发一句「这个我得仔细想想，稍等我一下…」，开关 `AGENT_DEEP_NOTICE_ENABLED`。
+   **（2026-10-10 现状：整条升档链——`thinkDeeper` / `dialog_deep` / `AGENT_DEEP_*` 配置——已于 2026-10-09 删除，这个开关也不存在了；见 `docs/tools-and-prompt-inventory.md` §5.2/§5.3。）**
 
 ## 13. 收尾自查（2026-09-13 晚）：一轮全量复查抓到的东西
 
@@ -323,7 +326,7 @@ LLM 流式调用 scenario=dialog_fast ms=677 temperature=0.7 thinking=off maxTok
 **留下来的**（因为与思考无关，用户也明确说"温度先保留"）：
 
 - `LlmScenario` 枚举 + ThreadLocal：仍用于**温度**（四个结构化场景 0.0）与**每场景 max_tokens**；
-- 指标仍按场景分开（`dialog` / `dialog_deep` / `extract` / `reminder_parse` / `schedule_parse` / `archive`）；
+- 指标仍按场景分开（`dialog` / `dialog_deep` / `extract` / `reminder_parse` / `schedule_parse` / `archive`）（**2026-10-09 起 `dialog_deep` 已随 `thinkDeeper` 删除、`archive` 更早已删；现在是 `dialog` / `extract` / `reflect` / `reminder_parse` / `schedule_parse` 五个**）；
 - `thinkDeeper` 升档：现在只放宽"工具轮 8→16"与"流式超时 120→240 秒"，不再有"开思考"这一层含义。
 
 **同一轮还改的**：记忆提取**不再每轮对话跑一次**——静默窗口 3→45 秒，且加"最多拖 150 秒"的上限（§16）。
@@ -347,6 +350,8 @@ LLM 流式调用 scenario=dialog_fast ms=677 temperature=0.7 thinking=off maxTok
 真正影响的是之后几轮，用户感觉不到）。
 
 参数都在 `application.yml` 的 `memory.extraction-*` 下，想更省就调大 window，想更快看到记忆就调小。
+（**2026-09-18 起又换成轮次驱动**：`memory.extraction-rounds`（默认 15）/ `extraction-max-idle-hours`（6）/ `extraction-coalesce-seconds`（10）/ `extraction-min-interval-seconds`（180），
+`extraction-window-seconds` 与 `extraction-max-delay-seconds` 两个键**已删除**；见 `docs/memory-extraction.md` §1。）
 ## 16. 思考档位 reasoning_effort（2026-09-18，按用户要求恢复"按场景分档"）
 
 用户要求：**对话 low、提取 high**。这次用的不是当年那个 `thinking:{"type":"disabled"}` 开关，而是
@@ -369,7 +374,7 @@ LLM 流式调用 scenario=dialog_fast ms=677 temperature=0.7 thinking=off maxTok
 LLM_REASONING_EFFORT=dialog=low,dialog_deep=low,extract=high
 ```
 
-格式「场景=档位」逗号分隔；**没列的场景不传这个字段**（保持上游默认，比如反射/提醒解析这些精度敏感的）。
+格式「场景=档位」逗号分隔；**没列的场景不传这个字段**（保持上游默认）。（**2026-09-29 起默认串改成 `dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low`**——`extract` 后来也从 `high` 降到 `low`（§18.2 B），当时故意没列的反射/提醒解析后来都列上了；`dialog_deep` 已随 `thinkDeeper` 于 2026-10-09 删除。）
 认不出的档位会被忽略（宁可不传，也不传一个上游不认的值）。
 
 实现：`LlmScenarioSettings.reasoningEffortFor(scenario)` → `OpenAiRequestFactory.buildPayload(..., reasoningEffort)`
