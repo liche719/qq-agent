@@ -65,13 +65,26 @@ record QqArkCard(String arkType, String arkName, String title, String desc, Stri
         if (isEmpty()) {
             return existingContent == null ? "" : existingContent;
         }
-        if (jumpUrl.isBlank() || (existingContent != null && existingContent.contains(jumpUrl))) {
-            // 没有链接可补：标题摘要平台已经给了，不重复
-            return existingContent == null || existingContent.isBlank() ? renderFull() : existingContent;
-        }
         String base = existingContent == null ? "" : existingContent;
-        return (base.isBlank() ? renderFull() : base) + "\n链接：" + jumpUrl;
+        String body = base.isBlank() ? renderFull() : base;
+        if (!jumpUrl.isBlank()) {
+            return base.contains(jumpUrl) ? body : body + "\n链接：" + jumpUrl;
+        }
+        return body + NO_LINK_HINT;
     }
+
+    /**
+     * 卡片没带链接时的固定提示。
+     *
+     * <p>**实测（2026-10-10）**：B站转发过来的是 {@code ark_type=miniapp} 的小程序卡片，
+     * 它的 {@code fields} 只有 {@code [preview, source, source_logo, title]}——官方文档里点名的
+     * {@code jump_url} **并没有给**。所以"顺着链接去取字幕"对这类卡片走不通，只能靠标题去搜、
+     * 或者让用户把链接发过来。这里把这件事**明确写进给模型的文本**，免得它对着一个不存在的链接瞎试，
+     * 或者干脆凭标题编视频内容。
+     */
+    private static final String NO_LINK_HINT =
+            "\n（这张卡片**没有携带链接**。上面是它的标题和封面；要看内容可以先按标题搜一下，"
+                    + "或者直接让他把链接/BV 号发过来。**不要凭标题猜视频里讲了什么**。）";
 
     private String renderFull() {
         StringBuilder text = new StringBuilder("[卡片消息] ").append(arkName.isBlank() ? arkType : arkName);
