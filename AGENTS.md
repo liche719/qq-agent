@@ -164,10 +164,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 68 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 69 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 68）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 69）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -193,7 +193,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：68 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：69 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -220,16 +220,17 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
   ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-10）：`wechat-agent:659aebf7f35d…`，启动日志 `工具注册完成：12 个类 / 52 个工具`、0 重启、0 ERROR、容器内 `BILI_SESSDATA` 就位。
-  **「只转发 B站视频」已端到端跑通**：真实转发两轮，卡片 `title` → `readBilibiliVideo` 按标题搜（逐字一致）→ 读字幕 → 按字幕复述；
-  没字幕的那条如实说"只看到标题和简介"，没编内容。相关坑（卡片无 `jump_url`、`.gz` 日志要 `zgrep`、内联提示被模型复述）见 `docs/pitfalls.md` 坑 68。
+- **最近一次部署**（2026-10-15）：`wechat-agent:5c66e806d872…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
+  **模型容错已补上**：503/429 这类上游抖动在"还没吐字"时自动重试（1s、3s）；401/402 不重试，改成给用户一句
+  说清原因的话 + 推 QQ 告警（`LlmHealthState`），调通后自动消警。起因、实测与本地桩验法见 `docs/pitfalls.md` 坑 69。
+  （2026-10-10 的 B站「只转发」也仍在：卡片 `title` → `readBilibiliVideo` 按标题搜（逐字一致）→ 读字幕。坑 68。）
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
   - 用户自建的定时任务 **#5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）**。
   - `memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；`conversation_memory` 存的是原文证据，**只能忘、不能替**。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`；`stored-media`/`logs` 同样已持久化（坑 38、`docs/backup.md`）。
-- **仍未做**（完整清单见 `docs/todo.md`）：LLM 余额不足（HTTP 402）没有告警 · 公安联网备案 · 异地备份 ·
+- **仍未做**（完整清单见 `docs/todo.md`）：LLM 余额**主动**预警（402 被动告警 2026-10-15 已做） · 公安联网备案 · 异地备份 ·
   墨墨回调 IP 限流 · 容器 `read_only` + 非 root 用户（坑 53 末）。
 - 本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
