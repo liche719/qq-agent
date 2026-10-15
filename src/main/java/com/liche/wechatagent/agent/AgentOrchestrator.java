@@ -7,6 +7,7 @@ import com.liche.wechatagent.command.CommandRegistry;
 import com.liche.wechatagent.document.DocumentExtractionException;
 import com.liche.wechatagent.document.DocumentExtractionService;
 import com.liche.wechatagent.document.ExtractedDocument;
+import com.liche.wechatagent.exception.LlmUnavailableException;
 import com.liche.wechatagent.memory.MemoryExtractionScheduler;
 import com.liche.wechatagent.memory.ConversationMemoryService;
 import com.liche.wechatagent.log.ConversationTraceLogger;
@@ -189,6 +190,14 @@ public class AgentOrchestrator {
                 reply = handled.text();
                 sink = handled.sink();
                 conversationTraceLogger.assistant(batch.userId(), reply);
+            } catch (LlmUnavailableException e) {
+                // 401/402：不是"抖了一下"，是我们这边要有人去处理（余额/密钥）。
+                // 别糊成"出了点小问题"让用户反复重试，直接说清楚（2026-10-15 加）。
+                processingFailed = true;
+                failureReason = "LlmUnavailableException: " + e.getMessage();
+                log.error("模型被上游拒绝 user={} replyTo={} status={} reason={}",
+                        batch.userId(), batch.replyToMsgId(), e.status(), e.getMessage());
+                reply = e.getMessage();
             } catch (Exception e) {
                 processingFailed = true;
                 failureReason = e.getClass().getSimpleName() + ": " + (e.getMessage() == null ? "未知错误" : e.getMessage());
@@ -282,6 +291,14 @@ public class AgentOrchestrator {
                 taskStateStore.step(taskId, "REPLY_READY");
             }
             return reply;
+        } catch (LlmUnavailableException e) {
+            if (taskStateStore != null) {
+                taskStateStore.fail(taskId, msg.userId(), batch.replyToMsgId(), "LlmUnavailableException");
+                taskStateStore.step(taskId, "FAILED");
+            }
+            log.error("模型被上游拒绝 user={} msgId={} status={} reason={}",
+                    msg.userId(), msg.msgId(), e.status(), e.getMessage());
+            return e.getMessage();
         } catch (Exception e) {
             if (taskStateStore != null) {
                 taskStateStore.fail(taskId, msg.userId(), batch.replyToMsgId(), e.getClass().getSimpleName());

@@ -10,6 +10,7 @@ import com.liche.wechatagent.media.MediaToolContextService;
 import com.liche.wechatagent.network.PublicUrlValidator;
 import com.liche.wechatagent.config.AgentPolicyProperties;
 import com.liche.wechatagent.config.LlmScenario;
+import com.liche.wechatagent.exception.LlmUnavailableException;
 import com.liche.wechatagent.memory.ConversationMemoryService;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -453,6 +454,11 @@ public class AgentLoop {
             throw new RuntimeException("LLM 流式响应被中断", e);
         }
         if (error.get() != null) {
+            // 401/402 这类"我们这边要有人处理"的失败要带着原文往上抛：它自带一句给用户看的人话，
+            // 被包成 "LLM 调用失败: …" 就丢了（2026-10-15）
+            if (error.get() instanceof LlmUnavailableException unavailable) {
+                throw unavailable;
+            }
             throw new RuntimeException("LLM 调用失败: " + error.get().getMessage(), error.get());
         }
         // 关键：本轮若有工具调用（即使输出了过程文本），必须返回 null 继续下一轮，

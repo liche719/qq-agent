@@ -43,6 +43,7 @@ public class AlertNotifier {
     private final StringRedisTemplate redis;
     private final Scheduler scheduler;
     private final BackupFreshnessChecker backupFreshness;
+    private final LlmHealthState llmHealthState;
     private final ZoneId zone;
 
     /** 当前处于激活状态的问题：key → 描述 */
@@ -54,6 +55,7 @@ public class AlertNotifier {
 
     public AlertNotifier(AlertProperties properties, ObjectProvider<QqChannel> qqChannel, JdbcTemplate jdbc,
                          StringRedisTemplate redis, Scheduler scheduler, BackupFreshnessChecker backupFreshness,
+                         LlmHealthState llmHealthState,
                          @Value("${app.time-zone:Asia/Shanghai}") String timeZone) {
         this.properties = properties;
         this.qqChannel = qqChannel;
@@ -61,6 +63,7 @@ public class AlertNotifier {
         this.redis = redis;
         this.scheduler = scheduler;
         this.backupFreshness = backupFreshness;
+        this.llmHealthState = llmHealthState;
         this.zone = parseZone(timeZone);
     }
 
@@ -188,6 +191,11 @@ public class AlertNotifier {
 
         collectMemoryExtractionProblems(problems);
         collectBackupProblems(problems);
+        // 模型被上游明确拒绝（余额/密钥）——2026-10-15 加，见 LlmHealthState。
+        // 这类问题不会自愈、用户也看不懂，必须冒到告警里；模型重新调通后这里会自动变成"已恢复"。
+        if (llmHealthState != null) {
+            problems.putAll(llmHealthState.problems());
+        }
         return problems;
     }
 

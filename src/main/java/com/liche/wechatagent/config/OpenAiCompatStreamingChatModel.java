@@ -2,6 +2,8 @@ package com.liche.wechatagent.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.wechatagent.alert.LlmHealthState;
+import com.liche.wechatagent.exception.LlmUnavailableException;
 import com.liche.wechatagent.metrics.RuntimeMetrics;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
@@ -20,6 +22,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -33,6 +36,20 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
 
     private static final int DEFAULT_CONNECT_TIMEOUT_SECONDS = 5;
     private static final Logger log = LoggerFactory.getLogger(OpenAiCompatStreamingChatModel.class);
+
+    /**
+     * 上游明确"我现在不行"时的重试次数（2026-10-15 加）。
+     *
+     * <p>起因：2026-10-15 上午 DeepSeek 连抖三次 503 {@code Service is too busy}，每次都**直接变成用户可见的报错**
+     * ——因为原来这里一次失败就放弃。而这类失败是**在响应头就返回的**：一个字都还没吐给用户，
+     * 重试绝不会造成重复输出，是最划算的补救。
+     *
+     * <p>只重试上游语义上"过一会儿再来"的状态；**401/402 不重试**（密钥/余额的问题重试到天亮也没用，
+     * 见 {@link com.liche.wechatagent.exception.LlmUnavailableException}）。
+     */
+    private static final int MAX_RETRIES = 2;
+    /** 退避：第 1 次重试等 1 秒、第 2 次等 3 秒 —— 够躲开瞬时抖动，又不至于让用户等太久 */
+    private static final long[] RETRY_BACKOFF_MS = {1_000L, 3_000L};
 
     private final OkHttpClient client;
     private final String baseUrl;
@@ -48,6 +65,8 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private List<LlmUsageSink> usageSinks = List.of();
     /** 调用事件接收端（**落库审计**用：场景/成败/耗时/用量；2026-09-21 加，见 {@link LlmCallSink}） */
     private List<LlmCallSink> callSinks = List.of();
+    /** 「上游明确拒绝我们」的状态记录点（余额/密钥）；可为 null（单测直接 new 时不需要） */
+    private LlmHealthState healthState;
 
     @Autowired(required = false)
     public void setUsageSinks(List<LlmUsageSink> usageSinks) {
@@ -57,6 +76,11 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     @Autowired(required = false)
     public void setCallSinks(List<LlmCallSink> callSinks) {
         this.callSinks = callSinks == null ? List.of() : callSinks;
+    }
+
+    @Autowired(required = false)
+    public void setHealthState(LlmHealthState healthState) {
+        this.healthState = healthState;
     }
 
     public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
@@ -111,25 +135,62 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                                     maxTokens, reasoningEffort).toString(),
                             MediaType.parse("application/json; charset=utf-8")))
                     .build();
-            try (Response response = client.newCall(req).execute()) {
-                if (!response.isSuccessful() || response.body() == null) {
-                    // 原来只记一句 "HTTP 400"，服务端说的原因被整个丢掉——排"问时间就 400"那次
-                    // 只能靠猜。把响应体打出来，以后所有 4xx/5xx 都能一眼看到上游怎么说。
-                    String detail = "";
-                    try {
-                        detail = response.body() == null ? "" : response.body().string();
-                    } catch (Exception ignored) {
-                        // 读不出来就算了，不能因为记日志把请求本身弄挂
+            Response response = null;
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    response = client.newCall(req).execute();
+                } catch (IOException io) {
+                    // 连不上/被重置/读超时也算"过一会儿再来"（同样是一个字都还没吐出去）
+                    if (attempt < MAX_RETRIES) {
+                        log.warn("LLM 流式请求异常（第 {} 次尝试，{}ms 后重试）：{}",
+                                attempt + 1, RETRY_BACKOFF_MS[attempt], io.toString());
+                        if (!sleepBeforeRetry(attempt)) {
+                            throw io;
+                        }
+                        continue;
                     }
-                    if (detail.length() > 800) {
-                        detail = detail.substring(0, 800) + "…";
-                    }
-                    log.warn("LLM 流式请求被拒 HTTP {} body={}", response.code(), detail);
-                    record(false, started, "HTTP " + response.code(), scenario, effectiveTemperature, maxTokens, 0, 0,
-                            tokens, cachedTokens, reasoningEffort);
-                    handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + response.code()));
-                    return;
+                    throw io;
                 }
+                if (response.isSuccessful() && response.body() != null) {
+                    break;
+                }
+                // 原来只记一句 "HTTP 400"，服务端说的原因被整个丢掉——排"问时间就 400"那次
+                // 只能靠猜。把响应体打出来，以后所有 4xx/5xx 都能一眼看到上游怎么说。
+                String detail = "";
+                try {
+                    detail = response.body() == null ? "" : response.body().string();
+                } catch (Exception ignored) {
+                    // 读不出来就算了，不能因为记日志把请求本身弄挂
+                }
+                int status = response.code();
+                response.close();
+                if (detail.length() > 800) {
+                    detail = detail.substring(0, 800) + "…";
+                }
+                if (retryableStatus(status) && attempt < MAX_RETRIES) {
+                    log.warn("LLM 流式请求被拒 HTTP {}（第 {} 次尝试，{}ms 后重试）body={}",
+                            status, attempt + 1, RETRY_BACKOFF_MS[attempt], detail);
+                    if (sleepBeforeRetry(attempt)) {
+                        continue;
+                    }
+                    // 被中断：不再重试，按最后一次失败处理
+                }
+                log.warn("LLM 流式请求被拒 HTTP {} body={}", status, detail);
+                record(false, started, "HTTP " + status, scenario, effectiveTemperature, maxTokens, 0, 0,
+                        tokens, cachedTokens, reasoningEffort);
+                // 401/402 是**我们这边要有人去处理**的问题（密钥/余额），单独抛、带一句人话；
+                // 其余（含重试用尽的 5xx）维持原样，由上层兜底成"稍后再试"。
+                if (status == 401 || status == 402) {
+                    if (healthState != null) {
+                        healthState.recordRejection(status, detail);
+                    }
+                    handler.onError(new LlmUnavailableException(status, rejectMessage(status)));
+                } else {
+                    handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + status));
+                }
+                return;
+            }
+            try (Response ignored = response) {
                 StringBuilder content = new StringBuilder();
                 Map<Integer, StringBuilder> toolArgs = new LinkedHashMap<>();
                 Map<Integer, String> toolNames = new LinkedHashMap<>();
@@ -225,6 +286,10 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
                 handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage)
                         .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
                 publishUsage(cachedTokens, tokens);
+                if (healthState != null) {
+                    // 只要调通了就清掉"余额/密钥被拒"的故障状态（让告警自己发一条"已恢复"）
+                    healthState.recordSuccess();
+                }
                 record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
                         tokens, cachedTokens, reasoningEffort);
             }
@@ -238,6 +303,35 @@ public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
     private double temperatureFor(LlmScenario scenario) {
         Double override = scenarioSettings == null ? null : scenarioSettings.temperatureOverride(scenario);
         return override == null ? temperature : override;
+    }
+
+    /**
+     * 哪些状态值得重试：上游语义上"过一会儿再来"，且**不是**我们这边的问题。
+     * 429 限流算在内；401/402 明确排除（重试无用，见 {@link LlmUnavailableException}）。
+     */
+    private static boolean retryableStatus(int status) {
+        return status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
+    }
+
+    /** 退避等待；被中断时返回 false（调用方按"不再重试"处理，中断标志已恢复） */
+    private static boolean sleepBeforeRetry(int attempt) {
+        long wait = RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
+        try {
+            Thread.sleep(wait);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** 401/402 时给用户看的话（**说得清是什么事**，而不是"出了点小问题"） */
+    private static String rejectMessage(int status) {
+        if (status == 402) {
+            return "模型账户余额不足了，我暂时答不了——等他充上钱我就能继续。"
+                    + "（这条也会推给管理员。）";
+        }
+        return "我的模型密钥被上游拒了，暂时答不了——需要管理员处理一下。";
     }
 
     /**
