@@ -164,10 +164,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 69 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 70 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 69）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 70）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -178,7 +178,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 5. 时区别只靠容器 `TZ`：代码里凡 Cron 计算都要显式 `inTimeZone(...)`（坑 29）。
 6. 提交信息用小写英文短句；**开发在 `next`、`main` 只放已发布版本**；提交用 `YOLO <3372134858@qq.com>`（坑 7、8）。
 7. 改前端必须 `cd web && npm run build` 才会进 jar（坑 13）。CSS 里只写标准 `backdrop-filter`（坑 11）。
-8. 动过构造器 / Bean 装配，**必须跑 `mvn -o -DskipTests test-compile`** —— 本地 `package` 通过 ≠ 能启动（坑 45）。
+8. 动过构造器 / Bean 装配，**光跑 `mvn -o -DskipTests test-compile` 不够**（坑 45、**70**）——
+   **必须本地真启动一次**（`application-local.yml` + simulator，看到 `Started WechatAgentApplication`）。
+   给类加第二个构造器时，**Spring 用的那个必须标 `@Autowired`**，否则启动即挂、容器崩溃循环（2026-10-17 真打挂过生产）。
 9. 有副作用的工具**默认是可重试的**：必须同时给 `@NonIdempotentTool` + `retryable = false`，否则用户会收到两份（坑 39）。
 10. 截断字符串要**为省略号留一位**（`substring(0, max - 1) + "…"`），否则撞列长、整条写入失败（坑 40）。
 11. 改镜像版本 = 部署时会**连依赖服务一起重启**（坑 48）；镜像一律钉 digest，别用浮动 tag（坑 49）。
@@ -193,7 +195,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：69 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：70 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -220,10 +222,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
   ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-15）：`wechat-agent:5c66e806d872…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
-  **模型容错已补上**：503/429 这类上游抖动在"还没吐字"时自动重试（1s、3s）；401/402 不重试，改成给用户一句
-  说清原因的话 + 推 QQ 告警（`LlmHealthState`），调通后自动消警。起因、实测与本地桩验法见 `docs/pitfalls.md` 坑 69。
-  （2026-10-10 的 B站「只转发」也仍在：卡片 `title` → `readBilibiliVideo` 按标题搜（逐字一致）→ 读字幕。坑 68。）
+- **最近一次部署**（2026-10-17）：`wechat-agent:02ffeafe1f7b…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
+  **搜索加了兜底**：SearXNG 一条结果都没有、或 query 带 `site:` 却一条都没落在该站点时，降级到 DeepSeek 官方搜索接口
+  （`/v1/tools/search`，5 元/1000 次，复用 `LLM_API_KEY`）；其余情况仍只走自建 SearXNG（不花钱）。
+  **⚠️ 这次部署前踩了个大坑**：给 `SearchTool` 加第二个构造器却没标 `@Autowired`，容器崩溃重启循环、面板与 QQ 全挂；
+  已回滚止损再修好。细节与止损步骤见 `docs/pitfalls.md` 坑 70 —— **改构造器后必须在本地真启动一次**，`test-compile` 通过不算。
+  （此前的 B站「只转发」见坑 68，模型重试与 401/402 告警见坑 69。）
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
