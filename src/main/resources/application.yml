@@ -184,6 +184,18 @@ searxng:
   deep-read-count: ${SEARXNG_DEEP_READ_COUNT:3}
   deep-read-chars: ${SEARXNG_DEEP_READ_CHARS:1200}
 
+# DeepSeek 官方搜索接口（2026-10-15 接入）——**只当 SearXNG 的兜底**：
+# 自建 SearXNG 在大陆机房只有六个引擎可用、且不认 site: 语法，搜不到或 site: 落空时用它补一刀。
+# 按次收费（5 元/1000 次成功请求），所以平时不开，只在上面两种"确定失败"时才调用。
+deepseek:
+  search:
+    enabled: ${DEEPSEEK_SEARCH_ENABLED:true}
+    base-url: ${DEEPSEEK_SEARCH_BASE_URL:https://api.deepseek.com}
+    # 留空就用 llm.api-key（同一个 DeepSeek 账号的 key 就行）
+    api-key: ${DEEPSEEK_SEARCH_API_KEY:}
+    timeout-seconds: ${DEEPSEEK_SEARCH_TIMEOUT_SECONDS:20}
+    count: ${DEEPSEEK_SEARCH_COUNT:10}
+
 document:
   max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}
   max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:20000}

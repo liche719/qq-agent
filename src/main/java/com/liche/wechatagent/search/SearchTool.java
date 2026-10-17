@@ -28,6 +28,8 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
     private static final Logger log = LoggerFactory.getLogger(SearchTool.class);
 
     private final SearxngClient searxngClient;
+    /** SearXNG 搜不到 / 搜跑偏时的兜底（可空；按次收费，只在需要时才调） */
+    private final DeepSeekSearchClient deepSeekSearchClient;
     private final WebPageTool webPageTool;
     private final ToolStatusService statusService;
     private final int timeoutSeconds;
@@ -40,6 +42,7 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
     public static final String SOURCE_MARK = "🔗 ";
 
     public SearchTool(SearxngClient searxngClient,
+                      DeepSeekSearchClient deepSeekSearchClient,
                       WebPageTool webPageTool,
                       ToolStatusService statusService,
                       @Value("${searxng.timeout-seconds:15}") int timeoutSeconds,
@@ -48,6 +51,7 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
                       @Value("${searxng.deep-read-chars:1200}") int deepReadChars,
                       @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.searxngClient = searxngClient;
+        this.deepSeekSearchClient = deepSeekSearchClient;
         this.webPageTool = webPageTool;
         this.statusService = statusService;
         this.timeoutSeconds = Math.max(1, Math.min(120, timeoutSeconds));
@@ -55,6 +59,19 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
         this.deepReadCount = Math.max(0, Math.min(5, deepReadCount));
         this.deepReadChars = Math.max(300, Math.min(6000, deepReadChars));
         this.timeZone = parseZone(timeZoneId);
+    }
+
+    /** 不带兜底的构造器（历史测试用；等价于"只走 SearXNG"） */
+    public SearchTool(SearxngClient searxngClient,
+                      WebPageTool webPageTool,
+                      ToolStatusService statusService,
+                      int timeoutSeconds,
+                      int maxResults,
+                      int deepReadCount,
+                      int deepReadChars,
+                      String timeZoneId) {
+        this(searxngClient, null, webPageTool, statusService, timeoutSeconds, maxResults,
+                deepReadCount, deepReadChars, timeZoneId);
     }
 
     @Tool(value = "搜索互联网获取资料，返回按部署配置限制数量的最相关结果。需要查询实时信息、新闻、未知资料时使用。")
@@ -90,36 +107,23 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
 
     private String search(String query, String timeRange, boolean latest, boolean verified) {
 
-        List<SearxngClient.SearchHit> hits;
+        List<SearxngClient.SearchHit> searxHits;
+        boolean searxFailed = false;
         try {
-            hits = searxngClient.search(query, timeoutSeconds, timeRange);
+            searxHits = searxngClient.search(query, timeoutSeconds, timeRange);
         } catch (Exception e) {
             log.warn("搜索失败 query={}", query, e);
-            throw new IllegalStateException("搜索服务暂时不可用，没能找到相关资料", e);
+            searxFailed = true;
+            searxHits = List.of();
         }
 
-        // 去重降噪：URL 去重 + 标题归一化去重，截取核心摘要，最多 Top N
-        List<SearxngClient.SearchHit> deduped = new ArrayList<>();
-        Set<String> seenUrls = new HashSet<>();
-        Set<String> seenTitles = new HashSet<>();
-        for (SearxngClient.SearchHit h : hits) {
-            if (h.url() == null || h.url().isBlank()) {
-                continue;
-            }
-            if (!seenUrls.add(h.url())) {
-                continue;
-            }
-            String normTitle = normalize(h.title());
-            if (normTitle != null && !seenTitles.add(normTitle)) {
-                continue;
-            }
-            deduped.add(h);
-            if (deduped.size() >= maxResults) {
-                break;
-            }
-        }
+        List<SearxngClient.SearchHit> deduped = dedupe(searxHits);
+        deduped = withFallback(deduped, query, timeRange, searxFailed);
 
         if (deduped.isEmpty()) {
+            if (searxFailed) {
+                throw new IllegalStateException("搜索服务暂时不可用，没能找到相关资料");
+            }
             return "没有搜到相关资料，换个说法试试？";
         }
 
@@ -185,6 +189,113 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
         sb.append("【回答要求】优先依据上面的原文摘录作答；引用某条资料时在句末用 [编号] 标注（例如 [1]）；")
                 .append("参考来源列表由程序在回复结尾统一附加，正文不必自己再列一遍。");
         return sb.toString().trim();
+    }
+
+    /**
+     * SearXNG 的兜底：**只在两种"明显不行"的情况下**才花钱调 DeepSeek 搜索（2026-10-15 加）。
+     *
+     * <ol>
+     *   <li>一条结果都没有（含 SearXNG 直接报错）；</li>
+     *   <li>查询里明确带了 {@code site:xxx}，却**没有任何一条结果落在那个站点上**——这正是坑 68 的场景，
+     *       自建的六个引擎根本不认 {@code site:}，返回的全是无关站。</li>
+     * </ol>
+     *
+     * <p>**为什么不做"关键词命中率"那种模糊判定**：中文分词下"相关"很难判准，误判一次就白花一次钱、
+     * 还会把 SearXNG 给的合理结果换掉。空结果和 {@code site:} 落空都是可以**确定**的失败，判错概率接近 0。
+     *
+     * <p>兜底拿到的结果为空时，**保留 SearXNG 原来那批**（哪怕可疑也比没有强）；只有兜底真的拿到东西才替换。
+     */
+    private List<SearxngClient.SearchHit> withFallback(List<SearxngClient.SearchHit> current,
+                                                       String query, String timeRange, boolean searxFailed) {
+        if (deepSeekSearchClient == null || !deepSeekSearchClient.enabled()) {
+            return current;
+        }
+        String reason = fallbackReason(current, query);
+        if (reason == null) {
+            return current;
+        }
+        LocalDate after = "year".equals(timeRange) ? LocalDate.now(timeZone).minusYears(1) : null;
+        List<SearxngClient.SearchHit> fallbackHits = dedupe(deepSeekSearchClient.search(query, after));
+        if (fallbackHits.isEmpty()) {
+            return current;
+        }
+        log.info("搜索降级到 DeepSeek query={} reason={} searxFailed={} searxHits={} fallbackHits={}",
+                query, reason, searxFailed, current.size(), fallbackHits.size());
+        return fallbackHits;
+    }
+
+    /** 返回"为什么要兜底"的短原因；不需要兜底时返回 null */
+    private String fallbackReason(List<SearxngClient.SearchHit> current, String query) {
+        if (current.isEmpty()) {
+            return "searx-empty";
+        }
+        List<String> sites = siteOperators(query);
+        if (!sites.isEmpty() && current.stream().noneMatch(hit -> hostMatches(hit.url(), sites))) {
+            return "searx-site-miss";
+        }
+        return null;
+    }
+
+    /** 取出 query 里 {@code site:} 指定的域名（支持 {@code OR} 连接多个） */
+    private List<String> siteOperators(String query) {
+        List<String> sites = new java.util.ArrayList<>();
+        if (query == null || query.isEmpty()) {
+            return sites;
+        }
+        for (String token : query.split("\\s+")) {
+            String lower = token.toLowerCase(java.util.Locale.ROOT);
+            if (!lower.startsWith("site:")) {
+                continue;
+            }
+            String host = lower.substring("site:".length()).trim();
+            // "site:a.com" 后面还可能跟着 "OR"；去重后只留像域名的
+            if (host.isEmpty() || host.contains("/") || !host.contains(".")) {
+                continue;
+            }
+            if (!sites.contains(host)) {
+                sites.add(host);
+            }
+        }
+        return sites;
+    }
+
+    private boolean hostMatches(String url, List<String> sites) {
+        String host = hostOf(url);
+        if (host == null) {
+            return false;
+        }
+        String lower = host.toLowerCase(java.util.Locale.ROOT);
+        for (String site : sites) {
+            // 允许子域：site:bilibili.com 应该认 www.bilibili.com
+            if (lower.equals(site) || lower.endsWith("." + site)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** URL 去重 + 标题归一化去重，最多 Top N */
+    private List<SearxngClient.SearchHit> dedupe(List<SearxngClient.SearchHit> hits) {
+        List<SearxngClient.SearchHit> deduped = new ArrayList<>();
+        Set<String> seenUrls = new HashSet<>();
+        Set<String> seenTitles = new HashSet<>();
+        for (SearxngClient.SearchHit h : hits) {
+            if (h.url() == null || h.url().isBlank()) {
+                continue;
+            }
+            if (!seenUrls.add(h.url())) {
+                continue;
+            }
+            String normTitle = normalize(h.title());
+            if (normTitle != null && !seenTitles.add(normTitle)) {
+                continue;
+            }
+            deduped.add(h);
+            if (deduped.size() >= maxResults) {
+                break;
+            }
+        }
+        return deduped;
     }
 
     /**
