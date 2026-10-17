@@ -220,7 +220,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 > 要看实时数据：面板 `https://liche.cloud/`，或接口 `/api/admin/overview`。
 
 - **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
-  ⚠️ 机器上另有 `olr-app`/`olr-db` 是**用户另一个项目**，别动。
+  **这台机器现在只有这 4 个容器**：另一个项目「屋子」（`olr-app` + `olr-db`，占 8443、域名 `olr.liche.cloud`）
+  **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
+  DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
 - **最近一次部署**（2026-10-17）：`wechat-agent:02ffeafe1f7b…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
   **搜索加了兜底**：SearXNG 一条结果都没有、或 query 带 `site:` 却一条都没落在该站点时，降级到 DeepSeek 官方搜索接口
