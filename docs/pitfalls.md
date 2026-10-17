@@ -1,4 +1,4 @@
-# 已知坑与约定（完整版 · 70 条）
+# 已知坑与约定（完整版 · 71 条）
 
 > 本文件是 `AGENTS.md` 第 5 节的**完整版**。`AGENTS.md` 因为超过 harness 的 64 KB 读取上限会被截断，
 > 现在只保留「违反就出线上事故」的十几条硬约定；**细节、来龙去脉、实测证据全在这里**。
@@ -6,7 +6,7 @@
 > **编号是稳定契约：不要重排、不要插号、不要合并。** 全项目的代码注释和 `docs/` 其它文档都按
 > 「坑 38」「坑 52」这样引用；改了编号会让这些引用全部指错。
 >
-> 新踩的坑**追加到下一条编号**（现在最后一条是 70），别往中间插。
+> 新踩的坑**追加到下一条编号**（现在最后一条是 71），别往中间插。
 >
 > ⚠️ **这是一份按时间累积的记录，条目本身不改写**（改了就等于抹掉当时为什么这么做）。
 > 但凡某条的**结论/现状**后来变了，都在原条目后面用 `（日期 注：…）` 标注。
@@ -28,6 +28,7 @@
 | **备份与持久化** | 18、38、58、59 |
 | **通道与主动消息** | 30、51、54、**68** |
 | **模型调用与容错** | **69、70** |
+| **视频与媒体** | **71** |
 | **前端面板** | 11、13、15、33、44、57 |
 | **记忆与提示词** | 16、42、43、62、63 |
 | **工具框架与 AgentLoop** | 27、28、39、45、55、60、61、**66、67** |
@@ -36,7 +37,7 @@
 
 ---
 
-## 原文（1 ~ 70）
+## 原文（1 ~ 71）
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
    **（2026-10-10 注：生产 2026-09-18 已迁到 PostgreSQL 16 + pgvector、MySQL 容器 2026-09-20 退役，
@@ -222,6 +223,30 @@
      所以 `DeepSeekSearchClient` 里加了 `rerank_score < 1.0` 丢弃（**带 `site:` 时不按分数砍**——受限搜索分数普遍
      0.6~0.9，但域名已经把相关性判过了）。加过滤前那种查询会返回一堆蹭关键词的垃圾，加过滤后如实返回"没有搜到"。
    - **它替代不了 B站标题搜索**：实测用转发标题搜，它**找不回** B站自己接口那条逐字命中的结果，`readBilibiliVideo` 保持原样。
+71. **视频对模型等于不存在——不抽帧它只看到 `[文件]` 两个字**（2026-10-17 做的，用户 10-10 提的"能看懂我发的视频"里没做完的那半）：
+   QQ 发来的视频落进 `attachments`，而 `DocumentExtractionService` 只认 PDF/DOCX/PPT，所以那半一直空着。
+   这次加了 `media/VideoFrameService`（ffmpeg 抽帧）+ 两条接入口：
+   - **相册视频**：`AgentOrchestrator.extractDocuments` 先把 `video/*` 从附件里挑出来单独走抽帧，
+     帧图直接混进本轮 `images`（`ImageContent.from(dataUrl)` 就认 `data:` 开头的 data URL），
+     再给模型一段「这些是同一个视频按时间抽的帧，不是几张独立照片；听不到声音」的说明。
+   - **B站没字幕**：`readBilibiliVideo` 原来只会说"没字幕看不到"，现在会自动
+     `playurl → 下 360p → 抽帧 → 拼成一张联系表`，走 `MediaToolContextService.addReadableMedia`
+     交给视觉模型（工具返回只能带文字，能塞图的通道一次只有一张图，所以必须是"一张"联系表）。
+   - **参数全是自适应的**（用户让我自己拍）：帧数按时长 4/5/6/8/10；**先按镜头变化抽**
+     （`select='gt(scene,0.3)'`），镜头不够再按均匀时间点补，补之前用"1.5 秒内算重复"去掉撞车的；
+     只看前 10 分钟；60MB / 120 秒超时。
+   - **B站能下视频的前提**：`/x/player/playurl?bvid=&cid=&qn=32&fnval=0&platform=html5&high_quality=1`
+     **不需要 wbi 签名**，带 Cookie 返回 `durl[0].url`（完整 mp4，360p，2 分钟约 8.9MB）。
+     用 `urllib` 直接 `Range` 请求第一次拿到 **403**、换一组头再试就 206 了 —— 所以**下载失败要能重试**，
+     别一次 403 就断定"下不了"。
+   - **下载必须过 `PublicUrlValidator`**：附件地址虽然来自 QQ 事件，但下载是我们发起的，
+     不过校验就成了打内网的跳板（和文档下载同一套规矩）。
+   - **代价：镜像 525MB → 955MB**（Debian 的 ffmpeg 带一堆编解码器，`--no-install-recommends` 也已经用了），
+     CI 一次部署从约 4.5 分钟变成约 7 分钟。要压回去只能换静态 ffmpeg 二进制，还没做。
+   - **实测（2026-10-17）**：容器里 `ffmpeg 8.0.1`；真实 B站 360p mp4（137 秒）按上面的滤镜抽出 **6 帧、
+     每帧 26~42KB**；假 ffmpeg 跑完整链路验证了策略边界（20/21/60/61/180/181/600/601 秒 → 4/5/5/6/6/8/8/10 帧）
+     与"只看了前 600 秒"的提示；本地起应用 + simulator 发一条带视频附件的消息，模型请求里确实带上了
+     **6 张 `data:image/jpeg;base64` 和那段说明**。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -230,3 +255,4 @@
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
+

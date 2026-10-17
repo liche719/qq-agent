@@ -164,10 +164,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 70 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 71 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 70）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 71）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -195,7 +195,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：70 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：71 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -224,12 +224,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-17）：`wechat-agent:02ffeafe1f7b…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
-  **搜索加了兜底**：SearXNG 一条结果都没有、或 query 带 `site:` 却一条都没落在该站点时，降级到 DeepSeek 官方搜索接口
-  （`/v1/tools/search`，5 元/1000 次，复用 `LLM_API_KEY`）；其余情况仍只走自建 SearXNG（不花钱）。
-  **⚠️ 这次部署前踩了个大坑**：给 `SearchTool` 加第二个构造器却没标 `@Autowired`，容器崩溃重启循环、面板与 QQ 全挂；
-  已回滚止损再修好。细节与止损步骤见 `docs/pitfalls.md` 坑 70 —— **改构造器后必须在本地真启动一次**，`test-compile` 通过不算。
-  （此前的 B站「只转发」见坑 68，模型重试与 401/402 告警见坑 69。）
+- **最近一次部署**（2026-10-17）：`wechat-agent:485413f66184…`，`12 个类 / 52 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
+  **能看视频了**：相册视频走 `VideoFrameService` 抽帧（自适应 4~10 帧，镜头变化优先、不够再均匀补），
+  帧图当图片喂给视觉模型；B站**没字幕**时也自动下 360p 抽帧、拼成联系表兜底（坑 71）。
+  **镜像因此从 525MB 涨到 955MB**（ffmpeg），一次部署约 7 分钟。
+  上一版还加了搜索兜底（SearXNG 空 / `site:` 落空 → DeepSeek 搜索），那次踩的 `@Autowired` 坑见坑 70。
+  （B站「只转发」见坑 68，模型重试与 401/402 告警见坑 69。）
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
@@ -260,4 +260,5 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+
 
