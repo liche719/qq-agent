@@ -24,12 +24,22 @@ public class BilibiliTool implements AgentToolProvider {
     private static final int DESC_PREVIEW_CHARS = 300;
 
     private final BilibiliClient client;
+    private final com.liche.wechatagent.media.VideoFrameService videoFrameService;
+    private final com.liche.wechatagent.media.MediaToolContextService mediaContext;
     private final int maxTranscriptChars;
+    /** 抽帧兜底最多下多少字节的视频（360p，2 分钟约 9MB；这里给到 60MB ≈ 十几分钟） */
+    private final long maxDownloadBytes;
 
     public BilibiliTool(BilibiliClient client,
-                        @Value("${bilibili.max-transcript-chars:6000}") int maxTranscriptChars) {
+                        com.liche.wechatagent.media.VideoFrameService videoFrameService,
+                        com.liche.wechatagent.media.MediaToolContextService mediaContext,
+                        @Value("${bilibili.max-transcript-chars:6000}") int maxTranscriptChars,
+                        @Value("${bilibili.frame-fallback-max-bytes:62914560}") long maxDownloadBytes) {
         this.client = client;
+        this.videoFrameService = videoFrameService;
+        this.mediaContext = mediaContext;
         this.maxTranscriptChars = Math.max(500, Math.min(20_000, maxTranscriptChars));
+        this.maxDownloadBytes = Math.max(5L * 1024 * 1024, maxDownloadBytes);
     }
 
     @Tool(value = "读取一个 B 站视频的字幕，用来知道视频里到底讲了什么。用户转发 B 站视频、"
@@ -86,7 +96,15 @@ public class BilibiliTool implements AgentToolProvider {
                         .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传").append("）：\n");
                 out.append(transcript.text());
             } else {
-                out.append(describeUnavailable(info.title(), transcript.reason()));
+                // 没字幕不等于看不到：2026-10-17 起会下 360p 抽帧兜底，把画面交给视觉模型（见 lookAtFrames）
+                out.append("字幕：").append(transcript.reason()).append('\n');
+                FrameLook look = lookAtFrames(info.bvid(), page.cid());
+                out.append(look.text());
+                if (!look.ok()) {
+                    // 抽帧也没成，才说"只能依据标题和简介"——抽成了再说这句会自相矛盾
+                    out.append("\n（所以**只能**依据上面的简介，不要凭标题「").append(info.title())
+                            .append("」编造视频里讲了什么。）");
+                }
             }
             return ToolBusinessResult.success(out.toString());
         } catch (BilibiliClient.BilibiliException exception) {
@@ -102,6 +120,68 @@ public class BilibiliTool implements AgentToolProvider {
         return "字幕：" + reason + "\n"
                 + "（所以**只能**依据上面这些说明，不要凭标题「" + title + "」编造视频里讲了什么；"
                 + "可以如实告诉用户你只看到了标题和简介。）";
+    }
+
+    /**
+     * 没字幕时的兜底：下一段低清视频、抽帧、拼成一张联系表交给视觉模型（2026-10-17 加）。
+     *
+     * <p><b>为什么用联系表而不是几张单图</b>：工具返回只能带文字，能给模型塞图片的通道
+     * （{@code addReadableMedia}）一次只有一张图；6~10 张单独发会变成一堆消息。
+     * 拼成一张 3×2/2×2 的网格，模型一眼看到整段的走向，token 还比单图省一半以上。
+     * 代价是每格变小——所以这条路径**只看"视频大概拍了什么"**，不指望看清小字。
+     *
+     * <p>任何失败都只回一句话，绝不抛异常：字幕已经拿到了的话，抽帧失败不能把结果整个弄没。
+     */
+    private FrameLook lookAtFrames(String bvid, long cid) {
+        if (videoFrameService == null || mediaContext == null) {
+            return FrameLook.failed("");
+        }
+        java.nio.file.Path file = null;
+        try {
+            BilibiliClient.PlayUrl play = client.playUrl(bvid, cid);
+            if (play.sizeBytes() > maxDownloadBytes) {
+                return FrameLook.failed("抽帧：这个视频太大（" + (play.sizeBytes() / 1024 / 1024)
+                        + "MB），这次没抽帧看画面。\n");
+            }
+            file = java.nio.file.Files.createTempFile("va-bili-", ".mp4");
+            client.downloadTo(play.url(), bvid, file, maxDownloadBytes);
+            com.liche.wechatagent.media.VideoFrameService.Result frames = videoFrameService.extract(file);
+            if (!frames.usable()) {
+                return FrameLook.failed("抽帧：" + frames.note() + "（画面也没看到。）\n");
+            }
+            String sheet = videoFrameService.contactSheet(frames.frames());
+            if (sheet == null) {
+                return FrameLook.failed("抽帧：抽到画面了但拼图失败，这次没看成。\n");
+            }
+            String where = com.liche.wechatagent.media.VideoFrameService.describeTimes(frames.frames(),
+                    frames.frames().size());
+            mediaContext.addReadableMedia(
+                    "B站视频《" + bvid + "》没字幕，这里是从视频里抽出的 " + frames.frames().size()
+                            + " 帧画面拼成的联系表（按从左到右、从上到下大约对应第 " + where + "）。"
+                            + "看清画面里有什么、场景怎么变；听不到声音，小字也可能糊。",
+                    sheet);
+            return new FrameLook(true, "抽帧：没有字幕，所以我从视频里抽了 " + frames.frames().size()
+                    + " 帧画面拼成一张图（第 " + where + " 附近）交给视觉部分看过了。"
+                    + "**按画面描述即可，不要假装听到了对白或旁白**；"
+                    + "画面里的小字、快速闪过的细节可能看不清，拿不准就说拿不准。\n");
+        } catch (Exception e) {
+            return FrameLook.failed("抽帧：这次没抽成（" + shortReason(e) + "）。\n");
+        } finally {
+            com.liche.wechatagent.media.VideoFrameService.deleteQuietly(file);
+        }
+    }
+
+    /** 抽帧兜底的结果：成没成 + 要拼进工具返回的那段话 */
+    private record FrameLook(boolean ok, String text) {
+
+        static FrameLook failed(String text) {
+            return new FrameLook(false, text);
+        }
+    }
+
+    private static String shortReason(Exception e) {
+        String text = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return text.length() <= 60 ? text : text.substring(0, 60) + "…";
     }
 
     private BilibiliClient.Page pickPage(BilibiliClient.VideoInfo info, BilibiliClient.VideoRef ref) {

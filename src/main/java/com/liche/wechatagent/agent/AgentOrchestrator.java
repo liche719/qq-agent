@@ -1,5 +1,6 @@
 package com.liche.wechatagent.agent;
 
+import com.liche.wechatagent.channel.InboundAttachment;
 import com.liche.wechatagent.channel.InboundMessage;
 import com.liche.wechatagent.channel.MessageIdempotency;
 import com.liche.wechatagent.channel.WeChatChannel;
@@ -13,6 +14,7 @@ import com.liche.wechatagent.memory.ConversationMemoryService;
 import com.liche.wechatagent.log.ConversationTraceLogger;
 import com.liche.wechatagent.log.UserScope;
 import com.liche.wechatagent.media.MediaToolContextService;
+import com.liche.wechatagent.media.VideoFrameService;
 import com.liche.wechatagent.tool.ToolStatusService;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserService;
@@ -59,6 +61,13 @@ public class AgentOrchestrator {
     private final List<WeChatChannel> channels;
     private final ConversationMemoryService conversationMemoryService;
     private final AgentTaskStateStore taskStateStore;
+    /** 视频抽帧（2026-10-17 加）。用 setter 注入：这个类有两个构造器，别为了它动测试用的那个。 */
+    private VideoFrameService videoFrameService;
+
+    @Autowired(required = false)
+    public void setVideoFrameService(VideoFrameService videoFrameService) {
+        this.videoFrameService = videoFrameService;
+    }
 
     @Value("${memory.context-max-turns:40}")
     private int contextMaxTurns = DEFAULT_CONTEXT_MAX_TURNS;
@@ -385,7 +394,7 @@ public class AgentOrchestrator {
             StreamReplySink sink = createSinkFor(batch);
             try {
                 reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink,
-                        extracted.failures());
+                        extracted.failures(), extracted.videoFrameImages(), extracted.videoNotes());
             } finally {
                 mediaToolContextService.unbind();
             }
@@ -419,7 +428,9 @@ public class AgentOrchestrator {
     private record DocumentBundle(List<ExtractedDocument> documents,
                                   List<ExtractedDocument> directDocuments,
                                   List<ExtractedDocument> quotedDocuments,
-                                  List<String> failures) {
+                                  List<String> failures,
+                                  List<String> videoFrameImages,
+                                  List<String> videoNotes) {
     }
 
     // Extracts direct and quoted attachments while preserving their source lists.
@@ -427,34 +438,154 @@ public class AgentOrchestrator {
         if (!batch.attachments().isEmpty() || !batch.quotedAttachments().isEmpty()) {
             toolStatusService.push("我正在读取你发来的文件…");
         }
+        // 2026-10-17：视频单独走抽帧（见 VideoFrameService）。它会变成"几帧画面"交给视觉模型，
+        // 而不是走文档通道——文档通道只认 PDF/DOCX/PPT，视频喂进去只会得到"[文件]"。
+        List<InboundAttachment> directVideos = new java.util.ArrayList<>();
+        List<InboundAttachment> quotedVideos = new java.util.ArrayList<>();
+        List<InboundAttachment> directFiles = new java.util.ArrayList<>();
+        List<InboundAttachment> quotedFiles = new java.util.ArrayList<>();
+        for (InboundAttachment attachment : batch.attachments()) {
+            (isVideoAttachment(attachment) ? directVideos : directFiles).add(attachment);
+        }
+        for (InboundAttachment attachment : batch.quotedAttachments()) {
+            (isVideoAttachment(attachment) ? quotedVideos : quotedFiles).add(attachment);
+        }
+
         // 2026-09-20：改成逐个兜住（服务内部不再整批抛）——一个文件读不了不影响其余文件，
         // 读不了的原因会带给模型，让它如实告诉用户是哪个文件、为什么。
         List<ExtractedDocument> direct = new java.util.ArrayList<>();
         List<ExtractedDocument> quoted = new java.util.ArrayList<>();
         List<String> failures = new java.util.ArrayList<>();
-        if (!batch.attachments().isEmpty()) {
+        if (!directFiles.isEmpty()) {
             DocumentExtractionService.ExtractionResult result =
-                    documentExtractionService.extractAll(batch.attachments());
+                    documentExtractionService.extractAll(directFiles);
             direct.addAll(result.documents());
             failures.addAll(result.failures());
         }
-        if (!batch.quotedAttachments().isEmpty()) {
+        if (!quotedFiles.isEmpty()) {
             DocumentExtractionService.ExtractionResult result =
-                    documentExtractionService.extractAll(batch.quotedAttachments());
+                    documentExtractionService.extractAll(quotedFiles);
             quoted.addAll(result.documents());
             failures.addAll(result.failures());
         }
+
+        List<String> frameImages = new java.util.ArrayList<>();
+        List<String> videoNotes = new java.util.ArrayList<>();
+        List<InboundAttachment> allVideos = new java.util.ArrayList<>(directVideos);
+        allVideos.addAll(quotedVideos);
+        for (InboundAttachment video : allVideos) {
+            VideoOutcome outcome = readVideo(video);
+            frameImages.addAll(outcome.images());
+            if (outcome.note() != null && !outcome.note().isBlank()) {
+                videoNotes.add(outcome.note());
+            }
+            if (outcome.failed() && !outcome.note().isBlank()) {
+                failures.add(outcome.note());
+            }
+        }
+
         List<ExtractedDocument> all = new java.util.ArrayList<>(direct);
         all.addAll(quoted);
-        return new DocumentBundle(all, direct, quoted, List.copyOf(failures));
+        return new DocumentBundle(all, direct, quoted, List.copyOf(failures),
+                List.copyOf(frameImages), List.copyOf(videoNotes));
+    }
+
+    /** 视频：下载 → 抽帧 → 变成能喂给视觉模型的 data URL（2026-10-17 加） */
+    private VideoOutcome readVideo(InboundAttachment attachment) {
+        String label = attachment.name() == null || attachment.name().isBlank()
+                ? "（没有文件名的视频）" : attachment.name().trim();
+        if (attachment.url() == null || attachment.url().isBlank()) {
+            return VideoOutcome.failed(label + "：视频没有可下载的地址。");
+        }
+        if (videoFrameService == null) {
+            return VideoOutcome.failed(label + "：视频解析没启用。");
+        }
+        toolStatusService.push("我正在看这个视频…");
+        java.nio.file.Path file = null;
+        try {
+            file = videoFrameService.download(attachment.url(), null, Long.MAX_VALUE, suffixOf(attachment));
+            VideoFrameService.Result result = videoFrameService.extract(file);
+            if (!result.usable()) {
+                return VideoOutcome.failed(label + "：" + result.note());
+            }
+            List<String> images = new java.util.ArrayList<>();
+            for (VideoFrameService.Frame frame : result.frames()) {
+                images.add(frame.dataUrl());
+            }
+            StringBuilder note = new StringBuilder();
+            note.append("【视频画面】他发来一个视频《").append(label).append("》，");
+            if (result.duration() > 0) {
+                note.append("时长约 ").append(Math.round(result.duration())).append(" 秒。");
+            }
+            note.append("下面附的 ").append(images.size()).append(" 张图是**这同一个视频里按时间顺序抽出的画面**")
+                    .append("（大约在第 ")
+                    .append(VideoFrameService.describeTimes(result.frames(), images.size()))
+                    .append("），**不是几张独立的照片**。");
+            if (result.note() != null && !result.note().isBlank()) {
+                note.append(result.note());
+            }
+            note.append("你可以据此说画面里有什么、镜头怎么变；但**听不到声音**，"
+                    + "快速闪过的东西和小字也可能看不清——需要这些细节时如实说，不要编。");
+            return new VideoOutcome(images, note.toString(), false);
+        } catch (Exception e) {
+            log.warn("视频处理失败 name={} error={}", label, e.toString());
+            return VideoOutcome.failed(label + "：视频这次没读成（" + shortReason(e) + "），可以让用户重新发一次。");
+        } finally {
+            VideoFrameService.deleteQuietly(file);
+        }
+    }
+
+    private boolean isVideoAttachment(InboundAttachment attachment) {
+        String type = attachment.contentType() == null ? "" : attachment.contentType().toLowerCase(java.util.Locale.ROOT);
+        if (type.startsWith("video/")) {
+            return true;
+        }
+        String name = attachment.name() == null ? "" : attachment.name().toLowerCase(java.util.Locale.ROOT);
+        return name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".m4v")
+                || name.endsWith(".webm") || name.endsWith(".avi") || name.endsWith(".mkv");
+    }
+
+    private String suffixOf(InboundAttachment attachment) {
+        String name = attachment.name() == null ? "" : attachment.name().toLowerCase(java.util.Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        if (dot > 0 && name.length() - dot <= 6) {
+            String suffix = name.substring(dot);
+            if (suffix.matches("\\.[a-z0-9]{2,5}")) {
+                return suffix;
+            }
+        }
+        String type = attachment.contentType() == null ? "" : attachment.contentType().toLowerCase(java.util.Locale.ROOT);
+        return type.endsWith("quicktime") ? ".mov" : ".mp4";
+    }
+
+    private String shortReason(Exception e) {
+        String text = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return text.length() <= 80 ? text : text.substring(0, 80) + "…";
+    }
+
+    /** 一个视频的读取结果：能喂给模型的帧图 + 给模型看的说明 + 是否算失败 */
+    private record VideoOutcome(List<String> images, String note, boolean failed) {
+
+        static VideoOutcome failed(String note) {
+            return new VideoOutcome(List.of(), note, true);
+        }
     }
 
     // Invokes the model with the current media, quote, history, and document context.
     private String invokeAgent(InboundMessageBatch batch, String userId, String content, UserProfile profile,
                                MemoryLoader.LoadedMemory memory, List<ContextTurn> history,
                                List<ExtractedDocument> documents, StreamReplySink sink,
-                               List<String> documentFailures) {
+                               List<String> documentFailures, List<String> videoFrameImages,
+                               List<String> videoNotes) {
         String agentText = quotePrompt(content, batch.quotedContent()) + mediaToolContextService.promptSection();
+        if (videoNotes != null) {
+            // 视频的说明要贴在这一轮里：告诉模型这些图是"同一个视频按时间抽的帧"，不是几段独立照片
+            for (String note : videoNotes) {
+                if (note != null && !note.isBlank()) {
+                    agentText = agentText + "\n" + note;
+                }
+            }
+        }
         if (documentFailures != null && !documentFailures.isEmpty()) {
             // 读不了的附件要说清楚：哪些没读成、为什么——否则模型会猜内容或含糊其辞
             StringBuilder note = new StringBuilder("\n【系统提示】以下附件这次没能读取，请如实告诉用户，"
@@ -466,6 +597,9 @@ public class AgentOrchestrator {
         }
         List<String> allImages = new java.util.ArrayList<>(batch.images());
         allImages.addAll(batch.quotedImages());
+        if (videoFrameImages != null) {
+            allImages.addAll(videoFrameImages);
+        }
         // 陪练模式只追加一段额外要求，用户自己的人设保持不动
         return agentLoop.chat(userId, batch.botId(), batch.channel(),
                 CoachPresets.withMode(profile.getPersona(), profile.getCoachMode()), memory.coreSection(),

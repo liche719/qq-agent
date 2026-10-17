@@ -294,7 +294,8 @@ public class MediaToolContextService {
             return notice.toString();
         }
         if (media.attachmentCount() > 0) {
-            return "📎 文件已经读完；这次只用于当前对话，没有作为长期资料保存。";
+            // 用"附件"而不是"文件"：2026-10-17 起视频也走这条路（抽帧给视觉模型看），说"文件"会打架
+            return "📎 附件已经读完；这次只用于当前对话，没有作为长期资料保存。";
         }
         return "";
     }

@@ -23,8 +23,10 @@ WORKDIR /app
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
 # 库级备份要用到客户端：pg_dump（迁 pg 后用）/ mysqldump（现在用）。
 # 两个都装，切库时备份不用改（见 DatabaseDumpService）
+# ffmpeg：视频抽帧（2026-10-17 加，见 VideoFrameService）——用户发的相册视频、B站没字幕时的兜底都要它。
+# --no-install-recommends 是必须的，否则默认推荐会把 X11/字体那一堆拖进来（镜像多好几百 MB）。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client default-mysql-client \
+    && apt-get install -y --no-install-recommends postgresql-client default-mysql-client ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /workspace/target/wechat-agent-java-0.0.1-SNAPSHOT.jar /app/app.jar
 EXPOSE 443

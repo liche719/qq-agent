@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,6 +83,10 @@ public class BilibiliClient {
     }
 
     public record Transcript(boolean available, String reason, String language, boolean aiGenerated, String text) {
+    }
+
+    /** 可直接下载的播放流（2026-10-17：没字幕时抽帧用） */
+    public record PlayUrl(String url, long sizeBytes, int quality) {
     }
 
     /**
@@ -222,6 +227,73 @@ public class BilibiliClient {
     }
 
     // ------------------------------------------------------------------ 内部
+
+    /**
+     * 取一个**能直接下载的 mp4 地址**（2026-10-17 加，给"没字幕就抽帧"兜底用）。
+     *
+     * <p>走 {@code platform=html5&qn=32}：这个组合不需要 wbi 签名、拿到的是一条完整的 mp4
+     * （{@code durl}，不是 DASH 分片），实测 2 分钟的片子约 8.9MB、360p。
+     * **画质故意要最低**——我们只是抽几帧看"画面里有什么"，360p 足够，还能少下几十 MB。
+     */
+    public PlayUrl playUrl(String bvid, long cid) throws IOException {
+        String url = API + "/x/player/playurl?bvid=" + bvid + "&cid=" + cid
+                + "&qn=32&fnval=0&platform=html5&high_quality=1";
+        JsonNode root = get(url, "https://www.bilibili.com/video/" + bvid);
+        if (root.path("code").asInt(-1) != 0) {
+            throw new BilibiliException("取视频播放地址失败：" + root.path("message").asText(""));
+        }
+        JsonNode data = root.path("data");
+        JsonNode durl = data.path("durl");
+        if (!durl.isArray() || durl.isEmpty()) {
+            // DASH 形态（fnval 变过）也认一下，挑最低码率的那路视频
+            JsonNode videos = data.path("dash").path("video");
+            if (videos.isArray() && !videos.isEmpty()) {
+                JsonNode lowest = videos.get(videos.size() - 1);
+                return new PlayUrl(lowest.path("baseUrl").asText(""), lowest.path("size").asLong(0),
+                        lowest.path("id").asInt(0));
+            }
+            throw new BilibiliException("这个视频没有可直接下载的 mp4 流（可能要大会员或已下架）。");
+        }
+        JsonNode first = durl.get(0);
+        String streamUrl = first.path("url").asText("");
+        if (streamUrl.isBlank()) {
+            throw new BilibiliException("播放地址是空的。");
+        }
+        return new PlayUrl(streamUrl, first.path("size").asLong(0), data.path("quality").asInt(0));
+    }
+
+    /** 把播放地址的字节流下载到本地文件（带 Cookie 与 Referer，CDN 才认） */
+    public void downloadTo(String streamUrl, String bvid, Path target, long maxBytes) throws IOException {
+        Request.Builder builder = new Request.Builder().url(streamUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/video/" + bvid)
+                .get();
+        if (!cookie.isBlank()) {
+            builder.header("Cookie", cookie);
+        }
+        try (Response response = http.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("下载视频流失败 HTTP " + response.code());
+            }
+            long declared = response.body().contentLength();
+            if (declared > maxBytes) {
+                throw new IOException("视频太大（" + (declared / 1024 / 1024) + "MB），不下了");
+            }
+            try (var in = response.body().byteStream();
+                 var out = java.nio.file.Files.newOutputStream(target)) {
+                byte[] buffer = new byte[64 * 1024];
+                long total = 0;
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    total += read;
+                    if (total > maxBytes) {
+                        throw new IOException("视频超过大小限制");
+                    }
+                    out.write(buffer, 0, read);
+                }
+            }
+        }
+    }
 
     private JsonNode subtitleTracks(String bvid, long cid) throws IOException {
         String referer = "https://www.bilibili.com/video/" + bvid;

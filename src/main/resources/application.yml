@@ -196,6 +196,22 @@ deepseek:
     timeout-seconds: ${DEEPSEEK_SEARCH_TIMEOUT_SECONDS:20}
     count: ${DEEPSEEK_SEARCH_COUNT:10}
 
+# 视频抽帧（2026-10-17 加，见 VideoFrameService）：相册视频、B站没字幕时的兜底。
+# 参数是**自适应**的：帧数按视频时长算（4~10 帧），先按镜头变化抽、不够再均匀补齐；
+# 这里只放天花板与工具路径，别把帧数写死。
+video:
+  ffmpeg: ${VIDEO_FFMPEG:ffmpeg}
+  ffprobe: ${VIDEO_FFPROBE:ffprobe}
+  # 视频文件上限（QQ 相册视频可能很大，超了直接告诉用户"太大了"而不是慢慢啃）
+  max-file-bytes: ${VIDEO_MAX_FILE_BYTES:62914560}
+  # 只分析前多少秒：超长视频全片抽帧既慢又没重点
+  max-window-seconds: ${VIDEO_MAX_WINDOW_SECONDS:600}
+  # 帧数硬上限（策略算出来最多也就 10，这里是保险）
+  max-frames: ${VIDEO_MAX_FRAMES:10}
+  timeout-seconds: ${VIDEO_TIMEOUT_SECONDS:120}
+  # 镜头变化阈值：越高越"只认大切换"，0.3 实测对 vlog/教学视频都合适
+  scene-threshold: ${VIDEO_SCENE_THRESHOLD:0.3}
+
 document:
   max-file-bytes: ${DOCUMENT_MAX_FILE_BYTES:20971520}
   max-text-chars: ${DOCUMENT_MAX_TEXT_CHARS:20000}
