@@ -123,12 +123,12 @@ public class BilibiliTool implements AgentToolProvider {
     }
 
     /**
-     * 没字幕时的兜底：下一段低清视频、抽帧、拼成一张联系表交给视觉模型（2026-10-17 加）。
+     * 没字幕时的兜底：下一段低清视频、抽帧、拼成联系表交给视觉模型（2026-10-17 加）。
      *
      * <p><b>为什么用联系表而不是几张单图</b>：工具返回只能带文字，能给模型塞图片的通道
-     * （{@code addReadableMedia}）一次只有一张图；6~10 张单独发会变成一堆消息。
-     * 拼成一张 3×2/2×2 的网格，模型一眼看到整段的走向，token 还比单图省一半以上。
-     * 代价是每格变小——所以这条路径**只看"视频大概拍了什么"**，不指望看清小字。
+     * （{@code addReadableMedia}）一次只有一张图；十几张单图会变成一堆消息。
+     * 拼成网格后模型一眼看到整段的走向，而且同样信息量下更省 token——360p 源按 360px 一格基本是原分辨率。
+     * 帧多了会切成 2~3 张（每张最多 12 格），否则整图会被上游缩放、格子里就糊了。
      *
      * <p>任何失败都只回一句话，绝不抛异常：字幕已经拿到了的话，抽帧失败不能把结果整个弄没。
      */
@@ -149,19 +149,30 @@ public class BilibiliTool implements AgentToolProvider {
             if (!frames.usable()) {
                 return FrameLook.failed("抽帧：" + frames.note() + "（画面也没看到。）\n");
             }
-            String sheet = videoFrameService.contactSheet(frames.frames());
-            if (sheet == null) {
+            java.util.List<String> sheets = videoFrameService.contactSheets(frames.frames());
+            if (sheets.isEmpty()) {
                 return FrameLook.failed("抽帧：抽到画面了但拼图失败，这次没看成。\n");
+            }
+            int perSheet = (int) Math.ceil(frames.frames().size() / (double) sheets.size());
+            for (int i = 0; i < sheets.size(); i++) {
+                int from = i * perSheet;
+                int to = Math.min(frames.frames().size(), from + perSheet);
+                if (from >= to) {
+                    continue;
+                }
+                String where = com.liche.wechatagent.media.VideoFrameService.describeTimes(
+                        frames.frames().subList(from, to), to - from);
+                mediaContext.addReadableMedia(
+                        "B站视频《" + bvid + "》没字幕，这是第 " + (i + 1) + "/" + sheets.size()
+                                + " 张联系表：从视频里抽出的 " + (to - from) + " 帧画面（约第 " + where
+                                + "，按从左到右、从上到下）。看清画面里有什么、场景怎么变；听不到声音，小字也可能糊。",
+                        sheets.get(i));
             }
             String where = com.liche.wechatagent.media.VideoFrameService.describeTimes(frames.frames(),
                     frames.frames().size());
-            mediaContext.addReadableMedia(
-                    "B站视频《" + bvid + "》没字幕，这里是从视频里抽出的 " + frames.frames().size()
-                            + " 帧画面拼成的联系表（按从左到右、从上到下大约对应第 " + where + "）。"
-                            + "看清画面里有什么、场景怎么变；听不到声音，小字也可能糊。",
-                    sheet);
             return new FrameLook(true, "抽帧：没有字幕，所以我从视频里抽了 " + frames.frames().size()
-                    + " 帧画面拼成一张图（第 " + where + " 附近）交给视觉部分看过了。"
+                    + " 帧画面（约每 4 秒一帧，第 " + where + "），拼成 " + sheets.size()
+                    + " 张联系表交给视觉部分看过了。"
                     + "**按画面描述即可，不要假装听到了对白或旁白**；"
                     + "画面里的小字、快速闪过的细节可能看不清，拿不准就说拿不准。\n");
         } catch (Exception e) {

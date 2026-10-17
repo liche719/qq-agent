@@ -59,8 +59,12 @@ public class VideoFrameService {
 
     /** 抽出来的每张图长边上限：720 够模型认出画面，又不至于每帧吃掉几千 token */
     private static final int TARGET_LONG_EDGE = 720;
-    /** 拼联系表时每格的长边（比单帧小，因为一张图里要塞 4~10 格） */
-    private static final int TILE_LONG_EDGE = 480;
+    /** 拼联系表时每格的长边（比单帧小，因为一张图里要塞 4~12 格） */
+    private static final int TILE_LONG_EDGE = 360;
+    /** 默认一帧管多少秒（用户 2026-10-17 要求：3~5 秒一次，取中间） */
+    private static final double FRAME_INTERVAL_SECONDS = 4d;
+    /** 一张联系表最多几格：再多整图会被上游缩放，格子里就糊了 */
+    private static final int MAX_TILES_PER_SHEET = 12;
     private static final Pattern PTS_TIME = Pattern.compile("pts_time:([0-9]+(?:\\.[0-9]+)?)");
 
     private final String ffmpeg;
@@ -87,7 +91,7 @@ public class VideoFrameService {
         // 上限兜一圈：配置写错（比如 0）不能把功能整个弄废
         this.maxFileBytes = Math.max(5L * 1024 * 1024, maxFileBytes);
         this.maxWindowSeconds = Math.max(18d, Math.min(3600d, maxWindowSeconds));
-        this.maxFrames = Math.max(2, Math.min(16, maxFrames));
+        this.maxFrames = Math.max(2, Math.min(32, maxFrames));
         this.timeoutSeconds = Math.max(20, Math.min(600, timeoutSeconds));
         this.sceneThreshold = Math.max(0.05d, Math.min(0.9d, sceneThreshold));
     }
@@ -198,12 +202,33 @@ public class VideoFrameService {
     }
 
     /**
-     * 把几张帧拼成**一张联系表**（网格图）。
+     * 把帧拼成**联系表**（网格图），帧多了就切成几张。
      *
      * <p>为什么要它：工具返回只能带文字，能塞图片的通道（{@code addReadableMedia}）一次只有一张图。
-     * 6~10 张单独发过去会变成一堆消息、上下文也乱；拼成一张 3×2 的图，模型一眼能看到整段视频的走向，
-     * token 还比 6 张单图省一半以上。代价是每格变小——所以抽帧兜底只看"大概拍了什么"，不指望看清小字。
+     * 6~24 张单独发过去会变成一堆消息、上下文也乱；拼成网格，模型一眼能看到整段视频的走向。
+     * 而且**同样信息量下更省 token**：一格里 360px 对 360p 的 B站源几乎是原分辨率，没有损失。
+     *
+     * <p>为什么要切：一张图里塞 24 格时整图会大到被上游缩放，格子里就糊成一片了。所以每张最多
+     * {@value #MAX_TILES_PER_SHEET} 格（4 列），24 帧会得到 2 张。
+     *
+     * @return 每张联系表的 data URL（可能 1~3 张，为空表示拼不出来）
      */
+    public List<String> contactSheets(List<Frame> frames) {
+        if (frames == null || frames.isEmpty()) {
+            return List.of();
+        }
+        List<String> sheets = new ArrayList<>();
+        for (int start = 0; start < frames.size(); start += MAX_TILES_PER_SHEET) {
+            int end = Math.min(frames.size(), start + MAX_TILES_PER_SHEET);
+            String sheet = contactSheet(frames.subList(start, end));
+            if (sheet != null) {
+                sheets.add(sheet);
+            }
+        }
+        return sheets;
+    }
+
+    /** 单张联系表（≤{@value #MAX_TILES_PER_SHEET} 格）；帧更多时请用 {@link #contactSheets} */
     public String contactSheet(List<Frame> frames) {
         if (frames == null || frames.isEmpty()) {
             return null;
@@ -219,7 +244,7 @@ public class VideoFrameService {
             return null;
         }
         int count = images.size();
-        int cols = count <= 4 ? 2 : 3;
+        int cols = count <= 4 ? 2 : 4;
         int rows = (count + cols - 1) / cols;
         int cellW = TILE_LONG_EDGE;
         int cellH = Math.round(cellW * 9f / 16f);
@@ -306,21 +331,14 @@ public class VideoFrameService {
         }
     }
 
-    /** 按策略该抽几帧（时长越短越少，避免一堆重复画面） */
+    /** 按策略该抽几帧（2026-10-17 按用户要求加密：**大约每 4 秒一帧**，总量封顶） */
     int targetFrames(double durationSeconds) {
-        int target;
-        if (durationSeconds <= 20) {
-            target = 4;
-        } else if (durationSeconds <= 60) {
-            target = 5;
-        } else if (durationSeconds <= 180) {
-            target = 6;
-        } else if (durationSeconds <= 600) {
-            target = 8;
-        } else {
-            target = 10;
-        }
-        return Math.min(target, maxFrames);
+        // 用户原话："一分钟 3~5 秒一次，也就是 12~20 张"。取中间约 4 秒一帧：
+        // 60 秒 → 16 帧，正好落在他要的区间里。
+        // 但**不能无脑按 4 秒走**：10 分钟的视频那样就是 150 帧、五六万 token，模型会被图淹掉、
+        // 单轮成本也翻十几倍。所以总量封顶 maxFrames（默认 24）：短视频密、长视频自动放宽间隔。
+        int target = (int) Math.round(durationSeconds / FRAME_INTERVAL_SECONDS) + 1;
+        return Math.max(6, Math.min(Math.min(target, maxFrames), 24));
     }
 
     // ------------------------------------------------------------------ 内部

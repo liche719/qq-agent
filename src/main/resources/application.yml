@@ -206,8 +206,8 @@ video:
   max-file-bytes: ${VIDEO_MAX_FILE_BYTES:62914560}
   # 只分析前多少秒：超长视频全片抽帧既慢又没重点
   max-window-seconds: ${VIDEO_MAX_WINDOW_SECONDS:600}
-  # 帧数硬上限（策略算出来最多也就 10，这里是保险）
-  max-frames: ${VIDEO_MAX_FRAMES:10}
+  # 帧数硬上限（策略按"约 4 秒一帧"算，这里封顶：15 秒视频 6 帧、1 分钟 16 帧、10 分钟也还是 24 帧）
+  max-frames: ${VIDEO_MAX_FRAMES:24}
   timeout-seconds: ${VIDEO_TIMEOUT_SECONDS:120}
   # 镜头变化阈值：越高越"只认大切换"，0.3 实测对 vlog/教学视频都合适
   scene-threshold: ${VIDEO_SCENE_THRESHOLD:0.3}
