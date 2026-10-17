@@ -41,6 +41,12 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
     /** 每个来源后面附一行带此标记的"标题 + 链接"，供 AgentLoop 在回复结尾统一生成"参考来源"。 */
     public static final String SOURCE_MARK = "🔗 ";
 
+    /**
+     * **必须显式 {@code @Autowired}**：这个类有两个构造器（下面那个是给历史测试用的），
+     * 不加注解 Spring 选不出来，会去找默认构造器然后在启动时报
+     * {@code No default constructor found} —— 2026-10-17 就这么把生产打挂过一次（坑 70）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public SearchTool(SearxngClient searxngClient,
                       DeepSeekSearchClient deepSeekSearchClient,
                       WebPageTool webPageTool,
