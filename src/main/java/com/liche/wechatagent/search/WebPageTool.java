@@ -43,10 +43,11 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     /**
      * 正文少于这么多字就认为"没抓到可读内容"。
      *
-     * <p>2026-10-20 从 300 提到 **1500**：用户的场景是"让我去看它的 GitHub 仓库、一层层读代码"，
-     * 300 只覆盖"完全空白"，而"抓到一堆导航栏 + 几条链接"也读不出东西。1500 更贴近"真的能读"。
+     * <p>2026-10-20 定这个数的原则是：**它只兜"明显是空壳"这一种情况**（导航栏 + 版权声明）。
+     * "要不要完整正文"由模型自己用 `fullText` 参数决定——程序不该替它判断该不该花钱。
+     * 所以这里是 200 而不是 1500：宁可让它自己判断，也不要把"能不能读"赌在一个字数上。
      */
-    private int deepSeekFetchMinChars = 1500;
+    private int deepSeekFetchMinChars = 200;
 
     /**
      * 确定性不可读：链接非法、HTTP 4xx、不是网页文本、跳转异常……同一个链接再试多少次都一样。
@@ -62,10 +63,23 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
         }
     }
 
-    @Tool(value = "读取指定公开网页的正文。当用户给出 URL，或需要查看搜索结果中的具体页面、文章详情时调用。只支持公开 HTTP/HTTPS 页面。")
+    @Tool(value = "读取指定公开网页的正文。当用户给出 URL，或需要查看搜索结果中的具体页面、文章详情时调用。"
+            + "只支持公开 HTTP/HTTPS 页面。"
+            + "**fullText 由你自己判断**：想看完整内容（代码文件、长文档、要靠它下结论的文章）就传 true，"
+            + "程序会用 DeepSeek 渲染后取全文（比本地直抓干净，但按次收费、且吃每日配额）；"
+            + "只是随便看一眼页面大意，就留空（走本地抓取，快且免费）。"
+            + "GitHub/GitLab 的 blob 链接会自动换成纯文本地址，读代码传 true 更稳。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public ToolBusinessResult readWebPage(String url) {
+    public ToolBusinessResult readWebPage(String url, Boolean fullText) {
         status("我正在打开这个网页…");
+        // 模型明确要"完整正文"：直接走 DeepSeek 渲染后取全文，不去猜字数
+        if (Boolean.TRUE.equals(fullText)) {
+            String full = fetchFromDeepSeek(url);
+            if (!full.isBlank()) {
+                return ToolBusinessResult.success(full);
+            }
+            // 拿不到就退回本地抓取，不能让"想要全文"变成"什么都没读到"
+        }
         try {
             return ToolBusinessResult.success(fillIfTooShort(url, openAndExtract(url)));
         } catch (UnreadablePageException exception) {
