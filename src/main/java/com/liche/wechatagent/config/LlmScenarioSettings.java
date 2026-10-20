@@ -98,7 +98,10 @@ public class LlmScenarioSettings {
                 continue;
             }
             String effort = item.substring(eq + 1).trim().toLowerCase();
-            if (!"low".equals(effort) && !"medium".equals(effort) && !"high".equals(effort)) {
+            // none = 完全不思考。2026-10-20 实测：传 none 时上游 reasoning_tokens=0，
+            // 不传是 27、low 是 40、minimal 反而 57 —— 只有 none 是真关。
+            if (!"none".equals(effort) && !"low".equals(effort)
+                    && !"medium".equals(effort) && !"high".equals(effort)) {
                 continue;
             }
             parsed.put(LlmScenario.of(item.substring(0, eq).trim()), effort);

@@ -29,7 +29,7 @@ public class LlmScenarioEffortService {
 
     /** 允许的档位；空字符串表示"不传这个字段、用上游默认" */
     public static final String DEFAULT = "";
-    public static final List<String> EFFORTS = List.of("low", "medium", "high");
+    public static final List<String> EFFORTS = List.of("none", "low", "medium", "high");
 
     private final LlmScenarioSettingRepository repository;
     private final ZoneId zone;
