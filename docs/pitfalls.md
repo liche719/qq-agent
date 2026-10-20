@@ -1,4 +1,4 @@
-# 已知坑与约定（完整版 · 71 条）
+# 已知坑与约定（完整版 · 72 条）
 
 > 本文件是 `AGENTS.md` 第 5 节的**完整版**。`AGENTS.md` 因为超过 harness 的 64 KB 读取上限会被截断，
 > 现在只保留「违反就出线上事故」的十几条硬约定；**细节、来龙去脉、实测证据全在这里**。
@@ -6,7 +6,7 @@
 > **编号是稳定契约：不要重排、不要插号、不要合并。** 全项目的代码注释和 `docs/` 其它文档都按
 > 「坑 38」「坑 52」这样引用；改了编号会让这些引用全部指错。
 >
-> 新踩的坑**追加到下一条编号**（现在最后一条是 71），别往中间插。
+> 新踩的坑**追加到下一条编号**（现在最后一条是 72），别往中间插。
 >
 > ⚠️ **这是一份按时间累积的记录，条目本身不改写**（改了就等于抹掉当时为什么这么做）。
 > 但凡某条的**结论/现状**后来变了，都在原条目后面用 `（日期 注：…）` 标注。
@@ -32,12 +32,12 @@
 | **前端面板** | 11、13、15、33、44、57 |
 | **记忆与提示词** | 16、42、43、62、63 |
 | **工具框架与 AgentLoop** | 27、28、39、45、55、60、61、**66、67** |
-| **外部集成**（SearXNG / 墨墨 / 证书 / 域名） | 3、21、22、23、26、**70** |
+| **外部集成**（SearXNG / 墨墨 / 证书 / 域名 / B站） | 3、21、22、23、26、**70、72** |
 | **自主模块「它自己」** | 64、65 |
 
 ---
 
-## 原文（1 ~ 71）
+## 原文（1 ~ 72）
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
    **（2026-10-10 注：生产 2026-09-18 已迁到 PostgreSQL 16 + pgvector、MySQL 容器 2026-09-20 退役，
@@ -261,6 +261,18 @@
      本地起应用 + simulator 发带视频附件的消息，模型请求里确实带上了帧图和那段说明；
      **生产真实转发（B站无字幕）也已跑通**：工具返回里出现"抽帧：没有字幕，所以我抽了 N 帧…"，
      模型据此回答了画面内容。
+72. **只有 `SESSDATA` 不等于能"操作"B站账号——写操作要 `bili_jct`，而它是事后无法推导的**（2026-10-20 实测）：
+   用户想让它"支配我的 B 站"（发评论、回复别人）。查服务器凭据发现 `BILI_SESSDATA` **只有 `SESSDATA` 一个字段**
+   （231 个字符，无 `bili_jct`、无 `buvid3`）。直接 POST `/x/v2/reply/add` 实测返回
+   **`code:-111 CSRF 校验失败`** —— `bili_jct` 就是 csrf token，**登录时才下发，拿不到就永远发不了写请求**。
+   结论：**读**能做的比想象的多，**写**一条都做不了。下次遇到"让它操作某站账号"，先查 cookie 里有哪些字段，
+   别按"有 SESSDATA 就等于登录了"去设计功能。
+   - **读这边的好消息（同一轮实测，带 SESSDATA 直连）**：`/x/web-interface/ranking/v2?rid=0&type=all`（全站热门，
+     **不用登录**）、`/x/polymer/web-dynamic/v1/feed/all?type=video`（关注动态 20 条）、
+     `/x/v2/history/toview`（稍后再看 25 条）、`/x/relation/followings`（关注 5 人）**全部 `code:0`，
+     都不需要 wbi 签名**——原来以为这几个都要签名，实测直接 GET 就行，白准备了一套签名实现。
+   - 顺带：`/x/web-interface/nav` 可以当"登录态自检"，返回 `isLogin` 和 `uname`（当前 `雾看花_`）。
+   - 具体实现见 `bilibili/BilibiliClient.feed()` 与 `BilibiliTool.browseBilibili`（hot/following/later）。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -269,4 +281,5 @@
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
+
 
