@@ -563,6 +563,58 @@ public class BilibiliClient {
         }
     }
 
+    /** 发评论/回复的结果：B 站的业务码 + 它给的一句人话 */
+    public record CommentResult(int code, String message, long rpid) {
+        public boolean ok() {
+            return code == 0;
+        }
+    }
+
+    /**
+     * 发一条评论或回复（2026-10-20 加，**写操作**）。
+     *
+     * <p>实测要点（见坑 72）：
+     * <ul>
+     *   <li>必须带 {@code csrf=<bili_jct>}，否则 {@code -111 CSRF 校验失败}；</li>
+     *   <li>{@code root} 与 {@code parent} 都传 = 回复楼中楼；都为空 = 顶级评论；</li>
+     *   <li>业务失败也会返回 HTTP 200，**必须看 {@code code}**（例如 `12002 当前页面评论功能已关闭`）；</li>
+     *   <li>**接口回 0 不等于公开可见**（可能进审核），插件作者也把这列为待验证项。</li>
+     * </ul>
+     */
+    public CommentResult comment(long aid, String message, Long root, Long parent) throws IOException {
+        BiliCredential credential = credentialService == null ? null : credentialService.current();
+        if (credential == null || credential.getBiliJct() == null || credential.getBiliJct().isBlank()) {
+            throw new BilibiliException("发评论需要 bili_jct，现在没有——去面板「B站」页签扫一次码。");
+        }
+        String referer = "https://www.bilibili.com/video/av" + aid;
+        okhttp3.FormBody.Builder form = new okhttp3.FormBody.Builder()
+                .add("oid", String.valueOf(aid))
+                .add("type", "1")
+                .add("message", message)
+                .add("csrf", credential.getBiliJct())
+                .add("plat", "1");
+        if (root != null && root > 0) {
+            form.add("root", String.valueOf(root));
+            form.add("parent", String.valueOf(parent == null || parent <= 1 ? root : parent));
+        }
+        Request.Builder builder = new Request.Builder()
+                .url(API + "/x/v2/reply/add")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", referer)
+                .header("Origin", "https://www.bilibili.com")
+                .header("Cookie", cookieHeader())
+                .post(form.build());
+        try (Response response = http.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站评论接口 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            long rpid = json.path("data").path("rpid").asLong(0);
+            return new CommentResult(code, json.path("message").asText(""), rpid);
+        }
+    }
+
     private String viewError(int code, String message) {
         if (code == -404) {
             return "这个视频不存在或已被删除。";

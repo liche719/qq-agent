@@ -321,6 +321,13 @@ bilibili:
   timeout-seconds: ${BILIBILI_TIMEOUT_SECONDS:20}
   # 单次塞给模型的字幕上限（字符）：字幕是线性文本，太长会挤掉别的上下文
   max-transcript-chars: ${BILIBILI_MAX_TRANSCRIPT_CHARS:6000}
+  # 发评论（2026-10-20）：用户要求"直接发、不走草稿"，所以护栏是唯一的安全网，
+  # 全部从 bili_comment_log 台账里算，不靠模型自觉。
+  comment:
+    enabled: ${BILIBILI_COMMENT_ENABLED:true}
+    daily-limit: ${BILIBILI_COMMENT_DAILY_LIMIT:5}
+    min-interval-minutes: ${BILIBILI_COMMENT_MIN_INTERVAL_MINUTES:10}
+    max-chars: ${BILIBILI_COMMENT_MAX_CHARS:200}
 
 memory:
   extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}

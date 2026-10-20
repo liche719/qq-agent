@@ -19,6 +19,7 @@ public class AgentPolicyProperties {
             Map.entry("readWebPage", "读取网页"),
             Map.entry("readBilibiliVideo", "读B站视频字幕"),
             Map.entry("browseBilibili", "刷B站"),
+            Map.entry("commentBilibili", "在B站发评论"),
             Map.entry("parseReminder", "创建提醒"),
             Map.entry("replaceReminder", "调整提醒"),
             Map.entry("cancelReminder", "取消提醒"),
