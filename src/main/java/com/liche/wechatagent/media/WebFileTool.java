@@ -23,6 +23,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 @Component
@@ -138,24 +139,82 @@ public class WebFileTool implements com.liche.wechatagent.tool.AgentToolProvider
     }
 
     private String collectLinks(URI pageUrl, String html) {
+        org.jsoup.nodes.Document document = Jsoup.parse(html, pageUrl.toString());
         Set<String> links = new LinkedHashSet<>();
-        for (Element anchor : Jsoup.parse(html, pageUrl.toString()).select("a[href]")) {
+
+        // ① 页面自己声明的"主图"：文章页、维基的「File:xxx.jpg」描述页都靠这个指向真正的图片文件。
+        //    2026-10-20 实测（笨鱼发大肥鱼图那两轮）：萌娘百科的 /File:xxx.jpg 结尾是 .jpg，
+        //    按扩展名会被当成可下载文件，但它是个 HTML 描述页，downloadWebFile 必然失败。
+        //    这里先把 og:image / twitter:image 这类"页面明说自己是图"的地址收进来。
+        for (String selector : List.of("meta[property=og:image]", "meta[property=og:image:secure_url]",
+                "meta[name=twitter:image]", "meta[itemprop=image]")) {
+            for (org.jsoup.nodes.Element meta : document.select(selector)) {
+                addIfPublic(links, meta.absUrl("content"), pageUrl);
+            }
+        }
+        // ② MediaWiki 文件页里的原图链接（og:image 有时没有，这个更直接）
+        for (org.jsoup.nodes.Element anchor : document.select(
+                ".fullImageLink a[href], #file a[href], .fileInfo a[href]")) {
+            addIfPublic(links, anchor.absUrl("href"), pageUrl);
+        }
+        if (!links.isEmpty()) {
+            return render(links);
+        }
+
+        // ③ 普通 <a>：扩展名匹配的**也要再验一次 Content-Type**——
+        //    只按 .jpg/.pdf 判断会把"文件描述页"当成文件，模型照着下必然失败。
+        int probes = 0;
+        for (Element anchor : document.select("a[href]")) {
             String href = anchor.absUrl("href");
             if (href.isBlank()) continue;
             try {
                 URI link = urlValidator.validate(href);
-                if (looksDownloadable(href, anchor)
-                        || (isContentAreaLink(anchor) && hasDownloadResponse(link, pageUrl))) {
+                boolean extensionMatch = looksDownloadable(href, anchor);
+                boolean contentArea = isContentAreaLink(anchor);
+                if (!extensionMatch && !contentArea) {
+                    continue;
+                }
+                if (probes++ >= maxProbes()) {
+                    break;
+                }
+                if (hasDownloadResponse(link, pageUrl)) {
                     links.add(link.toString());
                 }
             } catch (IllegalArgumentException ignored) {
+                // 不合格的链接直接跳过
             }
             if (links.size() >= maxLinks) break;
         }
         if (links.isEmpty()) return "没有发现可直接下载的公开文件链接。";
+        return render(links);
+    }
+
+    private void addIfPublic(Set<String> links, String url, URI pageUrl) {
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        try {
+            URI resolved = urlValidator.validate(pageUrl.resolve(url).toString());
+            links.add(resolved.toString());
+        } catch (IllegalArgumentException ignored) {
+            // 内网/非法地址直接不要
+        }
+    }
+
+    private int maxProbes() {
+        // 每个候选都要发一次探测请求，给个上限免得把整页几十个链接全探一遍
+        return Math.max(maxLinks, Math.min(20, maxLinks * 2));
+    }
+
+    private String render(Set<String> links) {
         StringBuilder result = new StringBuilder("发现以下可下载文件：\n");
         int index = 1;
-        for (String link : links) result.append(index++).append(". ").append(link).append('\n');
+        for (String link : links) {
+            if (index > maxLinks) {
+                break;
+            }
+            result.append(index++).append(". ").append(link).append('\n');
+        }
         return result.toString().trim();
     }
 
@@ -236,3 +295,4 @@ public class WebFileTool implements com.liche.wechatagent.tool.AgentToolProvider
         return value < minimum || value > maximum ? fallback : value;
     }
 }
+
