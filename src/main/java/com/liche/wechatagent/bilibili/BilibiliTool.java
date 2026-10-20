@@ -75,6 +75,11 @@ public class BilibiliTool implements AgentToolProvider {
             BilibiliClient.VideoInfo info = client.videoInfo(ref);
 
             StringBuilder out = new StringBuilder("【B站视频】").append(info.title()).append('\n');
+            // 链接必须带上（2026-10-21）：用户问过"之前不是能拿到链接的吗"。
+            // 原来这里只有标题和 UP 主，它回答时手上根本没有 URL，之前那句
+            // "以后你要链接随时有"其实是空头承诺。现在 BV 号和可点链接都在工具结果里。
+            out.append("链接：https://www.bilibili.com/video/").append(info.bvid()).append('\n');
+            out.append("BV号：").append(info.bvid()).append('\n');
             if (matchedByTitle != null && !matchedByTitle.isBlank()) {
                 out.append("（这是按他转发过来的标题搜到的，原标题：「").append(matchedByTitle)
                         .append("」，已核对**逐字一致**）\n");
@@ -152,7 +157,8 @@ public class BilibiliTool implements AgentToolProvider {
             int index = 1;
             for (BilibiliClient.FeedItem item : items) {
                 out.append(index++).append(". ").append(item.title()).append('\n')
-                        .append("   BV：").append(item.bvid());
+                        .append("   BV：").append(item.bvid())
+                        .append("　链接：https://www.bilibili.com/video/").append(item.bvid());
                 if (!item.owner().isBlank()) {
                     out.append("；UP：").append(item.owner());
                 }
