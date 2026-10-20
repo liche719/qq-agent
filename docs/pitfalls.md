@@ -275,10 +275,20 @@
    - 具体实现见 `bilibili/BilibiliClient.feed()` 与 `BilibiliTool.browseBilibili`（hot/following/later）。
    - **那 `bili_jct` 怎么拿**：面板「B站」页签做了扫码登录（2026-10-20，`BiliQrLoginService` + `BiliCredentialService` + 表 `bili_credential`）。
      协议就两步：`passport.bilibili.com/x/passport-login/web/qrcode/generate` 拿 `qrcode_key`，
-     然后 `.../qrcode/poll?qrcode_key=` 轮询（`86101` 待扫 / `86090` 已扫待确认 / `86100` 成功 / `86038` 过期）；
-     **成功时的响应头 `Set-Cookie` 才同时带 `SESSDATA` 和 `bili_jct`**。二维码内容在服务端用 zxing 转成 PNG，
+     然后 `.../qrcode/poll?qrcode_key=` 轮询；**成功时的响应头 `Set-Cookie` 才同时带 `SESSDATA` 和 `bili_jct`**
+     （实测字段：`SESSDATA,bili_jct,DedeUserID,DedeUserID__ckMd5,sid`）。二维码内容在服务端用 zxing 转成 PNG，
      面板只显示一张图（为此加了 `com.google.zxing:core` + `javase` 两个依赖）。
      凭据**库里优先、`.env` 兜底**；`.env` 那份只有 SESSDATA，所以「退出登录」后照样能读字幕。
+   - **⚠️ 扫码成功时 `data.code` 是 `0`，不是 `86100`**（`86101` 待扫 / `86090` 已扫待确认 / `86038` 过期）。
+     2026-10-20 连踩两次：① 照参考实现只认 `86100` → 成功那帧被判成 `unknown` 跳过，紧接着码被消费变成 `86038`，
+     现象是"手机说登录成功、面板说过期"；② 只改了状态判断、**忘了改下面 `if (code == 86100)` 的保存分支** →
+     现象变成"面板显示登录成功、库里一行都没有、日志没有『凭据已更新』"。
+     **教训：认一个"成功状态"要同时改状态映射和它下游的所有分支，改完看日志确认那行"已更新"真的出现。**
+   - **怎么验证 `bili_jct` 真的能过 CSRF 而不用真发评论**：用**不存在的 `oid`**（如 `oid=1`）POST `/x/v2/reply/add`。
+     返回 `{"code":12002,"message":"当前页面评论功能已关闭"}` = csrf 已通过（只是目标没评论区）；
+     返回 `code:-111 CSRF 校验失败` = token 不对。这样验完一条内容都不会发出去。
+   - **轮询别按本地计时硬停**：B站返回 `86038` 才是真过期。第一版前端按本地 180 秒自己停，
+     手机恰在临界点确认时那次成功就被丢了。现在只在 `86038` 才停，本地超时只改提示文案。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
