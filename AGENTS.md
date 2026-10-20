@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **56 个 / 16 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨、加了工作区之后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-20）**：工具 **57 个 / 16 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨、加了工作区与评论草稿之后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -173,7 +173,24 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:5823ed7`，**`16 个类 / 56 个工具`**、0 ERROR。
+- **最近一次部署**（2026-10-20）：`wechat-agent:4a9a424`，**`16 个类 / 57 个工具`**、0 ERROR。
+  **这一轮的三件事**（用户三条明确要求）：
+  - **自主模块整套只属于机主那一个号**（原话："只有我自己的主账号的那个 QQ 号对应的笨鱼才有自主模块，
+    其他别人的账号都没有"）：`SelfToolVisibilityRule` 里换成一条粗规则——**非机主时所有 `self*` 工具都不下发**
+    （连 schema 都不进上下文，不是"看得见但被拒"）。机主在普通对话里仍然只藏"它自己的时间"那组
+    （`selfQuest/selfWantToSay/selfSeed`），`selfRead/selfRecall/selfNote/selfWork*` 可用。
+  - **关思考只关"写那句评论"**（原话："关思考只是指生成评论内容的时候，噢，其他的时候按原来的不变"）：
+    新增场景 `SELF_COMMENT` + 新工具 `draftBilibiliComment`（只生成、不发送）。
+    做法是**把落笔拆成一次独立窄调用**，只有它用 `reasoning_effort=none`；
+    判断"值不值得看"、读视频、写总结仍走原来的 `dialog=low`。
+    实测：`none` 时上游 `reasoning_tokens=0`（不传是 27、low 是 40、minimal 反而 57）；
+    单次耗时从 ~19 秒降到 ~1 秒。
+    `BilibiliActivity` 的指令已写死"**必须先 draftBilibiliComment 再 commentBilibili**"，
+    并给了反 AI 腔的具体规则（10~25 字、只说一个具体点、禁"首先/总之/不得不说"、写完自问
+    "这句话换个人说也无所谓吗"）。
+  - **工作区已经在用了**：它自己写了 `notes/待改进清单.md`（记忆信任分级、定期反思、新旧事实冲突）
+    和 `notes/关于他的表达.md`（面试陪练怎么带、三个项目怎么讲、"他不太有朋友，别搞得像考核"）。
+- **上一版**（2026-10-20）：`wechat-agent:5823ed7`，**`16 个类 / 56 个工具`**、0 ERROR。
   **它有了自己的工作区**（用户原话："给它分配一个工作区文件夹，它可以在里面做任何想做的事情，但是不能影响工作区外面"）：
   - 宿主机 `self-workspace/` → 容器 `/app/self-workspace`（挂出来是为了**重建容器不丢**，那是它的记忆资产不是缓存）。
   - 工具 5 个：`selfWorkList` / `selfWorkRead` / `selfWorkWrite`（append/覆盖）/ `selfWorkDelete` / `selfWorkMkdir`。
