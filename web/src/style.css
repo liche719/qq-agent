@@ -698,3 +698,31 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ── 统计曲线的折叠条（2026-10-20 加）────────────────────────────────
+   「它自己」页签从 24 段砍到 16 段，其中 4 段是"看趋势"的柱状图，
+   默认折起来，需要的时候点开——页面短一截，视线不被统计图拦腰截断。 */
+.bars-fold {
+  border-top: 1px solid var(--line);
+  padding: 10px 0 2px;
+}
+.bars-fold:first-of-type { border-top: none; }
+.bars-fold > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 4px 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bars-fold > summary::-webkit-details-marker { display: none; }
+.bars-fold > summary::before {
+  content: '▸';
+  color: var(--muted);
+  transition: transform .15s ease;
+  display: inline-block;
+}
+.bars-fold[open] > summary::before { transform: rotate(90deg); }
+.bars-fold > summary .hint { font-weight: 400; }

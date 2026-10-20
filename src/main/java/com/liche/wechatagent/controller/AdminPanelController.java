@@ -71,35 +71,16 @@ public class AdminPanelController {
         tab.put("kind", "descriptor");
         tab.put("sections", List.of(
                 section("info", "状态", "/api/admin/self/overview", null),
-                table("这一轮它看到了什么（上下文检查器）", "/api/admin/self/turn", List.of(
-                        column("section", "上下文段落", false),
-                        column("usage", "字数/上限", false),
-                        column("ratio", "占系统提示词", false),
-                        column("preview", "原文预览", true)), List.of()),
-                table("这一轮的调用链（失败常藏在中间步骤）", "/api/admin/self/trace", List.of(
-                        column("step", "#", false),
-                        column("kind", "类型", false),
-                        column("name", "名称", false),
-                        column("result", "结果/耗时", false),
-                        column("detail", "细节", true)), List.of()),
-                table("倾向（它一贯的样子）", "/api/admin/self/stances", List.of(
-                        column("content", "倾向", true),
-                        column("topic", "类别 / 方向", false),
-                        column("evidence", "证据区间", true),
-                        column("revised", "修订", false),
-                        column("review", "复查（FSRS）", true),
-                        column("formedAt", "形成于", false)), List.of()),
+                
+                
+                
                 table("它自己的块", "/api/admin/self/blocks", List.of(
                         column("type", "类型", false),
                         column("usage", "用量", false),
                         column("version", "版本", false),
                         column("updatedAt", "最后修改", false),
                         column("value", "内容", true)), List.of()),
-                table("我欠着", "/api/admin/self/commitments", List.of(
-                        column("id", "#", false),
-                        column("content", "内容", true),
-                        column("due", "截止", false),
-                        column("status", "状态", false)), List.of()),
+                
                 table("我的教训清单（它自己的可靠性）", "/api/admin/self/lessons", List.of(
                         column("id", "#", false),
                         column("category", "类别", false),
@@ -114,12 +95,19 @@ public class AdminPanelController {
                         column("kind", "类型", false),
                         column("size", "大小", false),
                         column("modified", "改动时间", false)),
-                        List.of(Map.of(
-                                "label", "查看",
-                                "endpoint", "/api/admin/self/workspace/file",
-                                "method", "POST",
-                                "body", Map.of("path", "$path"),
-                                "showDetail", true))),
+                        List.of(
+                                Map.of(
+                                        "label", "查看",
+                                        "endpoint", "/api/admin/self/workspace/file",
+                                        "method", "POST",
+                                        "body", Map.of("path", "$path"),
+                                        "showDetail", true),
+                                Map.of(
+                                        "label", "删除",
+                                        "endpoint", "/api/admin/self/workspace/delete",
+                                        "method", "POST",
+                                        "body", Map.of("path", "$path"),
+                                        "confirm", "真删了，没有回收站。确定删掉这个文件吗？"))),
                 table("它刷过的视频（工具埋点 + 它自己写的摘要）", "/api/admin/self/bilibili-views", List.of(
                         column("at", "时间", false),
                         column("title", "链接", false),
@@ -169,12 +157,7 @@ public class AdminPanelController {
                         column("cost", "成本", false),
                         column("counts", "当时的笔记/撤回", false),
                         column("time", "时间", false)), List.of()),
-                table("分歧（它跟你意见不同的记录）", "/api/admin/self/disagreements", List.of(
-                        column("id", "#", false),
-                        column("topic", "类别", false),
-                        column("content", "它主张什么", true),
-                        column("outcome", "后来", false),
-                        column("createdAt", "时间", false)), List.of()),
+                
                 table("反思与成本", "/api/admin/self/reflections?limit=20", List.of(
                         column("id", "#", false),
                         column("trigger", "触发", false),

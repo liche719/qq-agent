@@ -496,7 +496,10 @@ onMounted(() => load())
         </div>
       </template>
 
-      <template v-else-if="view.kind === 'bars'">
+      <!-- 统计曲线默认折叠：这些是"看趋势"的，不是每次进页面都想看的东西。
+           展开状态不影响数据加载（进页签时照常取数），只是不占版面。 -->
+      <details v-else-if="view.kind === 'bars'" class="bars-fold">
+        <summary>{{ view.title }}<span class="hint">（点开看曲线）</span></summary>
         <div v-if="!view.bars.items.length" class="empty">{{ view.empty }}</div>
         <template v-else>
           <div class="chart">
@@ -510,7 +513,7 @@ onMounted(() => load())
             <span v-for="(text, axisIndex) in view.bars.axis" :key="axisIndex">{{ text }}</span>
           </div>
         </template>
-      </template>
+      </details>
 
       <form v-else-if="view.kind === 'form'" @submit.prevent="submit(view)"
             @input="markTouched(view.index)" @change="markTouched(view.index)">

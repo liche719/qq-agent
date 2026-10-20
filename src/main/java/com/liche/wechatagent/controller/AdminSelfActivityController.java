@@ -169,6 +169,35 @@ public class AdminSelfActivityController {
         return result;
     }
 
+    /**
+     * 删掉工作区里的一个文件（2026-10-20 加，**写操作**）。
+     *
+     * <p>用户明确要求"面板只有我一个人用，可以适当多给点权限，但某些操作还是要二次确认"。
+     * 二次确认在前端（面板的行内操作带 {@code confirm}），后端这里只做路径校验
+     * （{@link SelfWorkspaceService#delete(String)} 保证出不了根目录）。
+     *
+     * <p>**这是真删**，没有回收站。所以前端那句话必须说清"删了就没了"。
+     */
+    @PostMapping("/workspace/delete")
+    public Map<String, Object> workspaceDelete(@RequestBody Map<String, String> body) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String path = body == null ? "" : body.getOrDefault("path", "");
+        if (workspace == null) {
+            result.put("message", "工作区没启用");
+            return result;
+        }
+        if (path.isBlank()) {
+            result.put("message", "没给路径");
+            return result;
+        }
+        try {
+            result.put("message", workspace.delete(path));
+        } catch (RuntimeException exception) {
+            result.put("message", "删不掉：" + exception.getMessage());
+        }
+        return result;
+    }
+
     @GetMapping("/bilibili-views")
     public Map<String, Object> bilibiliViews() {
         List<Map<String, Object>> rows = views.findTop100ByOrderByIdDesc().stream().map(view -> {
