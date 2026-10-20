@@ -74,6 +74,7 @@ public class BiliQrLoginService {
                 throw new IllegalStateException("B站返回的二维码是空的");
             }
             sessions.put(key, System.currentTimeMillis());
+            log.info("B站扫码：已生成二维码 key={}…", key.substring(0, Math.min(8, key.length())));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("key", key);
             result.put("url", url);
@@ -115,6 +116,9 @@ public class BiliQrLoginService {
                 int code = root.path("data").path("code").asInt(-1);
                 result.put("state", stateOf(code));
                 result.put("text", textOf(code));
+                // 只记状态与码，不记 cookie（凭据绝不进日志）。排"扫了两次都没成功"这类问题时，
+                // 这几行能直接看出是"没人扫"（一直 86101）、"扫了没确认"（停在 86090）还是"过期了"（86038）。
+                log.info("B站扫码状态 code={} state={}", code, result.get("state"));
                 if (code == 86100) {
                     String cookie = mergeSetCookies(response.headers("Set-Cookie"));
                     String mid = BiliClientCookieSupport.field(cookie, "DedeUserID");
