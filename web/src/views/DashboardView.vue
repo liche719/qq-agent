@@ -24,6 +24,8 @@ const tabs = ref(CORE_TABS)
  * 单独一个接口，因为它是 DeepSeek 的外部查询（后端缓存 5 分钟）。
  * 查不到时显示"—"而不是 0——"查不到"和"没钱了"是两回事。
  */
+/** 顶栏的「更多」开关：小屏默认收起刷新频率/主题/退出，先把地方让给内容 */
+const moreOpen = ref(false)
 const balance = ref(null)
 const balanceError = ref('')
 
@@ -260,10 +262,13 @@ onBeforeUnmount(() => {
           </button>
           <StatusPill :label="'应用 ' + zh('app', status)" :tone="toneOf(status)"></StatusPill>
           <StatusPill :label="'QQ 通道 ' + zh('qq', qqStatus)" :tone="toneOf(qqStatus)"></StatusPill>
+          <button class="btn topbar-more-toggle" :class="{ active: moreOpen }"
+                  :aria-expanded="moreOpen" title="刷新频率 / 主题 / 退出"
+                  @click="moreOpen = !moreOpen">{{ moreOpen ? '收起' : '⋯' }}</button>
         </div>
       </div>
 
-      <div class="spread" style="margin-top: 13px">
+      <div class="spread topbar-more" :class="{ open: moreOpen }" style="margin-top: 13px">
         <div class="tools" style="margin-left: 0">
           <select v-model.number="interval" aria-label="刷新频率">
             <option v-for="value in INTERVALS" :key="value" :value="value">

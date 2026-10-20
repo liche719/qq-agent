@@ -668,37 +668,6 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   .balance-pill .balance-value { font-size: 14px; }
 }
 
-/* ── 文件内容预览（2026-10-20 加）───────────────────────────────────
-   面板上点「查看」就在表格下面展开正文，跟终端里 `cat` 一个文件等价。
-   用等宽字体，保留换行（文件里有表格/代码时不会糊成一团）。 */
-.file-preview {
-  margin-top: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--surface-solid);
-}
-.file-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-}
-.file-preview-body {
-  margin: 0;
-  padding: 12px 14px;
-  max-height: 520px;
-  overflow: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12.5px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 /* ── 统计曲线的折叠条（2026-10-20 加）────────────────────────────────
    「它自己」页签从 24 段砍到 16 段，其中 4 段是"看趋势"的柱状图，
    默认折起来，需要的时候点开——页面短一截，视线不被统计图拦腰截断。 */
@@ -726,3 +695,83 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 }
 .bars-fold[open] > summary::before { transform: rotate(90deg); }
 .bars-fold > summary .hint { font-weight: 400; }
+
+/* ── 文件全屏层（2026-10-21）─────────────────────────────────────────
+   用户的原话：「我要看的话还得滑到最底部，应不应该是用页面跳转而不是增加展开布局，
+   页面跳转还能让人更专注的去看，还显得大」。
+   所以不折在表格里了：铺满整个视口，只干一件事——看这个文件。 */
+.file-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: color-mix(in srgb, #0b0f16 62%, transparent);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: clamp(8px, 2.5vw, 28px);
+  animation: overlay-in .16s ease-out;
+}
+@keyframes overlay-in { from { opacity: 0 } to { opacity: 1 } }
+
+.file-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, 100%);
+  max-height: 100%;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg, #10141c);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .35);
+  overflow: hidden;
+}
+.file-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.file-sheet-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.file-sheet-title strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-sheet-kind { font-size: 11.5px; color: var(--muted); letter-spacing: .3px; }
+.file-sheet-body {
+  margin: 0;
+  padding: 16px 18px 28px;
+  overflow: auto;
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 手机上让全屏层贴边，最大化可看面积 */
+@media (max-width: 560px) {
+  .file-overlay { padding: 0; }
+  .file-sheet { border-radius: 0; border: none; }
+  .file-sheet-body { font-size: 13px; }
+}
+
+/* ── 顶栏瘦身（2026-10-21）──────────────────────────────────────────
+   用户发来的手机截图里，顶栏连品牌带按钮占了将近整屏，
+   真正的内容(卡片/表格)全被推到下面。所以窄屏下：
+   · 副标题藏掉、品牌缩小
+   · 刷新频率/主题/退出收进「⋯」，不常驻
+   桌面宽度下一律照旧展开，不改变原来的用法。 */
+.topbar-more-toggle { display: none; }
+
+@media (max-width: 720px) {
+  .topbar-more-toggle { display: inline-flex; }
+  /* 默认收起，点「⋯」才展开 */
+  .topbar-more { display: none; }
+  .topbar-more.open { display: flex; }
+  .topbar .brand-text .sub { display: none; }
+  .topbar .brand-text h1 { font-size: 17px; }
+  .topbar { padding-top: 12px; padding-bottom: 12px; }
+  /* 余额和状态胶囊允许换行，别把宽度硬挤爆 */
+  .topbar .row { flex-wrap: wrap; gap: 8px; }
+  .topbar .spread { align-items: flex-start; }
+}

@@ -401,6 +401,23 @@ function detailOf(index) {
 
 function closeDetail(index) {
   details.value = { ...details.value, [index]: null }
+  document.body.style.overflow = ''
+}
+
+/** 有任意详情打开时：锁住背景滚动，Esc 关掉（全屏层的基本礼貌） */
+const hasDetail = computed(() => Object.values(details.value).some(Boolean))
+
+function onKeydown(event) {
+  if (event.key === 'Escape' && hasDetail.value) {
+    for (const index of Object.keys(details.value)) closeDetail(Number(index))
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', onKeydown)
+  watch(hasDetail, value => {
+    document.body.style.overflow = value ? 'hidden' : ''
+  })
 }
 
 function busyKey(view, action) {
@@ -487,13 +504,23 @@ onMounted(() => load())
                    :row-actions="view.rowActions" :row-busy="view.rowBusy"
                    @row-action="payload => onRowAction(view, payload)"></DataTable>
         <p v-if="view.note" class="hint" style="margin-top: 8px">{{ view.note }}</p>
-        <div v-if="detailOf(view.index)" class="file-preview">
-          <div class="file-preview-head">
-            <strong>{{ detailOf(view.index).title }}</strong>
-            <button class="btn btn-sm" @click="closeDetail(view.index)">收起</button>
+        <!-- 文件详情走**全屏层**（2026-10-21 改）：原来在表格下面展开，
+             要看得先滑到底、而且只占一条窄栏。全屏之后够大、够专注，
+             关掉就回到原来的位置。 -->
+        <Teleport v-if="detailOf(view.index)" to="body">
+          <div class="file-overlay" @click.self="closeDetail(view.index)">
+            <div class="file-sheet" role="dialog" aria-modal="true">
+              <header class="file-sheet-head">
+                <div class="file-sheet-title">
+                  <span class="file-sheet-kind">工作区文件</span>
+                  <strong>{{ detailOf(view.index).title }}</strong>
+                </div>
+                <button class="btn" @click="closeDetail(view.index)">关闭</button>
+              </header>
+              <pre class="file-sheet-body">{{ detailOf(view.index).text }}</pre>
+            </div>
           </div>
-          <pre class="file-preview-body">{{ detailOf(view.index).text }}</pre>
-        </div>
+        </Teleport>
       </template>
 
       <!-- 统计曲线默认折叠：这些是"看趋势"的，不是每次进页面都想看的东西。
