@@ -109,6 +109,11 @@ public class AdminPanelController {
                         column("review", "复查（FSRS）", true),
                         column("status", "状态", false)), List.of()),
                 bars("每周教训事件数（看趋势，不看绝对值）", "/api/admin/self/lesson-bars?weeks=8", "次"),
+                table("它的工作区（它自己写的东西，全在 self-workspace/ 里）", "/api/admin/self/workspace", List.of(
+                        column("path", "文件", true),
+                        column("kind", "类型", false),
+                        column("size", "大小", false),
+                        column("modified", "改动时间", false)), List.of()),
                 table("它刷过的视频（工具埋点 + 它自己写的摘要）", "/api/admin/self/bilibili-views", List.of(
                         column("at", "时间", false),
                         column("title", "链接", false),

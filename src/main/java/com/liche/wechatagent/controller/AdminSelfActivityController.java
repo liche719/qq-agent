@@ -1,6 +1,7 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.self.AgentSelfNote;
+import com.liche.wechatagent.self.SelfWorkspaceService;
 import com.liche.wechatagent.self.AgentSelfNoteRepository;
 import com.liche.wechatagent.self.AgentSeedRepository;
 import com.liche.wechatagent.bilibili.BiliCommentLog;
@@ -44,6 +45,9 @@ public class AdminSelfActivityController {
     private final boolean researchEnabled;
     private final boolean bilibiliEnabled;
     private final int bilibiliDailyLimit;
+    /** 工作区（面板要看它在里面写了什么）；没启用时为 null */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SelfWorkspaceService workspace;
 
     public AdminSelfActivityController(AgentSelfNoteRepository events,
                                        AgentSeedRepository seeds,
@@ -104,6 +108,45 @@ public class AdminSelfActivityController {
      * <p>用户的原话：「我不干扰它，但是我得知道它做了什麼」。这张表是**工具埋点**写的，
      * 不靠它自述——所以即使它的总结含糊，这里看到的也是真的。
      */
+    /** 它在工作区里写了什么（面板「它自己」页签用） */
+    @GetMapping("/workspace")
+    public Map<String, Object> workspace() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (workspace == null) {
+            result.put("enabled", false);
+            result.put("usage", "（工作区没启用）");
+            result.put("rows", List.of());
+            return result;
+        }
+        result.put("enabled", true);
+        result.put("root", workspace.rootPath());
+        result.put("usage", workspace.usage());
+        result.put("maxBytes", workspace.maxTotalBytes());
+        java.time.format.DateTimeFormatter fmt =
+                java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm");
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (SelfWorkspaceService.Entry entry : workspace.entries(300)) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("path", entry.path());
+            row.put("kind", entry.directory() ? "目录" : "文件");
+            row.put("size", entry.directory() ? "—" : readable(entry.sizeBytes()));
+            row.put("modified", entry.modified());
+            rows.add(row);
+        }
+        result.put("rows", rows);
+        return result;
+    }
+
+    private static String readable(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        return String.format("%.1f MB", bytes / 1024.0 / 1024.0);
+    }
+
     @GetMapping("/bilibili-views")
     public Map<String, Object> bilibiliViews() {
         List<Map<String, Object>> rows = views.findTop100ByOrderByIdDesc().stream().map(view -> {

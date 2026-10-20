@@ -246,6 +246,49 @@ public class SelfWorkspaceService {
         }
     }
 
+    /** 面板用：一个文件/目录的条目 */
+    public record Entry(String path, boolean directory, long sizeBytes, String modified) {
+    }
+
+    /**
+     * 面板用：递归列出工作区里的东西（2026-10-20 加）。
+     *
+     * <p>为什么不复用 {@link #list(String)}：那个返回的是**给模型看的多行文本**，
+     * 面板要的是能排成表格的结构。两边需求不同，各留一个，别互相将就。
+     *
+     * <p>只读、有上限（默认 300 条），不会因为工作区里东西多把面板拖死。
+     */
+    public java.util.List<Entry> entries(int limit) {
+        java.util.List<Entry> result = new java.util.ArrayList<>();
+        if (!enabled()) {
+            return result;
+        }
+        int max = Math.max(1, Math.min(1000, limit));
+        java.time.format.DateTimeFormatter fmt =
+                java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm");
+        try (java.util.stream.Stream<Path> stream = Files.walk(root, 12)) {
+            stream.filter(path -> !path.equals(root))
+                    .sorted()
+                    .limit(max)
+                    .forEach(path -> {
+                        try {
+                            boolean dir = Files.isDirectory(path);
+                            String relative = root.relativize(path).toString().replace('\\', '/');
+                            long size = dir ? 0 : Files.size(path);
+                            String modified = Files.getLastModifiedTime(path).toInstant()
+                                    .atZone(java.time.ZoneId.systemDefault())
+                                    .format(fmt);
+                            result.add(new Entry(relative, dir, size, modified));
+                        } catch (IOException ignored) {
+                            // 单个文件读不到就跳过，不影响整个列表
+                        }
+                    });
+        } catch (IOException exception) {
+            // 目录不存在/没权限：返回已拿到的部分
+        }
+        return result;
+    }
+
     /** 给模型看的用量说明（进面板/日志也用它） */
     public String usage() {
         return readable(totalBytes()) + " / " + readable(maxTotalBytes);
