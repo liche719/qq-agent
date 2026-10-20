@@ -63,7 +63,6 @@ public class AdminPanelController {
         return tab;
     }
 
-    /** 考研模块：整个页签都由后端描述，前端不认识这个模块也能渲染出来 */
     /** 自主模块：只读页签——「它自己那一侧」（编辑一律走对话，见 docs/self-layer-spec.md §10） */
     private Map<String, Object> selfTab() {
         Map<String, Object> tab = new LinkedHashMap<>();

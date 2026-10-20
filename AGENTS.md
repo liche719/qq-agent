@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **72 个 / 17 个类**（自主模块开启时；关闭时 55 个 / 14 个）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-20）**：工具 **51 个 / 15 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -38,8 +38,6 @@
 | 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（现为 `rootlcw`）与 `ADMIN_API_KEY`（600）；明文只由用户保存 |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key`/`SAVED_Ali_Secret`） |
-| 墨墨 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`，或面板「背单词」页存进 `maimemo_setting`（后者优先）；**有效期约一天** |
-| 墨墨 OIDC 凭据（长期方案） | 服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`（600）；换来的 token 存 `maimemo_setting` 表 |
 | B站登录凭据（取字幕用） | **面板「B站」页签扫码登录**（2026-10-20 加）→ 存 `bili_credential` 表（**库里优先**，含 `bili_jct`，可发评论）；兜底是服务器 `.env` 的 **`BILI_SESSDATA`**（600，只有 SESSDATA、**不能写**）。整条 Cookie 串或只填 SESSDATA 的值都认。2026-10-10 那份是从用户本地「哔哩哔哩视频总结」的 `config.json` 搬过来的；过期就重新扫码，不用再手抄。**取字幕必须要它**——不带登录时 `player/wbi/v2` 返回的字幕轨恒为 0 |
 | 部署私钥 / 上传验签密钥 | GitHub Secrets `DEPLOY_SSH_KEY`、`DEPLOY_TAR_SECRET`（后者服务器副本 `/etc/wechat-deploy.secret` 600） |
 
@@ -131,62 +129,13 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **当前证书**：`CN = liche.cloud`（Let's Encrypt YR2），有效期 2026-09-12 → **2026-12-11**；`curl https://liche.cloud/` 不加 `-k` 返回 200。
 - **端口**：应用监听标准 **443**（服务器 `.env` 的 `SERVER_PORT=443`），地址因此不带端口号。**备案 2026-09-20 已通过（粤ICP备2026141530号），443 上跑 `liche.cloud` 现在是完全合规的**（以前那套"未备案域名可能被拦、回滚到 8443"的说辞已作废）。LE 不给 IP 签证书，所以**只有域名访问才有绿锁**，IP 访问必然提示"证书名称不匹配"。
 
-### 五个功能模块（均已端到端验证）
+### 三个功能模块（均已端到端验证）
 
 **面试陪练**（`interview/` 包）：不是"换个人设聊天"，而是有题库 + 评分卡 + 复盘报告的模拟面试。入口 `陪练 面试` / `陪练 Java 后端 3 年` / `结束陪练`（中文指令走 `CommandRegistry` 的"整串不是别名就按首词识别、余下当参数"），也支持 `/practice interview|off`、以及自然语言（`InterviewTool`，提示词第 19 条要求必须调工具进入模式而不是临时扮演）。**不动用户人设**：只在 `user_profile` 记 `coach_mode`/`coach_session_id`/`coach_role`，由 `CoachPresets.withMode` 把模式要求追加到系统提示词。`InterviewBank` 6 个题类；`InterviewService` 的复盘报告**由程序按 `interview_round` 记录生成**（轮数/各维度均分/最弱项/未覆盖题类/下次重点），不靠模型记忆。**坑**：模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）→ "每轮必须先记分再说话"要同时写死在工具描述和提示词里。加新指令必须同步改写死的 `HelpHandler` 清单。此项**没有 QQ 菜单按钮**（菜单已满）。
 
-**墨墨背单词**（`maimemo/` 包）：QQ 里问进度 + 每天 21:30 推送 + 面板「背单词」页签。接口 `open.maimemo.com/open/api/v1/*`（`Authorization: Bearer`，响应 `{success,data,errors}`），官方限流 10 秒 20 次 / 60 秒 40 次 / 5 小时 2000 次 → 服务层 30 秒缓存。个人 token **有效期约一天**，所以存 `maimemo_setting` 表并**优先于环境变量**，面板可粘贴更新；失效时聊天工具会明说去面板更新。**长期方案 OIDC 已于 2026-09-20 跑通（现在就该用这条，不用再手粘 token）**：`MaimemoOidcService` 换 1 小时 access + 90 天 refresh，回调 `/api/maimemo/oauth/callback`（**免口令**，浏览器直跳）；token 顺序 OIDC → 面板 → 环境变量，刷新失败会回落并写明原因。用户在 `open.maimemo.com/app` 建了「后端应用」（**名称不能含"墨墨/MaiMemo/官方"、模板创建后不可修改**；主页和回调必须**同域名**的 HTTPS、已备案更容易过审；官方文档说授权范围**可再编辑**、"建议只申请需要用的权限"），勾了 `open.memo.study`+`open.memo.content`+`offline_access`（我们代码实际只调 `/study/*` 三个读接口，写入是留的余量）。**审核意见虽然写"个人使用建议直接从 App 复制 Api Key"，但应用照样能授权**——18:52 点授权链接就显示"授权成功"。凭据在服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID`/`_CLIENT_SECRET`（600）；授权后 token 落 `maimemo_setting` 的 `oidc_access_token`/`oidc_refresh_token`，日志只记 `sub`（**别把 token 写日志**）。实测：`GET /api/admin/maimemo/oidc` → `configured/authorized=true`、`POST /api/admin/maimemo/refresh` → `tokenSource="OIDC 授权"`、`status=OK` 且能拉到真实进度。**面板里那条 09-13 的旧 `api_token` 已失效**（OIDC 优先级更高所以无影响）。`MAIMEMO_OIDC_SCOPES` 的 compose 透传是 2026-09-20 补的（见坑 36）。**另：每日推送默认是关的**——`snapshot().push = {enabled:false, time:"21:30", lastPushDate:"2026-09-12"}`，所以"21:30 从没推送过"不是 bug，是没开。**坑**：`study_time` 是**毫秒**；`next_study_date` 是 UTC ISO；新学/复习要自己按今日单词表拆（表没取全就不能拿条数当复习数）；顽固词（STICKING）只在**全量**记录里带标签，所以要单独用 `record-fetch-limit`(1000) 拉全量 + 独立缓存；**API 不提供官方释义**，摘要里必须写清"释义由模型自己给，不是墨墨官方"。用户 2026-09-12 决定**QQ 里不做背单词复习**（开放 API 没有提交复习结果的接口，写不回墨墨进度）。
-
-**定时任务**（`schedule/` 包）：与「定时提醒」的区别必须分清——提醒到点只发一句话，**定时任务到点重跑一遍完整 Agent**（可搜索、可调工具）再把结果发回来。入口：工具 `ScheduledTaskTool`（create/list/setEnabled/cancel/runNow）、`/schedules` 命令、面板页签（可新建/启停/立即执行/删除并显示上次结果）。调度复用现有 Quartz（组 `scheduled-tasks`，**不需要改表结构**），落 `scheduled_task` 表；启动时 `ApplicationReadyEvent` 把库里启用中的任务重新同步进调度器（容器重建自愈）。**手动执行必须放后台线程**：`runNow` 同步跑会嵌套 `onInboundSync`、打乱 MDC/userScope 与工具尾注上下文。面板还列 12 条系统内置任务（墨墨推送 21:30、关怀复盘 20:30、数据库备份等；Spring 不暴露 `@Scheduled` 的下次时间，如实标"—"）。
+**定时任务**（`schedule/` 包）：与「定时提醒」的区别必须分清——提醒到点只发一句话，**定时任务到点重跑一遍完整 Agent**（可搜索、可调工具）再把结果发回来。入口：工具 `ScheduledTaskTool`（create/list/setEnabled/cancel/runNow）、`/schedules` 命令、面板页签（可新建/启停/立即执行/删除并显示上次结果）。调度复用现有 Quartz（组 `scheduled-tasks`，**不需要改表结构**），落 `scheduled_task` 表；启动时 `ApplicationReadyEvent` 把库里启用中的任务重新同步进调度器（容器重建自愈）。**手动执行必须放后台线程**：`runNow` 同步跑会嵌套 `onInboundSync`、打乱 MDC/userScope 与工具尾注上下文。面板还列 12 条系统内置任务（关怀复盘 20:30、数据库备份 03:00 等；Spring 不暴露 `@Scheduled` 的下次时间，如实标"—"）。
 
 **运维告警**（`alert/` 包）：`AlertNotifier` 每 60 秒查 QQ 网关 / PostgreSQL / Redis / Quartz / 磁盘 / 堆，**只在问题新出现或恢复时**推送（同问题 `repeat-minutes` 内不重复，启动 2 分钟宽限期避免误报）；只发给 `.env` 的 `ALERT_QQ_OPENID`（**是 openid 不是 QQ 号**）。QQ 主动消息有额度限制，所以推送是"尽力而为"，**面板状态才是准的**。测试按钮在「QQ 通道」页，或 `POST /api/admin/actions/alerts/test`、`POST /api/admin/actions/alerts/notify`（CI 失败告警用）。**2026-09-20 起"备份太旧"也进这套告警**（`BackupFreshnessChecker`：`backup/` 下最新一份备份超过 `BACKUP_MAX_AGE_HOURS`（默认 26 小时）没更新就推 QQ，并且面板总览会变 `DEGRADED`；详见 `docs/backup.md`）——因为备份是应用自己在 03:00 跑的，撞上部署重启就会整天没有备份而无人知晓。
-
-**考研规划**（`exam/` 包，2026-09-13 两批都上线并端到端验证）：第一批备考计划（院校/科目/目标分/阶段）+ 每日任务 + 打卡 + 早计划 / 晚收尾 / 周日复盘三条推送；第二批**执行面**——章节/轮次进度、错题本（1/3/7/15/30 天回收）、阶段里程碑、正计时（`开始学习`/`结束学习`，结束时长进当天打卡）、任务自动结转（`exam.carry-over`，**只在早推送里跑**）、科目分组（`科目名@组`）、面板**编辑计划表单**与**行内动作**。数据落 `exam_plan`/`exam_task`/`exam_checkin`/`exam_progress`/`exam_mistake`/`exam_milestone`（建表脚本是 MySQL 时代的 `deploy/mysql/V3__`、`V4__create_exam_tracking_tables.sql`；**pg 迁移后表结构以现库为准**。**必须先建表再部署**，否则 `validate` 会让容器起不来）。入口：中文指令「考研 / 今日任务 / 打卡 150 / 考研进度 / 开始学习 / 结束学习 / 错题」，或自然语言让模型调 `ExamTool`（52 个工具里的 20 个）。**顺手做的三处插件化（工具自动注册 `AgentToolProvider`、别名随处理器走 + `exactOnly`、面板页签后端描述 + `form`/`rowActions` 契约 v2）以及「怎么加下一个模块」，详见 `docs/exam-module.md`。**
-
-### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
-
-- 独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，hash 路由），构建产物写进 `src/main/resources/static/`（已 gitignore），**改完必须 `npm run build`**（或走 Dockerfile 的 node 阶段）才会进 jar。**改视觉只动 `web/src/style.css`**（两套主题的 token 都在 `:root` 与 `:root[data-theme="dark"]` 里，组件里不要写死颜色）。
-- **9 个核心页签**：总览 / QQ 通道 / 模型与搜索 / **B站** / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志（兜底清单在 `web/src/panels/registry.js`）。**模块还能再挂自己的页签**——由后端 `GET /api/admin/panels` 声明，例如自主模块的「它自己」（`AdminPanelController` 里 `key=self`），所以实际页签数会多于 9。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
-- **记忆分层 2026-09-18 已合并成 3 张表**：`memory`（一条记忆=一段话；`kind`=PROFILE/TASK/EXPERIENCE，`always_inject` 决定是否每轮无条件注入）+ `memory_fact`（有槽位的当前值）+ `conversation_memory`（原文证据）。**core/work/episode 三张表和那三个 Service 都不存在了**，统一走 `MemoryService`/`MemoryRepository`；`/memory` 的编号改成 `M<id>`。**老表 2026-09-19 已用 V17 删掉**（删前做过双向逐条比对；备份在服务器 `/root/wechat-agent-memory-legacy-backup-20260919.sql`，⚠️ 回退旧镜像前必须先从这个 dump 恢复）。来龙去脉见 `docs/memory-vector-plan.md` §20。
-- **数字口径**：总览「工作记忆」＝全部（`count`）——**归档机制 2026-09-18 已整块删除**（`memory_archive` 表、`user_work_memory.archived` 列、面板的「已归档」数字与筛选都没了，存量 34 行恢复成活跃；详见 `docs/memory-vector-plan.md` §17）；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
-- **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
-- **验证工具**：`tools/ui-verify/verify_spa.py`（真实 Chromium 跑登录/各页签/聊天视图/手机端 390×844/黑白主题，`SPA_BASE` 指面板地址；`INSECURE = BASE.startswith("https")` 所以 https 下自动忽略证书名不匹配）。**已入库（`tools/ui-verify/`，只提交脚本、png 截图不入库）**，但它会随着前端行为变更失效：最近一次是 `remember` 改成默认不勾之后，脚本必须自己 `page.check("#remember")`，否则 localStorage 持久化断言和手机端（新建 context 只带 localStorage）都会失败。
-
-## 4. CI/CD
-
-- 文件：`.github/workflows/deploy-remote.yml`，触发条件 `push: main` 或手动 `workflow_dispatch`。
-- 构建步骤用钉到 SHA 的 `docker/build-push-action` + `cache-from/to: type=gha` 复用上一次的层，Dockerfile 里 npm/Maven 也用了 BuildKit cache mount（纯后端约 192 秒、含前端约 240 秒）。
-- 流程：`docker build` → `docker save | gzip` → **`wechat-deploy upload-*`（走 stdin，HMAC 验签）** → **`wechat-deploy deploy <sha>`**（load、只重建 agent、重启 searxng、按 image id 保留两代镜像 tag）。服务端细节见 `docs/deploy-security.md`。**注意**：那一步会顺带重建"配置变了的依赖服务"（见坑 48）。
-- 已配置的 GitHub Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`（专用 ed25519 部署私钥；对应公钥已写入服务器 `~/.ssh/authorized_keys`，本地私钥已删除，轮换时重新生成并更新 Secret）、`ADMIN_API_KEY`（面板口令，供部署后自检使用）、`DEPLOY_HOST_KEY`（服务器主机指纹，替代 `ssh-keyscan`，见坑 50）。
-- **部署后自检**（2026-09-13 定型，坑 47 有完整来龙去脉）：等应用就绪（窗口 4 分钟）后检查——runner 侧走 **IP 直连 + `-k`**：「首页 200 / 前端 JS 资源 200 / 无口令 401 / **编码路径 `/api/adm%69n/overview` 401**」；**带口令的两项（面板接口、账号密码登录）在服务器本机 `curl -sk https://127.0.0.1/...` 执行**，不把口令交给公网链路；域名证书校验只在 `getent hosts liche.cloud` 真解析到本机时才跑（**2026-09-20 备案通过、A 记录启用后，这项从"永远跳过"变成"每次部署都真跑"**）。任一项不符即推一条 QQ 告警并把流水线置红——**改坏了会被系统自己发现并通知你**。
-- **文档改动不触发构建**：`paths-ignore` 覆盖 `**.md`、`docs/**`、`AGENTS.md`、`LICENSE`（实测：纯文档 push 后流水线条数不增加）。
-- 查看流水线：`gh run list --repo liche719/wechat-qq-agent` / `gh run watch <id> --repo liche719/wechat-qq-agent --exit-status`。
-
-## 5. 硬约定（违反就出线上事故）
-
-> **完整的 74 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
-> 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
-> 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 74）——坑号是全项目的引用契约，不要重排或插号。**
->
-> 下面只留「违反了当场出事」的那些：
-
-1. Quartz 的 `QUARTZ_DELEGATE` 必须是**全限定名** `org.quartz.impl.jdbcjobstore.PostgreSQLDelegate`，否则每次重启「恢复提醒调度失败」刷屏（坑 2）。
-2. 生产 `ddl-auto: validate`：**新表必须先跑 `deploy/postgres/V*.sql` 迁移再部署**，否则容器起不来。
-3. 数据卷 `wechat-agent-infra_{postgres,redis,searxng}-data` —— **任何操作都不允许删除或重建**（坑 18）。
-4. 凭据只待在 `.env` / GitHub Secrets / 服务器 600 的文件里：**不进仓库、不进命令行参数、不进日志**（坑 5）。
-5. 时区别只靠容器 `TZ`：代码里凡 Cron 计算都要显式 `inTimeZone(...)`（坑 29）。
-6. 提交信息用小写英文短句；**开发在 `next`、`main` 只放已发布版本**；提交用 `YOLO <3372134858@qq.com>`（坑 7、8）。
-7. 改前端必须 `cd web && npm run build` 才会进 jar（坑 13）。CSS 里只写标准 `backdrop-filter`（坑 11）。
-8. 动过构造器 / Bean 装配，**光跑 `mvn -o -DskipTests test-compile` 不够**（坑 45、**70**）——
-   **必须本地真启动一次**（`application-local.yml` + simulator，看到 `Started WechatAgentApplication`）。
-   给类加第二个构造器时，**Spring 用的那个必须标 `@Autowired`**，否则启动即挂、容器崩溃循环（2026-10-17 真打挂过生产）。
-9. 有副作用的工具**默认是可重试的**：必须同时给 `@NonIdempotentTool` + `retryable = false`，否则用户会收到两份（坑 39）。
-10. 截断字符串要**为省略号留一位**（`substring(0, max - 1) + "…"`），否则撞列长、整条写入失败（坑 40）。
-11. 改镜像版本 = 部署时会**连依赖服务一起重启**（坑 48）；镜像一律钉 digest，别用浮动 tag（坑 49）。
-12. **不要用正则改 Markdown、也不要用 PowerShell 往返改 UTF-8 源文件**（坑 12、52 —— AGENTS.md 被这么写坏过一次）。
-13. 「每轮都必须做」的动作（记分、记账）**光写"每轮都要调用"不够**，要把顺序写死在工具描述和提示词里并前置（坑 27）。
-
 
 ## 6. 文档索引
 
@@ -204,7 +153,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/llm-call-modes.md` | LLM 调用档位、思考模式、缓存计价 |
 | `docs/self-layer-plan.md` | 自主模块「它自己」的设计与实测（**主文档**） |
 | `docs/self-layer-spec.md`、`docs/self-layer.md` | 同上，早期规格与说明（**存档**） |
-| `docs/exam-module.md` | 考研模块 + **怎么加下一个模块**（插件化契约） |
+| `docs/exam-module.md` | **模块已删（2026-10-20）**，仅存档「怎么加下一个模块」的插件化契约 |
 | `docs/backup.md` | 备份改版与恢复步骤 |
 | `docs/media-memory.md` | 媒体记忆三件套 |
 | `docs/channel-robustness.md` | 通道健壮性（半开连接、重发、限流） |
@@ -224,7 +173,22 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:2b44f01`，`17 个类 / 72 个工具`、0 ERROR。
+- **最近一次部署**（2026-10-20）：`wechat-agent:b1890be`（+ 文档收尾），**`15 个类 / 51 个工具`**、0 ERROR。
+  **这一轮做的是"减法"**（用户原话："把考研和墨墨背单词这两个相关的都删掉，不得影响其他功能"、
+  "搜索全部换成 ds 的搜索 api，兜底才用 searxng，另外当天一个对话账号只能用 20 次"）：
+  - **删掉两个模块**：`exam/`（22 个类，20 个工具）、`maimemo/`（6 个类，1 个工具），连**面板页签**
+    （「背单词」核心页签 + 「考研」descriptor 页签）、**7 张表**（`exam_*` 六张 + `maimemo_setting`，
+    删前 dump 到服务器 `/root/wechat-agent-exam-maimemo-*.sql`）、**提示词第 20 条**、**help 清单 5 行**、
+    **工具显示名 22 行**、**compose 里 17 行死配置**一起清掉。
+  - 工具 72 → **51**；页签 9 → 8 个核心（+ 它自己/记忆两个 descriptor）。
+  - **搜索主路反转**：原来 SearXNG 优先、DS 兜底，现在 **DS 优先、SearXNG 兜底**，
+    并按"**账号 + 当天 20 次**"配额（`DeepSeekSearchQuota`，Redis 计数，key=`ds-search:<日期>:<userId>`，
+    重启不重置；Redis 挂了降级进程内计数）。超了自动改走 SearXNG，并在结果里如实说明。
+    顺带把旧的 `withFallback/fallbackReason/siteOperators/hostMatches` 四段兜底逻辑变成死代码。
+  - ⚠️ **删模块时唯一要小心的不是代码，是"注释里的举例"**：`MemoryExtractor`/`MemoryTextSimilarity`/
+    `CommandRegistry` 里都有「考研数学目标分是130」这类**历史实测案例**，它们描述的是当时的真实数据、改了反而失真。
+    所以保留了，只删真正指向已删代码的引用（见坑 75）。
+- **上一版**（2026-10-20）：`wechat-agent:2b44f01`，`17 个类 / 72 个工具`、0 ERROR。
   **它做过什么，现在都能看到了**（用户要求："我不干扰它，但是我得知道它做了什么"）：
   - 新表 `bili_view_log`：**它每读一个视频就落一条**（工具埋点，不靠模型自述）——
     时间 / bvid / 标题 / 读到了什么（字幕 N 字 / 抽帧成功 / 读不到 + 原因）。
@@ -298,12 +262,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   想关就直接把 `bilibili.comment.enabled` 设 false。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
-  - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
-  - 用户自建的定时任务 **#5「墨墨顽固词推送」（20:00）、#6「顽固词抽查」（08:00）**。
   - `memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；`conversation_memory` 存的是原文证据，**只能忘、不能替**。
 - **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`；`stored-media`/`logs` 同样已持久化（坑 38、`docs/backup.md`）。
 - **仍未做**（完整清单见 `docs/todo.md`）：LLM 余额**主动**预警（402 被动告警 2026-10-15 已做） · 公安联网备案 · 异地备份 ·
-  墨墨回调 IP 限流 · 容器 `read_only` + 非 root 用户（坑 53 末）。
+  容器 `read_only` + 非 root 用户（坑 53 末）。
 - 本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引
@@ -326,6 +288,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+
 
 
 
