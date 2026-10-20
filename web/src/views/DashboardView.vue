@@ -18,6 +18,39 @@ const router = useRouter()
 const tab = ref(readTab())
 /** 页签清单：先按内置 8 个渲染，/api/admin/panels 回来后再替换（后端新增模块不用改前端） */
 const tabs = ref(CORE_TABS)
+
+/**
+ * LLM 账户余额（2026-10-20 加）。
+ * 单独一个接口，因为它是 DeepSeek 的外部查询（后端缓存 5 分钟）。
+ * 查不到时显示"—"而不是 0——"查不到"和"没钱了"是两回事。
+ */
+const balance = ref(null)
+const balanceError = ref('')
+
+async function loadBalance() {
+  try {
+    balance.value = await api('/balance')
+    balanceError.value = ''
+  } catch (e) {
+    balanceError.value = e?.message || '查不到'
+  }
+}
+
+/** 余额显示文案：< 5 元标红提醒 */
+const balanceText = computed(() => {
+  const raw = balance.value?.balance
+  if (raw === undefined || raw === null || raw === '') return '—'
+  const n = Number(raw)
+  return Number.isFinite(n) ? '¥' + n.toFixed(2) : String(raw)
+})
+const balanceTone = computed(() => {
+  if (balanceError.value || balance.value?.error) return 'idle'
+  const n = Number(balance.value?.balance)
+  if (!Number.isFinite(n)) return 'idle'
+  if (n < 3) return 'bad'
+  if (n < 8) return 'warn'
+  return 'ok'
+})
 const panelsError = ref('')
 const interval = ref(readInterval())
 const overview = ref(null)
@@ -198,6 +231,7 @@ onMounted(() => {
   schedule()
   refresh(true)
   loadPanels()
+  loadBalance()
 })
 
 onBeforeUnmount(() => {
@@ -218,6 +252,12 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="row">
+          <!-- 余额放最显眼的位置：一眼看到还有多少 -->
+          <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceError || '点一下重新查'"
+                  @click="loadBalance">
+            <span class="balance-label">余额</span>
+            <span class="balance-value">{{ balanceText }}</span>
+          </button>
           <StatusPill :label="'应用 ' + zh('app', status)" :tone="toneOf(status)"></StatusPill>
           <StatusPill :label="'QQ 通道 ' + zh('qq', qqStatus)" :tone="toneOf(qqStatus)"></StatusPill>
         </div>

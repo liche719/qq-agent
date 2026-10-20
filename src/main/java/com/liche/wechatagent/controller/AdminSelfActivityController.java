@@ -11,6 +11,8 @@ import com.liche.wechatagent.bilibili.BiliViewLogRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -145,6 +147,26 @@ public class AdminSelfActivityController {
             return String.format("%.1f KB", bytes / 1024.0);
         }
         return String.format("%.1f MB", bytes / 1024.0 / 1024.0);
+    }
+
+    /**
+     * 读一个工作区文件的内容（2026-10-20 加，用户要"能在面板上点开看，就像在服务器上点开"）。
+     *
+     * <p>用 POST 而不是 GET：前端描述式面板传参走 body（{@code {"path":"notes/x.md"}}），
+     * 复用同一套注入机制，不用为这里新写一套 query 拼接。
+     *
+     * <p>路径安全由 {@link SelfWorkspaceService#read(String)} 保证（出不了根目录）。
+     */
+    @PostMapping("/workspace/file")
+    public Map<String, Object> workspaceFile(@RequestBody Map<String, String> body) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String path = body == null ? "" : body.getOrDefault("path", "");
+        if (workspace == null) {
+            result.put("content", "（工作区没启用）");
+            return result;
+        }
+        result.put("content", workspace.read(path));
+        return result;
     }
 
     @GetMapping("/bilibili-views")

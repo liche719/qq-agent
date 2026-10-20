@@ -620,3 +620,81 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 .effort-row .effort-slider:disabled { opacity: .5; }
 .effort-row .effort-value { flex: 0 0 auto; margin-left: auto; min-width: 74px; text-align: right; font-size: 14px; color: var(--ink); }
 .effort-row .effort-value em { font-style: normal; color: var(--muted); font-size: 12.5px; }
+
+/* ── 余额胶囊（2026-10-20 加）────────────────────────────────────────
+   用户要求"加一个余额剩余量在前端显眼的地方"。所以它放在顶栏最左边、
+   比旁边的状态胶囊更粗、带一点渐变底——一眼就能看见还剩多少钱。
+   三个色调对应：够用（绿）/ 快见底（黄）/ 快没了（红）。 */
+.balance-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-solid);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.balance-pill:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0, 0, 0, .08); }
+.balance-pill .balance-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.balance-pill .balance-value { font-size: 16px; letter-spacing: .2px; font-variant-numeric: tabular-nums; }
+.balance-pill.tone-ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+.balance-pill.tone-warn {
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+.balance-pill.tone-bad {
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  background: var(--bad-soft);
+  color: var(--bad-ink);
+  animation: balance-pulse 2.2s ease-in-out infinite;
+}
+.balance-pill.tone-idle { color: var(--muted); }
+@keyframes balance-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(200, 60, 60, 0); }
+  50% { box-shadow: 0 0 0 5px rgba(200, 60, 60, .12); }
+}
+/* 窄屏（手机）上把标签藏掉，只留数字，别把顶栏挤爆 */
+@media (max-width: 560px) {
+  .balance-pill .balance-label { display: none; }
+  .balance-pill .balance-value { font-size: 14px; }
+}
+
+/* ── 文件内容预览（2026-10-20 加）───────────────────────────────────
+   面板上点「查看」就在表格下面展开正文，跟终端里 `cat` 一个文件等价。
+   用等宽字体，保留换行（文件里有表格/代码时不会糊成一团）。 */
+.file-preview {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface-solid);
+}
+.file-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.file-preview-body {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 520px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -113,7 +113,13 @@ public class AdminPanelController {
                         column("path", "文件", true),
                         column("kind", "类型", false),
                         column("size", "大小", false),
-                        column("modified", "改动时间", false)), List.of()),
+                        column("modified", "改动时间", false)),
+                        List.of(Map.of(
+                                "label", "查看",
+                                "endpoint", "/api/admin/self/workspace/file",
+                                "method", "POST",
+                                "body", Map.of("path", "$path"),
+                                "showDetail", true))),
                 table("它刷过的视频（工具埋点 + 它自己写的摘要）", "/api/admin/self/bilibili-views", List.of(
                         column("at", "时间", false),
                         column("title", "链接", false),

@@ -30,6 +30,12 @@ const sections = computed(() => (Array.isArray(props.tab?.sections) ? props.tab.
 const states = ref([])
 /** 各区块的提示文案（动作区/表单/行内操作共用），按区块下标存放 */
 const notes = ref({})
+/**
+ * 行内操作返回的**详情内容**（2026-10-20 加）：区块下标 → { title, text }。
+ * 用来「点开看内容」——比如工作区里的文件，不用跳页也不用弹窗，
+ * 就在表格下面展开，看完再点一次收起。
+ */
+const details = ref({})
 /** 动作区的忙碌标记：'区块下标:按钮名' */
 const busy = ref('')
 /** 表单当前编辑值：区块下标 → { 字段key: 值 }，预填/重拉时整体替换 */
@@ -362,8 +368,20 @@ async function runRow(view, action, row, rowIndex, actionIndex) {
       method: String(action?.method || 'POST').toUpperCase(),
       body: resolveBody(action?.body, row)
     })
-    notes.value = { ...notes.value, [view.index]: ensureAccepted(result) }
-    await reloadSection(view.index)
+    if (action?.showDetail) {
+      // 「查看」类操作：把返回的正文摊在表格下面，不刷新列表（列表没必要跟着变）
+      const text = result?.content ?? result?.text ?? ''
+      details.value = {
+        ...details.value,
+        [view.index]: String(text)
+          ? { title: row?.path || row?.title || '内容', text: String(text) }
+          : null
+      }
+      notes.value = { ...notes.value, [view.index]: '' }
+    } else {
+      notes.value = { ...notes.value, [view.index]: ensureAccepted(result) }
+      await reloadSection(view.index)
+    }
   } catch (error) {
     notes.value = { ...notes.value, [view.index]: '操作失败：' + error.message }
   } finally {
@@ -375,6 +393,14 @@ async function runRow(view, action, row, rowIndex, actionIndex) {
 function onRowAction(view, payload) {
   const action = sections.value[view.index]?.rowActions?.[payload.actionIndex]
   return runRow(view, action, payload.row, payload.index, payload.actionIndex)
+}
+
+function detailOf(index) {
+  return details.value[index] || null
+}
+
+function closeDetail(index) {
+  details.value = { ...details.value, [index]: null }
 }
 
 function busyKey(view, action) {
@@ -426,6 +452,7 @@ function barTip(item, unit) {
 watch(() => props.tick, () => load())
 watch(() => props.tab?.key, () => {
   notes.value = {}
+  details.value = {}
   formBusy.value = {}
   rowBusy.value = {}
   formTouched.value = {}
@@ -460,6 +487,13 @@ onMounted(() => load())
                    :row-actions="view.rowActions" :row-busy="view.rowBusy"
                    @row-action="payload => onRowAction(view, payload)"></DataTable>
         <p v-if="view.note" class="hint" style="margin-top: 8px">{{ view.note }}</p>
+        <div v-if="detailOf(view.index)" class="file-preview">
+          <div class="file-preview-head">
+            <strong>{{ detailOf(view.index).title }}</strong>
+            <button class="btn btn-sm" @click="closeDetail(view.index)">收起</button>
+          </div>
+          <pre class="file-preview-body">{{ detailOf(view.index).text }}</pre>
+        </div>
       </template>
 
       <template v-else-if="view.kind === 'bars'">
