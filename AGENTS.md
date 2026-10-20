@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **53 个 / 12 个类**、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-20）**：工具 **54 个 / 13 个类**、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -224,14 +224,20 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:8c21947b2b14…`，`12 个类 / 53 个工具`、0 ERROR。
-  **B站扫码登录已经跑通**：库里那行 `bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，
-  面板状态 `扫码登录（库里）· 可写`。**CSRF 已验证**：拿不存在的 oid 发评论返回 `12002 评论区已关闭`（不是 `-111`）。
-  所以**发评论/回复的凭据已经齐了，工具还没写**；写工具时记得带护栏（每日上限、同视频只评一次、冷却）。
-  本轮踩的两个坑（成功码是 `0` 不是 `86100`、只改状态没改保存分支）记在坑 72。
-  上一版加了 `browseBilibili`（热门/关注动态/稍后再看，三个来源都**不需要 wbi 签名**），
-  以及 `findDownloadableLinks` 的修复（维基 `/File:xxx.jpg` 是描述页不是文件，现在解析出真实图片地址）。
-  （视频抽帧见坑 71，搜索兜底与 `@Autowired` 崩溃见坑 70，B站「只转发」见坑 68，模型重试见坑 69。）
+- **最近一次部署**（2026-10-20）：`wechat-agent:87eaafda1adc…`，`13 个类 / 54 个工具`、0 ERROR。
+  **B站这条线通了：扫码登录 → 自己刷 → 自己发评论**。
+  - 凭据：`bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，面板显示 `扫码登录（库里）· 可写`；
+    **CSRF 已验证**（不存在的 oid 返回 `12002` 而不是 `-111`）。
+  - 读：`browseBilibili`（热门/关注动态/稍后再看，三个来源都**不需要 wbi 签名**）。
+  - 写：`commentBilibili`（新类 `BiliCommentTool`，54 个工具里的第 54 个），
+    注册为 `EXTERNAL_ACTION · sideEffect=true · retryable=false · risk=HIGH`；
+    **真发过一次并删掉**（`add → code:0 rpid=321293122192`、`del → code:0`），端到端验证过。
+  - 护栏在 `BiliCommentGuard`，**全部从台账 `bili_comment_log` 算、不靠模型自觉**：
+    每天 5 条 / 同视频只评一次 / 两条间隔 ≥10 分钟 / ≤200 字 / 不放链接 / 不含凭据与机器路径。
+    11 项边界都验过（`docs/pitfalls.md` 坑 72）。
+  - `findDownloadableLinks` 也修了（维基 `/File:xxx.jpg` 是描述页不是文件，现在解析出真实图片地址）。
+- **⚠️ B站评论是拿机主主号说话**：用户明确"不用草稿、直接发"，所以改护栏参数前先想清楚；
+  想关就直接把 `bilibili.comment.enabled` 设 false。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
 - **⚠️ 真实用户数据，不许动**：
   - 考研计划 `exam_plan` 1 行（南京理工大学 · 计算机专硕 22408；四科 数学 130 / 英语 70 / 408 120 / 政治 70；**考试日期 2027-12-25**）。他自己用聊天让 agent 改过计划，所以"只改某一项"这条路是通的。
