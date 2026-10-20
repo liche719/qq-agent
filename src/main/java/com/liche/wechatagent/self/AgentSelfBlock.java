@@ -1,12 +1,5 @@
 package com.liche.wechatagent.self;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Index;
-import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -14,57 +7,48 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 它自己的「块」：有类型、可读写、**有长度上限**（照 Letta 的 memory blocks 做法）。
+ * 它对自己的描述（**2026-10-20 起不再是表，是 {@link AgentSelfNote} 里 {@code kind=BLOCK} 的那几条**）。
  *
- * <p>块是**常驻上下文**里的那一小块（我是谁 / 我现在在做什么），不是通用知识库——
- * 会累积的东西进 {@link AgentSelfEvent}，不往块里塞（否则必然膨胀、挤掉对话预算）。
+ * <p>每个 {@code blockType}（人设/任务/项目）只有一条"当前生效"的；改写时插新的一条、旧的标失效
+ * ——**历史因此自带**，不用另存。
  *
- * <p>这一侧属于"它自己"，**没有 user_id**：同一段时间里每次对话读到的是同一份。
+ * <p>保留这个类型（而不是让调用方直接用新实体）是为了让 8 个读它的类**一行逻辑都不用改**：
+ * 这次大改的风险因此被关在 {@link SelfCoreService} 一个类里。
+ *
+ * <p>{@code label / charLimit / description} 是早期设计里的修饰字段，合并后没有对应列，
+ * 这里给默认值（实测这三个字段从来没被填过）。
  */
-@Entity
-@Table(name = "agent_self_block", indexes = {
-        @Index(name = "uk_self_block", columnList = "block_type,label", unique = true)
-})
 @Getter
 @Setter
 @NoArgsConstructor
 public class AgentSelfBlock {
 
-    /** 我是谁（Persona 块） */
+    /** 我是谁 */
     public static final String TYPE_PERSONA = "PERSONA";
-    /** 我现在在做什么（当前自己的目标/项目） */
+    /** 我现在在做什么 */
     public static final String TYPE_TASK = "TASK";
-    /** 一个持续的项目（三期"领域"用） */
+    /** 一个持续的项目 */
     public static final String TYPE_PROJECT = "PROJECT";
-    /** 一贯的样子（二期"倾向"，程序按阈值提升后才写） */
+    /** 一贯的样子（倾向，程序按阈值提升后才写） */
     public static final String TYPE_STANCE = "STANCE";
-    /** 随手记（低门槛，可被 summarize 掉） */
+    /** 随手记 */
     public static final String TYPE_NOTE = "NOTE";
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "block_type", length = 16, nullable = false)
     private String blockType;
 
-    @Column(length = 64, nullable = false)
-    private String label;
+    private String label = "";
 
-    @Column(length = 4000)
     private String value;
 
-    /** 这个块的字符上限；超了必须先 summarize 才能再写 */
-    @Column(name = "char_limit", nullable = false)
     private Integer charLimit = 1200;
 
-    /** 给模型看的说明：这个块该装什么、什么时候该改它 */
-    @Column(length = 200)
-    private String description;
+    private String description = "";
 
-    @Column(nullable = false)
     private Integer version = 1;
 
     private LocalDateTime createdAt;
+
     private LocalDateTime updatedAt;
 }

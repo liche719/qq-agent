@@ -350,9 +350,6 @@ public class SelfQuestStore {
      */
     @Transactional(readOnly = true)
     public boolean hasOpenLoops() {
-        if (core.countOpenCommitments() > 0) {
-            return true;
-        }
         return activeQuest()
                 .map(quest -> quest.getNextStep() != null && !quest.getNextStep().isBlank())
                 .orElse(false);

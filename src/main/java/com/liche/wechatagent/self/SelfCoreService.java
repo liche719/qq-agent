@@ -13,29 +13,29 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 自主模块的**内核**：归属、证据门、事件、块、承诺、目标。
+ * 它自己那侧的唯一入口（2026-10-20 **大改**：块与事件合并成一张 {@code agent_self_note}）。
  *
- * <p>这一层是"它自己"的最小可写状态，也是另外三块（倾向 / 教训 / 领域）共同依赖的地基：
- * <ul>
- *   <li><b>证据强制</b>：{@link #requireEvidence} 要求 {@code evidence} 能解析成**真实存在**的对话记录、
- *       事件或领域记录，解析不出来就拒——这条直接针对上次"归纳"翻车（模型把两条原文用「；」拼起来当结论），
- *       也是死锁的解药（坑 64：模型看不到行号，所以 {@link #recentConversation} 要递真实编号）。</li>
- *   <li><b>上限</b>：块内容不许超过自己的 {@code char_limit}；未结承诺有条数上限。</li>
- *   <li><b>归属</b>：这一侧属于"它自己"，但**只对机主生效**（fail-closed：没配归属人就整个模块不工作，
- *       避免别人的对话污染它、也避免它把机主的事带到别人那里）。</li>
- * </ul>
+ * <p><b>为什么并</b>：块的当前值和它的历史流水本来是同一件事的两个投影——块每次更新都会写一条事件。
+ * 两张表各带一个 repo、各一套方法，工具层因此长出 {@code selfAppend/selfReplace/selfSummarize}
+ * 三个"差不多"的东西（实测三者合计只被调用 2 次）。
  *
- * <p>事件写入（{@link #appendEvent}）也在这里：四块里的每一次改动都要在 {@code agent_self_event}
- * 留一行可回溯的账，账本就该只有一处。
+ * <p><b>为什么还留着 {@link AgentSelfBlock} / {@link AgentSelfEvent} 两个类型</b>：
+ * 有 8 个类在读这些字段（面板、注入、倾向、反思）。让它们**一行逻辑都不用改**，
+ * 这次大改的风险就只关在这个类里——这是这次能一次改完的前提。
+ *
+ * <p><b>删掉的东西</b>（不是合并）：目标（{@code goalOpen/goalClose}）与承诺
+ * （{@code commit/commitResolve}）两套整块移除——实测 0 次调用、0 行数据，语义已被
+ * "开方向 + 写下一步"覆盖。{@code replaceBlock/summarizeBlock/setBlockValue} 也一并去掉：
+ * 块实测只有 180 字，一个追加入口就够，等真超长了再加。
  */
 @Service
 public class SelfCoreService {
 
     /** 证据前缀：对话记录 */
     public static final String EVIDENCE_CONVERSATION = "conv:";
-    /** 证据前缀：自主模块自己的事件 */
+    /** 证据前缀：自主模块自己的记录（{@code agent_self_note}） */
     public static final String EVIDENCE_EVENT = "event:";
-    /** 证据前缀：它自己的方向（三期领域②） */
+    /** 证据前缀：它自己的方向 */
     public static final String EVIDENCE_QUEST = "quest:";
     /** 证据前缀：它自己写的笔记 */
     public static final String EVIDENCE_NOTE = "note:";
@@ -43,51 +43,41 @@ public class SelfCoreService {
     public static final String EVIDENCE_RUN = "run:";
 
     /**
-     * "它自己的时间"里的**身份**（三期领域②）。
+     * "它自己的时间"里的**身份**。
      *
-     * <p>为什么必须有这个：领域作业跑在它自己的会话里，**不能借机主的 userId**——
+     * <p>为什么必须有：领域作业跑在它自己的会话里，**不能借机主的 userId**——
      * 那条路会 `userService.getOrCreate` + 写 `conversation_memory` + 调度记忆提取，
-     * 等于把它自己在夜里想的事灌进机主的用户档案与长期记忆（第一优先级是"用户长期记忆不丢失"，
-     * 污染它就是损坏它）。所以作业带一个独立作用域，工具、记忆、工具事件全部落在这一侧。
-     *
-     * <p>它必须被 {@link #isOwner} 认成"自己"，否则它自己的工具在自己的时间里全被拒绝。
+     * 等于把它自己在夜里想的事灌进机主的用户档案。所以作业带一个独立作用域。
      */
     public static final String SELF_SCOPE = "__self__";
 
-    private final AgentSelfBlockRepository blockRepository;
-    private final AgentSelfEventRepository eventRepository;
-    private final AgentCommitmentRepository commitmentRepository;
+    private static final String KIND_BLOCK = AgentSelfNote.KIND_BLOCK;
+
+    private final AgentSelfNoteRepository notes;
     private final ConversationMemoryRepository conversationMemoryRepository;
     private final AgentQuestRepository questRepository;
     private final AgentQuestNoteRepository questNoteRepository;
     private final AgentQuestRunRepository questRunRepository;
     private final boolean enabled;
     private final String ownerOpenId;
-    private final int defaultBlockCharLimit;
-    private final int maxOpenCommitments;
+    private final int blockCharLimit;
 
-    public SelfCoreService(AgentSelfBlockRepository blockRepository,
-                           AgentSelfEventRepository eventRepository,
-                           AgentCommitmentRepository commitmentRepository,
+    public SelfCoreService(AgentSelfNoteRepository notes,
                            ConversationMemoryRepository conversationMemoryRepository,
                            AgentQuestRepository questRepository,
                            AgentQuestNoteRepository questNoteRepository,
                            AgentQuestRunRepository questRunRepository,
                            @Value("${memory.self-enabled:true}") boolean enabled,
                            @Value("${memory.self-owner-openid:}") String ownerOpenId,
-                           @Value("${memory.self-block-char-limit:1200}") int defaultBlockCharLimit,
-                           @Value("${memory.self-max-commitments:20}") int maxOpenCommitments) {
-        this.blockRepository = blockRepository;
-        this.eventRepository = eventRepository;
-        this.commitmentRepository = commitmentRepository;
+                           @Value("${memory.self-block-char-limit:1200}") int blockCharLimit) {
+        this.notes = notes;
         this.conversationMemoryRepository = conversationMemoryRepository;
         this.questRepository = questRepository;
         this.questNoteRepository = questNoteRepository;
         this.questRunRepository = questRunRepository;
         this.enabled = enabled;
         this.ownerOpenId = ownerOpenId == null ? "" : ownerOpenId.trim();
-        this.defaultBlockCharLimit = Math.max(100, defaultBlockCharLimit);
-        this.maxOpenCommitments = Math.max(1, maxOpenCommitments);
+        this.blockCharLimit = Math.max(100, blockCharLimit);
     }
 
     /** 归属人（模块没配归属人时返回 null）——反思定时任务要用它 */
@@ -105,8 +95,7 @@ public class SelfCoreService {
         if (!isActive() || userId == null) {
             return false;
         }
-        // "它自己的时间"里带的是独立作用域（见 SELF_SCOPE），它也是"自己"——
-        // 否则它自己的工具在自己的时间里会全被拒绝（换了身份就不认自己，那是 bug 不是安全）。
+        // "它自己的时间"里带的是独立作用域，它也是"自己"
         return ownerOpenId.equals(userId) || SELF_SCOPE.equals(userId.trim());
     }
 
@@ -120,48 +109,34 @@ public class SelfCoreService {
 
     // ---------------------------------------------------------------- 读
 
+    /** 当前生效的块（每个槽位最多一条） */
     @Transactional(readOnly = true)
     public List<AgentSelfBlock> blocks() {
-        return blockRepository.findAllByOrderByBlockTypeAscLabelAsc();
+        return notes.findByKindAndActiveTrueOrderByIdAsc(KIND_BLOCK).stream().map(this::toBlock).toList();
     }
 
-    @Transactional(readOnly = true)
-    public Optional<AgentSelfBlock> block(String blockType) {
-        return blockRepository.findByBlockTypeOrderByLabelAsc(blockType).stream().findFirst();
-    }
-
-    @Transactional(readOnly = true)
-    public List<AgentCommitment> openCommitments() {
-        return commitmentRepository.findByStatusOrderByDueAtAsc(AgentCommitment.STATUS_OPEN);
-    }
-
+    /**
+     * 最近的事件（不含块），**按时间正序**返回（老的在前）——它是"时间线"，
+     * 注入到提示词里要顺着读。原来那张表是倒序取的，显示出来是反的。
+     */
     @Transactional(readOnly = true)
     public List<AgentSelfEvent> recentEvents(int limit) {
-        return limit <= 20 ? eventRepository.findTop20ByOrderByIdDesc() : eventRepository.findTop200ByOrderByIdDesc();
+        int size = Math.min(200, Math.max(1, limit));
+        List<AgentSelfNote> desc = notes.findByKindNotOrderByIdDesc(KIND_BLOCK, PageRequest.of(0, size));
+        return desc.reversed().stream().map(this::toEvent).toList();
     }
 
     @Transactional(readOnly = true)
     public Optional<AgentSelfEvent> latestEvent() {
-        return eventRepository.findTop20ByOrderByIdDesc().stream().findFirst();
+        List<AgentSelfNote> latest = notes.findByKindNotOrderByIdDesc(KIND_BLOCK, PageRequest.of(0, 1));
+        return latest.isEmpty() ? Optional.empty() : Optional.of(toEvent(latest.get(0)));
     }
 
     @Transactional(readOnly = true)
     public List<AgentSelfEvent> eventsSince(LocalDateTime since) {
-        return since == null ? eventRepository.findTop200ByOrderByIdDesc()
-                : eventRepository.findByCreatedAtAfterOrderByIdAsc(since);
-    }
-
-    /** 到期还没兑现的承诺（反思流程把它们判成 BROKEN——"得失"的落点）。 */
-    @Transactional(readOnly = true)
-    public List<AgentCommitment> dueOpenCommitments(LocalDateTime now) {
-        return commitmentRepository.findByStatusOrderByDueAtAsc(AgentCommitment.STATUS_OPEN).stream()
-                .filter(commitment -> commitment.getDueAt() != null && !commitment.getDueAt().isAfter(now))
-                .toList();
-    }
-
-    @Transactional(readOnly = true)
-    public long countOpenCommitments() {
-        return commitmentRepository.countByStatus(AgentCommitment.STATUS_OPEN);
+        return since == null ? recentEvents(200)
+                : notes.findByKindNotAndCreatedAtAfterOrderByIdAsc(KIND_BLOCK, since).stream()
+                .map(this::toEvent).toList();
     }
 
     @Transactional(readOnly = true)
@@ -172,9 +147,8 @@ public class SelfCoreService {
     /**
      * 最近的对话记录（带真实 id）——**模型唯一能拿到合法证据编号的来源**。
      *
-     * <p>为什么要这个：模型在任何地方都看不到 {@code conversation_memory} 的行号，而写入要求
-     * {@code conv:<id>} 必须真实存在 → 没有这个读工具，第一次写入永远拿不到证据（死锁）。
-     * 本轮消息要等回复完才落库，所以这里最新的一条是**上一轮**。
+     * <p>为什么要有：模型看不到 {@code conversation_memory} 的行号，而写入要求
+     * {@code conv:<id>} 真实存在 → 没有这个读工具，第一次写入永远拿不到证据（死锁）。
      */
     @Transactional(readOnly = true)
     public List<ConversationMemory> recentConversation(String userId, int limit) {
@@ -185,15 +159,17 @@ public class SelfCoreService {
 
     // ---------------------------------------------------------------- 写
 
-    /** 随手记：低门槛，进事件、不进块。 */
+    /** 随手记：低门槛，进流水、不进块。 */
     @Transactional
     public AgentSelfEvent note(String kind, String content, String evidence, String topic, String stance) {
         return appendEvent(kind, content, evidence, topic, stance, 0);
     }
 
     /**
-     * 追加到某个块；超 {@code char_limit} 直接拒绝（要求先 summarize）。
-     * 块不存在时按 {@code block_type} 建一个。
+     * 往某个块追加一段；超上限直接拒绝（要求先想清楚写什么，而不是无脑堆）。
+     *
+     * <p>实现是**插新行 + 旧行标失效**（{@code active=false, superseded_by=新id}），
+     * 所以历史自带，不需要另存——这正是原来两张表能合成一张的原因。
      */
     @Transactional
     public AgentSelfBlock appendBlock(String blockType, String text, String evidence) {
@@ -201,183 +177,40 @@ public class SelfCoreService {
         if (SelfText.isBlank(text)) {
             throw new IllegalArgumentException("内容不能为空");
         }
-        AgentSelfBlock block = block(blockType).orElseGet(() -> newBlock(blockType));
-        String current = block.getValue() == null ? "" : block.getValue();
-        String merged = current.isBlank() ? text.trim() : current + "\n" + text.trim();
-        if (merged.length() > block.getCharLimit()) {
-            throw new IllegalArgumentException("块 " + blockType + " 已到上限（" + block.getCharLimit()
-                    + " 字），先调用 self_summarize 压一压再写");
+        AgentSelfNote current = currentBlock(blockType);
+        String existing = current == null || current.getContent() == null ? "" : current.getContent();
+        String merged = existing.isBlank() ? text.trim() : existing + "\n" + text.trim();
+        if (merged.length() > blockCharLimit) {
+            throw new IllegalArgumentException("「" + blockType + "」已到上限（" + blockCharLimit
+                    + " 字），这次别加了——想清楚要留下哪句，或者先别写");
         }
-        block.setValue(merged);
-        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
-        block.setUpdatedAt(LocalDateTime.now());
-        if (block.getCreatedAt() == null) {
-            block.setCreatedAt(LocalDateTime.now());
-        }
-        AgentSelfBlock saved = blockRepository.save(block);
-        appendEvent(AgentSelfEvent.KIND_NOTE, "更新了「" + blockType + "」：" + SelfText.clipLine(text, 500),
+        AgentSelfNote saved = notes.save(newNote(KIND_BLOCK, blockType, merged, evidence.trim(), null, null, 0));
+        supersede(current, saved.getId());
+        appendEvent(AgentSelfEvent.KIND_NOTE, "更新了「" + blockType + "」：" + SelfText.clipLine(text, 400),
                 evidence, null, null, 0);
-        return saved;
-    }
-
-    /** 替换式修改：旧值进事件历史，可回溯。 */
-    @Transactional
-    public AgentSelfBlock replaceBlock(String blockType, String oldText, String newText, String evidence) {
-        requireEvidence(evidence);
-        AgentSelfBlock block = block(blockType).orElseThrow(
-                () -> new IllegalArgumentException("还没有 " + blockType + " 块，先用 self_append 建立"));
-        String current = block.getValue() == null ? "" : block.getValue();
-        if (oldText == null || !current.contains(oldText)) {
-            throw new IllegalArgumentException("在 " + blockType + " 块里找不到要替换的内容");
-        }
-        String updated = current.replace(oldText, newText == null ? "" : newText);
-        if (updated.length() > block.getCharLimit()) {
-            throw new IllegalArgumentException("替换后超过上限（" + block.getCharLimit() + " 字），先 summarize");
-        }
-        block.setValue(updated);
-        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
-        block.setUpdatedAt(LocalDateTime.now());
-        AgentSelfBlock saved = blockRepository.save(block);
-        appendEvent(AgentSelfEvent.KIND_NOTE, "改写了「" + blockType + "」：" + SelfText.clipLine(oldText, 500)
-                + " → " + SelfText.clipLine(newText, 500), evidence, null, null, 0);
-        return saved;
+        return toBlock(saved);
     }
 
     /**
-     * 压缩：**纯程序**做的保守压缩——保留最近的整行，丢掉较早的行并标明。
-     * （真正"总结"要花一次模型调用，属于二期反思流程；这里不做，避免又出现"模型记账"那类问题。）
+     * 记一条记录（唯一写入点）。
+     *
+     * <p>⚠️ **证据必须指向真实记录**（{@code conv:/event:/quest:/note:/run:}）——
+     * 这是针对上次"归纳翻车"（模型把两条原文用「；」拼起来当结论）设的闸门。
+     * 顺带一个真实教训：**别把这条校验放进"记账"路径**，记账失败会让护栏静默失效（见坑 73）。
      */
     @Transactional
-    public AgentSelfBlock summarizeBlock(String blockType, String evidence) {
+    public AgentSelfEvent appendEvent(String kind, String content, String evidence, String topic, String stance,
+                                      int importance) {
         requireEvidence(evidence);
-        AgentSelfBlock block = block(blockType).orElseThrow(
-                () -> new IllegalArgumentException("还没有 " + blockType + " 块"));
-        String current = block.getValue() == null ? "" : block.getValue();
-        int keep = Math.max(100, block.getCharLimit() / 2);
-        String compressed = current.length() <= keep ? current : "（较早内容已压缩）\n" + tailLines(current, keep);
-        block.setValue(compressed);
-        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
-        block.setUpdatedAt(LocalDateTime.now());
-        AgentSelfBlock saved = blockRepository.save(block);
-        appendEvent(AgentSelfEvent.KIND_NOTE, "压缩了「" + blockType + "」：" + current.length()
-                + " → " + compressed.length() + " 字", evidence, null, null, 0);
-        return saved;
+        AgentSelfNote saved = notes.save(
+                newNote(kind, "", content, evidence.trim(), topic, stance, importance));
+        return toEvent(saved);
     }
 
-    /** 整块改写（反思流程用；模型侧走 selfAppend/selfReplace）。 */
-    @Transactional
-    public AgentSelfBlock setBlockValue(String blockType, String value, String evidence) {
-        requireEvidence(evidence);
-        if (SelfText.isBlank(value)) {
-            throw new IllegalArgumentException("内容不能为空");
-        }
-        AgentSelfBlock block = block(blockType).orElseGet(() -> newBlock(blockType));
-        String clipped = value.trim();
-        if (clipped.length() > block.getCharLimit()) {
-            throw new IllegalArgumentException("块 " + blockType + " 超上限（" + block.getCharLimit() + " 字）");
-        }
-        String current = block.getValue() == null ? "" : block.getValue();
-        block.setValue(clipped);
-        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
-        block.setUpdatedAt(LocalDateTime.now());
-        if (block.getCreatedAt() == null) {
-            block.setCreatedAt(LocalDateTime.now());
-        }
-        AgentSelfBlock saved = blockRepository.save(block);
-        appendEvent(AgentSelfEvent.KIND_NOTE,
-                "改写了「" + blockType + "」：" + SelfText.clipLine(current, 500) + " → " + SelfText.clipLine(clipped, 500),
-                evidence, null, null, 0);
-        return saved;
-    }
-
-    /** 立一个自己的目标：写进 TASK 块 + 记一条 GOAL_SET。 */
-    @Transactional
-    public AgentSelfEvent openGoal(String content, String why, String evidence) {
-        requireEvidence(evidence);
-        if (SelfText.isBlank(content)) {
-            throw new IllegalArgumentException("目标内容不能为空");
-        }
-        AgentSelfBlock block = block(AgentSelfBlock.TYPE_TASK).orElseGet(() -> newBlock(AgentSelfBlock.TYPE_TASK));
-        String line = "· " + content.trim() + (SelfText.isBlank(why) ? "" : "（因为：" + why.trim() + "）");
-        String current = block.getValue() == null ? "" : block.getValue();
-        String merged = current.isBlank() ? line : current + "\n" + line;
-        if (merged.length() > block.getCharLimit()) {
-            throw new IllegalArgumentException("「在做的事」块已满，先 self_summarize 再立新目标");
-        }
-        block.setValue(merged);
-        block.setVersion(block.getVersion() == null ? 1 : block.getVersion() + 1);
-        block.setUpdatedAt(LocalDateTime.now());
-        if (block.getCreatedAt() == null) {
-            block.setCreatedAt(LocalDateTime.now());
-        }
-        blockRepository.save(block);
-        return appendEvent(AgentSelfEvent.KIND_GOAL_SET, content.trim(), evidence, null, null, 5);
-    }
-
-    /** 关掉一个自己的目标（goalEventId = goal_open 返回的事件 id）。 */
-    @Transactional
-    public AgentSelfEvent closeGoal(Long goalEventId, String outcome, String evidence) {
-        requireEvidence(evidence);
-        AgentSelfEvent goal = eventRepository.findById(goalEventId).orElseThrow(
-                () -> new IllegalArgumentException("找不到那个目标事件：" + goalEventId));
-        if (!AgentSelfEvent.KIND_GOAL_SET.equals(goal.getKind())) {
-            throw new IllegalArgumentException("那条不是自己立的目标");
-        }
-        return appendEvent(AgentSelfEvent.KIND_GOAL_CLOSED,
-                "目标收尾：「" + SelfText.clipLine(goal.getContent(), 500) + "」"
-                        + (SelfText.isBlank(outcome) ? "" : " → " + outcome.trim()), evidence, null, null, 3);
-    }
-
-    /** 立诺 / 做预测。 */
-    @Transactional
-    public AgentCommitment commit(String content, LocalDateTime dueAt, String evidence) {
-        requireEvidence(evidence);
-        if (SelfText.isBlank(content)) {
-            throw new IllegalArgumentException("承诺内容不能为空");
-        }
-        long open = commitmentRepository.countByStatus(AgentCommitment.STATUS_OPEN);
-        if (open >= maxOpenCommitments) {
-            throw new IllegalArgumentException("未结的承诺已经有 " + open + " 条，先把旧的处理掉");
-        }
-        LocalDateTime now = LocalDateTime.now();
-        AgentCommitment commitment = new AgentCommitment();
-        commitment.setContent(SelfText.clip(content, 500));
-        commitment.setDueAt(dueAt);
-        commitment.setStatus(AgentCommitment.STATUS_OPEN);
-        commitment.setEvidence(evidence.trim());
-        commitment.setCreatedAt(now);
-        commitment.setUpdatedAt(now);
-        AgentCommitment saved = commitmentRepository.save(commitment);
-        appendEvent(AgentSelfEvent.KIND_COMMIT, "立下：" + SelfText.clipLine(content, 500)
-                + (dueAt == null ? "" : "（截止 " + dueAt.toLocalDate() + "）"), evidence, null, null, 3);
-        return saved;
-    }
-
-    /** 兑现 / 认欠。 */
-    @Transactional
-    public AgentCommitment resolveCommitment(Long commitmentId, String status, String evidence) {
-        requireEvidence(evidence);
-        String normalized = status == null ? "" : status.trim().toUpperCase();
-        if (!List.of(AgentCommitment.STATUS_KEPT, AgentCommitment.STATUS_BROKEN, AgentCommitment.STATUS_ABANDONED)
-                .contains(normalized)) {
-            throw new IllegalArgumentException("status 只能是 KEPT / BROKEN / ABANDONED");
-        }
-        AgentCommitment commitment = commitmentRepository.findById(commitmentId).orElseThrow(
-                () -> new IllegalArgumentException("找不到那条承诺：" + commitmentId));
-        commitment.setStatus(normalized);
-        commitment.setResolvedAt(LocalDateTime.now());
-        commitment.setUpdatedAt(LocalDateTime.now());
-        AgentCommitment saved = commitmentRepository.save(commitment);
-        appendEvent(AgentSelfEvent.KIND_COMMIT_RESOLVED,
-                "「" + SelfText.clipLine(commitment.getContent(), 500) + "」→ " + normalized,
-                evidence, null, null, normalized.equals(AgentCommitment.STATUS_KEPT) ? 2 : 5);
-        return saved;
-    }
-
-    // ---------------------------------------------------------------- 证据与账本（其余三块共用）
+    // ---------------------------------------------------------------- 证据
 
     /**
-     * 证据校验：`conv:123` 必须能在对话记录里查到，`event:45` 必须在事件里查到；
+     * 证据校验：`conv:123` 必须能在对话记录里查到，`event:45` 必须在它自己的记录里查到；
      * 多个用逗号分隔，**至少一条成立**才放行。
      */
     public void requireEvidence(String evidence) {
@@ -391,39 +224,29 @@ public class SelfCoreService {
             if (token.isEmpty()) {
                 continue;
             }
+            Long id = null;
+            boolean ok = false;
             if (token.startsWith(EVIDENCE_CONVERSATION)) {
-                Long id = parseId(token.substring(EVIDENCE_CONVERSATION.length()));
-                if (id != null && conversationMemoryRepository.existsById(id)) {
-                    any = true;
-                    continue;
-                }
+                id = parseId(token.substring(EVIDENCE_CONVERSATION.length()));
+                ok = id != null && conversationMemoryRepository.existsById(id);
             } else if (token.startsWith(EVIDENCE_EVENT)) {
-                Long id = parseId(token.substring(EVIDENCE_EVENT.length()));
-                if (id != null && eventRepository.existsById(id)) {
-                    any = true;
-                    continue;
-                }
+                id = parseId(token.substring(EVIDENCE_EVENT.length()));
+                ok = id != null && notes.existsById(id);
             } else if (token.startsWith(EVIDENCE_QUEST)) {
-                // 领域②：它自己的方向 / 笔记 / 作业记录同样是**真实存在的记录**，可以当证据。
-                // 没有这三个前缀，"它自己的时间"里第一次写入永远失败（坑 64 的证据死锁原样重演）——
-                // 作业的会话里没有它自己的对话行，它拿不到 conv:<id>。
-                Long id = parseId(token.substring(EVIDENCE_QUEST.length()));
-                if (id != null && questRepository.existsById(id)) {
-                    any = true;
-                    continue;
-                }
+                // 它自己的方向 / 笔记 / 作业记录同样是真实记录，可以当证据；
+                // 没有这三个前缀，"它自己的时间"里第一次写入永远失败（坑 64 的证据死锁）
+                id = parseId(token.substring(EVIDENCE_QUEST.length()));
+                ok = id != null && questRepository.existsById(id);
             } else if (token.startsWith(EVIDENCE_NOTE)) {
-                Long id = parseId(token.substring(EVIDENCE_NOTE.length()));
-                if (id != null && questNoteRepository.existsById(id)) {
-                    any = true;
-                    continue;
-                }
+                id = parseId(token.substring(EVIDENCE_NOTE.length()));
+                ok = id != null && questNoteRepository.existsById(id);
             } else if (token.startsWith(EVIDENCE_RUN)) {
-                Long id = parseId(token.substring(EVIDENCE_RUN.length()));
-                if (id != null && questRunRepository.existsById(id)) {
-                    any = true;
-                    continue;
-                }
+                id = parseId(token.substring(EVIDENCE_RUN.length()));
+                ok = id != null && questRunRepository.existsById(id);
+            }
+            if (ok) {
+                any = true;
+                continue;
             }
             invalid.append(invalid.length() == 0 ? "" : "、").append(token);
         }
@@ -433,40 +256,67 @@ public class SelfCoreService {
         }
     }
 
-    /** 记一条事件（{@code agent_self_event.content} 列宽 500，换行压成一行）——四块共用这一个写入点。 */
-    @Transactional
-    public AgentSelfEvent appendEvent(String kind, String content, String evidence, String topic, String stance,
-                                      int importance) {
-        requireEvidence(evidence);
-        AgentSelfEvent event = new AgentSelfEvent();
-        event.setKind(kind);
-        event.setContent(SelfText.clipLine(content, 500));
-        event.setEvidence(evidence.trim());
-        event.setTopic(topic);
-        event.setStance(stance);
-        event.setImportance(importance);
-        event.setCreatedAt(LocalDateTime.now());
-        return eventRepository.save(event);
-    }
-
     // ---------------------------------------------------------------- 内部
 
-    private AgentSelfBlock newBlock(String blockType) {
+    private AgentSelfNote currentBlock(String blockType) {
+        List<AgentSelfNote> found = notes.findByKindAndSlotAndActiveTrueOrderByIdDesc(
+                KIND_BLOCK, blockType, PageRequest.of(0, 1));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /** 旧的那条标失效并指回新的（历史自带） */
+    private void supersede(AgentSelfNote previous, Long nextId) {
+        if (previous == null) {
+            return;
+        }
+        previous.setActive(false);
+        previous.setSupersededBy(nextId == null ? 0 : nextId);
+        previous.setUpdatedAt(LocalDateTime.now());
+        notes.save(previous);
+    }
+
+    private AgentSelfNote newNote(String kind, String slot, String content, String evidence,
+                                  String topic, String stance, int importance) {
+        LocalDateTime now = LocalDateTime.now();
+        AgentSelfNote note = new AgentSelfNote();
+        note.setKind(kind);
+        note.setSlot(slot == null ? "" : slot);
+        note.setContent(SelfText.clipLine(content, 4000));
+        note.setEvidence(evidence == null ? "" : evidence);
+        note.setTopic(topic == null ? "" : SelfText.clipLine(topic, 120));
+        note.setStance(stance == null ? "" : SelfText.clipLine(stance, 16));
+        note.setImportance(importance);
+        note.setActive(true);
+        note.setSupersededBy(0);
+        note.setCreatedAt(now);
+        note.setUpdatedAt(now);
+        return note;
+    }
+
+    private AgentSelfBlock toBlock(AgentSelfNote note) {
         AgentSelfBlock block = new AgentSelfBlock();
-        block.setBlockType(blockType);
-        block.setLabel(blockType.toLowerCase());
-        block.setCharLimit(defaultBlockCharLimit);
+        block.setId(note.getId());
+        block.setBlockType(note.getSlot());
+        block.setValue(note.getContent());
+        block.setLabel(note.getSlot() == null ? "" : note.getSlot().toLowerCase());
+        block.setCharLimit(blockCharLimit);
         block.setVersion(1);
-        block.setCreatedAt(LocalDateTime.now());
-        block.setUpdatedAt(LocalDateTime.now());
-        block.setDescription(switch (blockType) {
-            case AgentSelfBlock.TYPE_PERSONA -> "我是谁：稳定的人设与说话方式";
-            case AgentSelfBlock.TYPE_TASK -> "我现在在做的事（自己的目标，不是用户的任务）";
-            case AgentSelfBlock.TYPE_PROJECT -> "我长期在做的一个东西";
-            case AgentSelfBlock.TYPE_STANCE -> "我一贯的样子（程序按证据提升，不是我随手写的）";
-            default -> "随手记";
-        });
+        block.setCreatedAt(note.getCreatedAt());
+        block.setUpdatedAt(note.getUpdatedAt());
         return block;
+    }
+
+    private AgentSelfEvent toEvent(AgentSelfNote note) {
+        AgentSelfEvent event = new AgentSelfEvent();
+        event.setId(note.getId());
+        event.setKind(note.getKind());
+        event.setContent(note.getContent());
+        event.setEvidence(note.getEvidence());
+        event.setTopic(note.getTopic());
+        event.setStance(note.getStance());
+        event.setImportance(note.getImportance());
+        event.setCreatedAt(note.getCreatedAt());
+        return event;
     }
 
     private Long parseId(String text) {
@@ -475,17 +325,5 @@ public class SelfCoreService {
         } catch (NumberFormatException exception) {
             return null;
         }
-    }
-
-    private String tailLines(String text, int keepChars) {
-        String[] lines = text.split("\n");
-        StringBuilder builder = new StringBuilder();
-        for (int index = lines.length - 1; index >= 0; index--) {
-            if (builder.length() + lines[index].length() + 1 > keepChars) {
-                break;
-            }
-            builder.insert(0, lines[index] + "\n");
-        }
-        return builder.toString().trim();
     }
 }

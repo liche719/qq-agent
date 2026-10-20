@@ -28,14 +28,14 @@ public class SelfStanceService {
 
     private static final Logger log = LoggerFactory.getLogger(SelfStanceService.class);
 
-    private final AgentSelfEventRepository eventRepository;
+    private final AgentSelfNoteRepository eventRepository;
     private final AgentStanceRepository stanceRepository;
     private final SelfCoreService core;
     private final int maxActiveStances;
     private final double decay;
     private final double reviewTarget;
 
-    public SelfStanceService(AgentSelfEventRepository eventRepository,
+    public SelfStanceService(AgentSelfNoteRepository eventRepository,
                              AgentStanceRepository stanceRepository,
                              SelfCoreService core,
                              @Value("${memory.self-stance-max-active:5}") int maxActiveStances,
@@ -87,14 +87,16 @@ public class SelfStanceService {
         if (SelfText.isBlank(topic)) {
             return List.of();
         }
-        return eventRepository.findByKindAndTopicIgnoreCaseOrderByIdAsc(AgentSelfEvent.KIND_JUDGE, topic.trim());
+        return eventRepository.findByKindAndTopicIgnoreCaseOrderByIdAsc(AgentSelfEvent.KIND_JUDGE, topic.trim())
+                .stream().map(SelfStanceService::toEvent).toList();
     }
 
     /** 有判断记录过的类别（最近 scan 条里出现的） */
     @Transactional(readOnly = true)
     public List<String> judgeTopics(int scan) {
         List<AgentSelfEvent> recent = eventRepository.findByKindOrderByIdDesc(AgentSelfEvent.KIND_JUDGE,
-                PageRequest.of(0, Math.max(1, scan)));
+                        PageRequest.of(0, Math.max(1, scan))).stream()
+                .map(SelfStanceService::toEvent).toList();
         LinkedHashSet<String> topics = new LinkedHashSet<>();
         for (AgentSelfEvent event : recent) {
             if (event.getTopic() != null && !event.getTopic().isBlank()) {
@@ -295,5 +297,19 @@ public class SelfStanceService {
     private String firstId(String ids) {
         int comma = ids.indexOf(',');
         return comma < 0 ? ids.trim() : ids.substring(0, comma).trim();
+    }
+
+    /** 合并后的表 → 这个类习惯的事件视图（只为少改调用方） */
+    static AgentSelfEvent toEvent(AgentSelfNote note) {
+        AgentSelfEvent event = new AgentSelfEvent();
+        event.setId(note.getId());
+        event.setKind(note.getKind());
+        event.setContent(note.getContent());
+        event.setEvidence(note.getEvidence());
+        event.setTopic(note.getTopic());
+        event.setStance(note.getStance());
+        event.setImportance(note.getImportance());
+        event.setCreatedAt(note.getCreatedAt());
+        return event;
     }
 }

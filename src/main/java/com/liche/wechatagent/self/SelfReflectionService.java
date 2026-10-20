@@ -141,7 +141,7 @@ public class SelfReflectionService {
         StanceOutcome stances = applyStances(now);
 
         // ② 到期未兑现 → BROKEN（"得失"的落点）：也不需要模型
-        int broken = settleOverdueCommitments(now);
+        int broken = 0;
 
         // 教训复查同样是**程序驱动**：模型不能给自己点赞（spec §9.1 硬规则 4）
         int lessonsReviewed = selfLessons.reviewLessons(now);
@@ -213,7 +213,7 @@ public class SelfReflectionService {
         Long writtenBack = null;
         if (synthesis.taskBlock() != null && !synthesis.taskBlock().isBlank()) {
             try {
-                AgentSelfBlock block = core.setBlockValue(AgentSelfBlock.TYPE_TASK,
+                AgentSelfBlock block = core.appendBlock(AgentSelfBlock.TYPE_TASK,
                         synthesis.taskBlock(), "event:" + inputIds.get(0));
                 writtenBack = block.getId();
             } catch (RuntimeException exception) {
@@ -334,23 +334,6 @@ public class SelfReflectionService {
     }
     // ---------------------------------------------------------------- 内部
 
-    private int settleOverdueCommitments(LocalDateTime now) {
-        int broken = 0;
-        for (AgentCommitment commitment : core.dueOpenCommitments(now)) {
-            String evidence = usableEvidence(commitment.getEvidence());
-            if (evidence == null) {
-                log.warn("承诺 #{} 到期但找不到可用证据，跳过判欠", commitment.getId());
-                continue;
-            }
-            try {
-                core.resolveCommitment(commitment.getId(), AgentCommitment.STATUS_BROKEN, evidence);
-                broken++;
-            } catch (RuntimeException exception) {
-                log.warn("承诺 #{} 判欠失败：{}", commitment.getId(), exception.getMessage());
-            }
-        }
-        return broken;
-    }
 
     /** 事件自带的证据：形如 `conv:12` / `event:7`（多个用逗号分隔）才算数 */
     private String usableEvidence(String evidence) {
@@ -521,15 +504,6 @@ public class SelfReflectionService {
             prompt.append("\n【我已经形成的倾向】\n");
             for (AgentStance stance : stances) {
                 prompt.append("· ").append(SelfText.clipLine(stance.getContent(), 200)).append('\n');
-            }
-        }
-        List<AgentCommitment> open = core.openCommitments();
-        if (!open.isEmpty()) {
-            prompt.append("\n【我还欠着的】\n");
-            for (AgentCommitment commitment : open) {
-                prompt.append("· ").append(SelfText.clipLine(commitment.getContent(), 120))
-                        .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
-                        .append('\n');
             }
         }
         prompt.append("\n现在是 ").append(now.toLocalDate()).append(" ").append(now.getHour()).append(" 点。\n");

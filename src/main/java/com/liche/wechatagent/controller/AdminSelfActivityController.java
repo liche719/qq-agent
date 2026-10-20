@@ -1,7 +1,7 @@
 package com.liche.wechatagent.controller;
 
-import com.liche.wechatagent.self.AgentSelfEvent;
-import com.liche.wechatagent.self.AgentSelfEventRepository;
+import com.liche.wechatagent.self.AgentSelfNote;
+import com.liche.wechatagent.self.AgentSelfNoteRepository;
 import com.liche.wechatagent.self.AgentSeedRepository;
 import com.liche.wechatagent.bilibili.BiliCommentLogRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,7 +33,7 @@ public class AdminSelfActivityController {
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final String BILIBILI_TOPIC = "bilibili";
 
-    private final AgentSelfEventRepository events;
+    private final AgentSelfNoteRepository events;
     private final AgentSeedRepository seeds;
     private final BiliCommentLogRepository comments;
     private final boolean selfEnabled;
@@ -41,7 +41,7 @@ public class AdminSelfActivityController {
     private final boolean bilibiliEnabled;
     private final int bilibiliDailyLimit;
 
-    public AdminSelfActivityController(AgentSelfEventRepository events,
+    public AdminSelfActivityController(AgentSelfNoteRepository events,
                                        AgentSeedRepository seeds,
                                        BiliCommentLogRepository comments,
                                        @Value("${memory.self-enabled:false}") boolean selfEnabled,
@@ -66,9 +66,11 @@ public class AdminSelfActivityController {
         rows.add(row(selfEnabled ? "总开关开着" : "总开关关着（什么都没在跑）", "自主活动",
                 "念头 " + openSeeds + " 个没消化", "今天评论 " + todayComments + " 条", "—"));
         // 刷 B 站：次数来自 agent_self_event 的 topic 标记（和护栏用的是同一份数据）
-        long biliToday = events.countByTopicAndCreatedAtAfter(BILIBILI_TOPIC, LocalDate.now(ZONE).atStartOfDay());
-        List<AgentSelfEvent> recent = events.findByTopicAndCreatedAtAfterOrderByIdDesc(
-                BILIBILI_TOPIC, LocalDate.now(ZONE).minusDays(7).atStartOfDay(), PageRequest.of(0, 1));
+        long biliToday = events.countByKindNotAndTopicAndCreatedAtAfter(AgentSelfNote.KIND_BLOCK, BILIBILI_TOPIC,
+                LocalDate.now(ZONE).atStartOfDay());
+        List<AgentSelfNote> recent = events.findByKindNotAndTopicAndCreatedAtAfterOrderByIdDesc(
+                AgentSelfNote.KIND_BLOCK, BILIBILI_TOPIC,
+                LocalDate.now(ZONE).minusDays(7).atStartOfDay(), PageRequest.of(0, 1));
         rows.add(row(bilibiliEnabled ? "开着" : "关着", "刷会儿 B 站",
                 biliToday + " / " + bilibiliDailyLimit,
                 recent.isEmpty() ? "—" : recent.get(0).getCreatedAt().toString().replace('T', ' ').substring(0, 16),

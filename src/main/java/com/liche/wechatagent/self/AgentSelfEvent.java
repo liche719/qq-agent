@@ -1,12 +1,5 @@
 package com.liche.wechatagent.self;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Index;
-import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -14,75 +7,58 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 它自己那侧的时间线：**只追加，不修改不删除**。
+ * 它自己那侧的一条流水（**2026-10-20 起不再是表，是 {@link AgentSelfNote} 的视图**）。
  *
- * <p>两个用途：① 它自己的历史（我立过什么目标、改过什么主意）；
- * ② 二期"判断 → 倾向"的**证据链**（倾向必须能指回具体的几条事件）。
+ * <p>为什么不直接换成新实体：有 8 个类在读这些字段（面板、注入、倾向、反思），
+ * 保留这个类型能让它们**一行逻辑都不用改**——真正换掉的只是它的存储（{@code agent_self_note}）。
+ * 这样这次"大改"的风险被关在 {@link SelfCoreService} 一个类里。
  *
- * <p>{@code evidence} 由服务层校验：必须能解析成**真实存在**的对话记录 id 或事件 id，否则拒绝写入 ——
- * 这条是针对上次"归纳"翻车（模型把两条原文用「；」拼起来当结论）设的闸门。
+ * <p>另外：目标（GOAL_*）与承诺（COMMIT_*）两类**已整块删除**（0 次调用、0 行数据，
+ * 语义被"开方向 + 下一步"覆盖），所以对应的常量也一起没了。
  */
-@Entity
-@Table(name = "agent_self_event", indexes = {
-        @Index(name = "idx_self_event_kind", columnList = "kind,created_at"),
-        @Index(name = "idx_self_event_topic", columnList = "topic,stance,created_at")
-})
 @Getter
 @Setter
 @NoArgsConstructor
 public class AgentSelfEvent {
 
-    public static final String KIND_GOAL_SET = "GOAL_SET";
-    public static final String KIND_GOAL_CLOSED = "GOAL_CLOSED";
-    public static final String KIND_COMMIT = "COMMIT";
-    public static final String KIND_COMMIT_RESOLVED = "COMMIT_RESOLVED";
-    /** 一轮里做出的判断（二期按 topic+stance 累积成倾向） */
+    /** 一轮里做出的判断（按 topic+stance 累积成倾向） */
     public static final String KIND_JUDGE = "JUDGE";
     /** 与用户意见相左（默认只讲一次，记一笔） */
     public static final String KIND_DISAGREE = "DISAGREE";
     public static final String KIND_REFLECT = "REFLECT";
-    /** 倾向形成 / 修订 / 退役：**由程序按规则写**（spec §5），模型没有直接写倾向的工具 */
+    /** 倾向形成 / 修订 / 退役：**由程序按规则写**，模型没有直接写倾向的工具 */
     public static final String KIND_STANCE_FORMED = "STANCE_FORMED";
     public static final String KIND_STANCE_REVISED = "STANCE_REVISED";
     public static final String KIND_STANCE_RETIRED = "STANCE_RETIRED";
-    /** 记了一条教训 / 又犯了一次话（三期领域①；投票由程序判定，模型不能自己点赞） */
+    /** 记了一条教训 / 又犯了一次（投票由程序判定，模型不能自己点赞） */
     public static final String KIND_LESSON = "LESSON";
     public static final String KIND_NOTE = "NOTE";
 
-    /** 三期领域②：它自己的方向（它拥有自己的想法想去做什么，不是机主派的任务） */
+    /** 它自己的方向（它想去弄明白的东西，不是机主派的任务） */
     public static final String KIND_QUEST_OPENED = "QUEST_OPENED";
     public static final String KIND_QUEST_STEP = "QUEST_STEP";
     public static final String KIND_QUEST_NOTE = "QUEST_NOTE";
     public static final String KIND_QUEST_RETRACT = "QUEST_RETRACT";
     public static final String KIND_QUEST_CLOSED = "QUEST_CLOSED";
-    /** 它自己决定"今天先到这"——时间归它自己的那一半：额度够也不代表它必须动 */
+    /** 它自己决定"今天先到这" */
     public static final String KIND_QUEST_REST = "QUEST_REST";
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(length = 24, nullable = false)
     private String kind;
 
-    /** 判断的类别（如"学习安排 / 我自己的能力 / 该不该答应"），二期归类用 */
-    @Column(length = 60)
+    /** 判断的类别（如"学习安排 / 我自己的能力"），倾向提升按它归类 */
     private String topic;
 
-    /** 方向（A / B / 中立），二期按同方向累计 */
-    @Column(length = 16)
+    /** 立场（A / B / 中立） */
     private String stance;
 
-    @Column(length = 1000, nullable = false)
     private String content;
 
-    /** 证据：引用的对话记录 id 或事件 id（服务层校验真实性） */
-    @Column(length = 300)
+    /** 证据：引用的对话记录 id 或事件 id（写入时校验真实性） */
     private String evidence;
 
-    @Column(nullable = false)
     private Integer importance = 0;
 
-    @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 }

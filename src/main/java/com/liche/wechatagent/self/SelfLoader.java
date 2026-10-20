@@ -88,8 +88,7 @@ public class SelfLoader implements PromptSectionProvider {
             return null;
         }
         List<AgentSelfBlock> blocks = selfCore.blocks();
-        List<AgentCommitment> open = selfCore.openCommitments();
-        List<AgentStance> stances = selfStances.activeStances();
+                List<AgentStance> stances = selfStances.activeStances();
         Optional<AgentQuest> quest = selfQuests.activeQuest();
         List<AgentLesson> lessons = userMessage == null || userMessage.isBlank()
                 ? java.util.List.of() : selfLessons.lessonsInPlay(userMessage, maxLessonsInPrompt);
@@ -97,7 +96,7 @@ public class SelfLoader implements PromptSectionProvider {
         // （刷到视频 → 有想法 → 研究 → 再定向找），这两段是那个"知道"的落点。
         List<AgentSeed> seeds = selfSeeds.openSeeds(maxSeedsInPrompt);
         List<AgentSelfEvent> recent = selfCore.recentEvents(maxRecentEvents);
-        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()
+        if (blocks.isEmpty()  && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()
                 && seeds.isEmpty() && recent.size() <= 1) {
             return null;
         }
@@ -113,7 +112,6 @@ public class SelfLoader implements PromptSectionProvider {
         appendSeeds(body, seeds);
         appendStances(body, stances);
         appendLessons(body, lessons);
-        appendCommitments(body, open);
         appendTimeSense(body);
 
         String text = body.toString().trim();
@@ -221,23 +219,6 @@ public class SelfLoader implements PromptSectionProvider {
             }
             body.append('\n');
         });
-    }
-
-    private void appendCommitments(StringBuilder body, List<AgentCommitment> open) {
-        if (open.isEmpty()) {
-            return;
-        }
-        body.append("我欠着：\n");
-        open.stream().limit(maxCommitmentsInPrompt).forEach(commitment -> {
-            body.append("· ").append(commitment.getContent().trim());
-            if (commitment.getDueAt() != null) {
-                body.append("（截止 ").append(commitment.getDueAt().toLocalDate()).append('）');
-            }
-            body.append('\n');
-        });
-        if (open.size() > maxCommitmentsInPrompt) {
-            body.append("（还有 ").append(open.size() - maxCommitmentsInPrompt).append(" 条没列出来）\n");
-        }
     }
 
     /** 时间感：距上次多久 + 上次停在哪（成本≈0，但这是"连续存在"的体感来源）。 */

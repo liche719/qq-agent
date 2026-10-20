@@ -60,21 +60,11 @@ public class AgentSelfTool implements AgentToolProvider {
             return selfCore.inactiveReason();
         }
         List<AgentSelfBlock> blocks = selfCore.blocks();
-        List<AgentCommitment> open = selfCore.openCommitments();
         StringBuilder text = new StringBuilder();
         blocks.forEach(block -> text.append('【').append(block.getBlockType()).append("】")
                 .append(block.getValue() == null ? "（空）" : block.getValue())
                 .append("（").append(block.getValue() == null ? 0 : block.getValue().length())
                 .append('/').append(block.getCharLimit()).append(" 字）\n"));
-        if (open.isEmpty()) {
-            text.append("【我欠着】（没有）\n");
-        } else {
-            text.append("【我欠着】\n");
-            open.forEach(commitment -> text.append("· #").append(commitment.getId()).append(' ')
-                    .append(commitment.getContent())
-                    .append(commitment.getDueAt() == null ? "" : "（截止 " + commitment.getDueAt().toLocalDate() + "）")
-                    .append('\n'));
-        }
         java.util.List<AgentLesson> lessons = selfLessons.activeLessons();
         text.append("【我的教训清单】\n");
         if (lessons.isEmpty()) {
@@ -127,34 +117,6 @@ public class AgentSelfTool implements AgentToolProvider {
             AgentSelfBlock block = selfCore.appendBlock(normalizeBlockType(blockType), text, evidence);
             return ToolBusinessResult.success("已写进「" + block.getBlockType() + "」（"
                     + block.getValue().length() + '/' + block.getCharLimit() + " 字）");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
-
-    @Tool(value = "把你自己的某个块里的一段话改写掉（旧内容会进事件历史，可回溯）。"
-            + "oldText 必须是块里**已存在**的原文片段。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult selfReplace(String blockType, String oldText, String newText, String evidence) {
-        try {
-            AgentSelfBlock block = selfCore.replaceBlock(normalizeBlockType(blockType), oldText, newText, evidence);
-            return ToolBusinessResult.success("已改写「" + block.getBlockType() + "」（"
-                    + block.getValue().length() + '/' + block.getCharLimit() + " 字）");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
-
-    @Tool(value = "压缩你自己的某个块（保留最近的整行，丢掉较早的内容并标明）。"
-            + "只在块快满、或内容确实过时的时候用；这是程序做的保守压缩，不做总结。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult selfSummarize(String blockType, String evidence) {
-        try {
-            AgentSelfBlock block = selfCore.summarizeBlock(normalizeBlockType(blockType), evidence);
-            return ToolBusinessResult.success("已压缩「" + block.getBlockType() + "」到 "
-                    + block.getValue().length() + " 字");
         } catch (IllegalArgumentException | IllegalStateException exception) {
             return ToolBusinessResult.failure(exception.getMessage());
         }
@@ -234,73 +196,7 @@ public class AgentSelfTool implements AgentToolProvider {
         }
     }
 
-    @Tool(value = "把一条已有教训的 correction 改得更可执行（id 用 selfRead 里看到的 lesson 编号）。"
-            + "**只改做法，不写感悟**；改完这条教训的复查周期会重算。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult selfLessonEdit(Long lessonId, String correction, String evidence) {
-        try {
-            AgentLesson saved = selfLessons.editLessonCorrection(lessonId, correction, evidence);
-            return ToolBusinessResult.success("改好了（lesson #" + saved.getId() + "）：以后按「"
-                    + saved.getCorrection() + "」做");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
     // ---------------------------------------------------------------- 自己的目标与账
-
-    @Tool(value = "给你自己立一个目标（写进「我现在在做」，并记一条带证据的事件）。"
-            + "**这是你自己的事，不是用户的待办**：用户的任务请用考研/提醒/定时任务那套工具。"
-            + "content 写清要做什么，why 写为什么要做（可以留空）。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult goalOpen(String content, String why, String evidence) {
-        try {
-            AgentSelfEvent event = selfCore.openGoal(content, why, evidence);
-            return ToolBusinessResult.success("立下了（event #" + event.getId() + "）。要收尾时用 goalClose 传这个 id。");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
-
-    @Tool(value = "把你自己立过的一个目标收尾（goalEventId 用 goalOpen 返回的那个 id）。"
-            + "outcome 写最后的结果（做成了/放弃了/为什么）。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult goalClose(Long goalEventId, String outcome, String evidence) {
-        try {
-            AgentSelfEvent event = selfCore.closeGoal(goalEventId, outcome, evidence);
-            return ToolBusinessResult.success("已收尾（event #" + event.getId() + "）");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
-
-    @Tool(value = "给你自己立一条账：答应过的事、或做过的预测（dueDate 传 yyyy-MM-dd，可留空）。"
-            + "到期没兑现会变成欠账，下次你自己那侧会带着它。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult commit(String content, String dueDate, String evidence) {
-        try {
-            AgentCommitment saved = selfCore.commit(content, parseDue(dueDate), evidence);
-            return ToolBusinessResult.success("记进账了（commitment #" + saved.getId() + "）");
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
-
-    @Tool(value = "结算一条账：status 取 KEPT（兑现了）/ BROKEN（没做到）/ ABANDONED（不做了），"
-            + "commitmentId 用 selfRead 或 commit 返回的编号。" + POLICY_HINT)
-    @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    @NonIdempotentTool
-    public ToolBusinessResult commitResolve(Long commitmentId, String status, String evidence) {
-        try {
-            AgentCommitment saved = selfCore.resolveCommitment(commitmentId, status, evidence);
-            return ToolBusinessResult.success("已结算：#" + saved.getId() + " → " + saved.getStatus());
-        } catch (IllegalArgumentException | IllegalStateException exception) {
-            return ToolBusinessResult.failure(exception.getMessage());
-        }
-    }
 
     // ---------------------------------------------------------------- 内部
 
@@ -336,3 +232,4 @@ public class AgentSelfTool implements AgentToolProvider {
         return userId;
     }
 }
+

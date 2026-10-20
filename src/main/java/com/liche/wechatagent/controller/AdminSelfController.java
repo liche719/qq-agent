@@ -1,7 +1,6 @@
 package com.liche.wechatagent.controller;
 
 import com.liche.wechatagent.agent.TurnTraceStore;
-import com.liche.wechatagent.self.AgentCommitment;
 import com.liche.wechatagent.self.AgentLesson;
 import com.liche.wechatagent.self.AgentQuest;
 import com.liche.wechatagent.self.AgentQuestNote;
@@ -168,7 +167,6 @@ public class AdminSelfController {
         int dueStances = selfStances.dueStances(now).size();
         rows.add(row("活跃倾向", activeStances + " 条"
                 + (dueStances == 0 ? "" : "（" + dueStances + " 条该复查了）")));
-        rows.add(row("未结承诺", String.valueOf(selfCore.openCommitments().size())));
         List<AgentReflection> today = reflectionService.recentReflections(50).stream()
                 .filter(reflection -> reflection.getCreatedAt() != null
                         && !reflection.getCreatedAt().isBefore(LocalDate.now().atStartOfDay()))
@@ -218,21 +216,6 @@ public class AdminSelfController {
             row.put("content", event.getContent());
             row.put("evidence", event.getEvidence() == null ? "—" : event.getEvidence());
             row.put("createdAt", event.getCreatedAt() == null ? "—" : event.getCreatedAt().format(STAMP));
-            rows.add(row);
-        }
-        return Map.of("rows", rows);
-    }
-
-    /** 账：许过的诺与预测。 */
-    @GetMapping("/commitments")
-    public Map<String, Object> commitments() {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (AgentCommitment commitment : selfCore.openCommitments()) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", "#" + commitment.getId());
-            row.put("content", commitment.getContent());
-            row.put("due", commitment.getDueAt() == null ? "—" : commitment.getDueAt().format(DAY));
-            row.put("status", commitment.getStatus());
             rows.add(row);
         }
         return Map.of("rows", rows);

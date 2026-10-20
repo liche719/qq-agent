@@ -53,7 +53,7 @@ public class BilibiliActivity implements SelfActivity {
 
     private final SelfTurnRunner runner;
     private final SelfCoreService selfCore;
-    private final AgentSelfEventRepository events;
+    private final AgentSelfNoteRepository events;
     private final boolean enabled;
     private final int dailyLimit;
     private final int intervalHours;
@@ -65,7 +65,7 @@ public class BilibiliActivity implements SelfActivity {
 
     public BilibiliActivity(SelfTurnRunner runner,
                             SelfCoreService selfCore,
-                            AgentSelfEventRepository events,
+                            AgentSelfNoteRepository events,
                             @Value("${memory.self-bilibili-enabled:true}") boolean enabled,
                             @Value("${memory.self-bilibili-daily-limit:1}") int dailyLimit,
                             @Value("${memory.self-bilibili-interval-hours:6}") int intervalHours,
@@ -105,13 +105,13 @@ public class BilibiliActivity implements SelfActivity {
         if (lastRunAt != null && lastRunAt.isAfter(now.minusHours(intervalHours))) {
             return false;
         }
-        long today = events.countByTopicAndCreatedAtAfter(TOPIC, LocalDate.now(ZONE).atStartOfDay());
+        long today = events.countByKindNotAndTopicAndCreatedAtAfter(AgentSelfNote.KIND_BLOCK, TOPIC, LocalDate.now(ZONE).atStartOfDay());
         if (today >= dailyLimit) {
             return false;
         }
         boolean recent = !events
-                .findByTopicAndCreatedAtAfterOrderByIdDesc(TOPIC, now.minusHours(intervalHours),
-                        PageRequest.of(0, 1))
+                .findByKindNotAndTopicAndCreatedAtAfterOrderByIdDesc(AgentSelfNote.KIND_BLOCK, TOPIC,
+                        now.minusHours(intervalHours), PageRequest.of(0, 1))
                 .isEmpty();
         if (recent) {
             return false;
@@ -175,15 +175,19 @@ public class BilibiliActivity implements SelfActivity {
         // → 下一个心跳又跑一轮（每分钟 0.02 元 = 一天 30 元）。两条独立的路都记，才不会被一边拖垮。
         lastRunAt = LocalDateTime.now();
         try {
-            AgentSelfEvent event = new AgentSelfEvent();
-            event.setKind(KIND);
-            event.setContent(clip("刷了会儿 B 站：" + (summary == null || summary.isBlank()
+            AgentSelfNote note = new AgentSelfNote();
+            note.setKind(KIND);
+            note.setSlot("");
+            note.setContent(clip("刷了会儿 B 站：" + (summary == null || summary.isBlank()
                     ? "这轮没什么可说的" : summary), 480));
-            event.setEvidence("");
-            event.setTopic(TOPIC);
-            event.setImportance(0);
-            event.setCreatedAt(lastRunAt);
-            events.save(event);
+            note.setEvidence("");
+            note.setTopic(TOPIC);
+            note.setStance("");
+            note.setImportance(0);
+            note.setActive(true);
+            note.setCreatedAt(lastRunAt);
+            note.setUpdatedAt(lastRunAt);
+            events.save(note);
         } catch (RuntimeException exception) {
             org.slf4j.LoggerFactory.getLogger(BilibiliActivity.class)
                     .warn("记刷 B 站的痕迹失败（内存兜底仍生效）：{}", exception.getMessage());
@@ -221,7 +225,7 @@ public class BilibiliActivity implements SelfActivity {
 
     /** 给面板/工具用：这个活动现在什么状态 */
     public List<String> describe() {
-        long today = events.countByTopicAndCreatedAtAfter(TOPIC, LocalDate.now(ZONE).atStartOfDay());
+        long today = events.countByKindNotAndTopicAndCreatedAtAfter(AgentSelfNote.KIND_BLOCK, TOPIC, LocalDate.now(ZONE).atStartOfDay());
         return List.of("每天上限 " + dailyLimit + " 轮", "今天已跑 " + today + " 轮",
                 "间隔 ≥" + intervalHours + " 小时", offPeakOnly ? "只在谷时" : "不限时段");
     }
