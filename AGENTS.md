@@ -164,10 +164,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 72 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 73 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 72）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 73）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -195,7 +195,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：72 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：73 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -224,12 +224,24 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:a4fb4e677b93…`，`13 个类 / 54 个工具`、0 ERROR。
-  **自主模块抽出了「活动」这一层**（`SelfActivity` 接口 + `SelfActivityJob`，替换原来的 `SelfQuestJob`）：
-  现有研究逻辑**原样**包进 `ResearchActivity`（`@Order(0)` 排最前），行为零变化；
-  以后加"刷 B 站 / 刷小红书"这类能力 = **加一个 `@Component` 类 + 一段配置**，调度器不用改。
-  本地真跑通一轮验证：`活动=research 用时 24364ms 花 0.055 元 结论：开了自己的第一个方向…`。
-  ⚠️ 生产上 `memory.self-enabled` 仍是 `false`，所以 `SelfActivityJob` 根本不创建——这次同样**零行为变化**。
+- **最近一次部署**（2026-10-20）：`wechat-agent:c23d10123159…`，`13 个类 / 54 个工具`、0 ERROR。
+  **「刷会儿 B 站」已经是它自己的一个自动活动**（`BilibiliActivity`，`@Order(10)` 排研究之后）：
+  - 触发：每天 ≤1 轮、间隔 ≥6 小时、**只在谷时**（北京 09–12、14–18 是峰时，躲开省钱；周末全天算谷时）；
+  - 一轮：`browseBilibili` 挑来源 → 挑 1~3 条 `readBilibiliVideo` → 判据一句话「值不值得占用他一次注意力」
+    → 值得就 `commentBilibili` 说一句 + `selfWantToSay` 告诉他 → 只有雏形就用 `selfSeedNote` 留念头；
+  - 工具白名单 20 个，**把 `selfQuest*` 那一串用 `deniedTools` 挡掉了**（否则"刷会儿"会变成"开方向"），
+    但放进了 `AgentQuestTool`——因为 `selfWantToSay` 在它里面，不放开就没法说话；
+  - 本地真跑过两轮（`活动=bilibili 用时 ~55s 花 0.021 元`），事件确实落到 `agent_self_event`（`topic=bilibili`）。
+  - ⚠️ **这一轮差点一天烧 30 元**：记账走了 `appendEvent` 的证据校验（`run:bilibili` 不是合法 id）→ 抛异常被吞
+    → 事件没落库 → `due()` 查不到"刚跑过" → **每分钟重跑一轮**。修法=直接 `save` + **进程内 `lastRunAt` 兜底**，
+    教训写成坑 **73**（"记账是护栏的前置条件，记录失败必须让护栏降级"）。
+  - 本地环境差异：**容器里没 ffmpeg/ffprobe**，没字幕的视频抽帧失败（生产镜像有），不是代码问题。
+  - **活动这一层是本轮抽出来的**（`SelfActivity` 接口 + `SelfActivityJob` 替换 `SelfQuestJob`）：
+    现有研究逻辑**原样**包进 `ResearchActivity`（`@Order(0)` 排最前），本地真跑通一轮验证
+    （`活动=research 用时 24364ms 花 0.055 元 结论：开了自己的第一个方向…`），行为零变化。
+    **以后加"刷小红书"这类能力 = 加一个 `@Component` 类 + 一段配置，调度器不用改。**
+  - ⚠️ 生产上 `memory.self-enabled` 仍是 `false`，所以 `SelfActivityJob`/`BilibiliActivity` **根本不创建**
+    ——本轮的部署同样**零行为变化**，打开开关后才会真跑。
   - 上一版（`40f5d16`）加的「念头」`agent_seed`：用户要的是"刷到视频 → 有想法 → 研究 → 再定向找视频"；
     `agent_quest` 太重（要开题）、`agent_self_event` 只是流水账，中间缺一个轻量对象。
     工具 `selfSeedNote` / `selfSeedClose`（只在它自己的时间里下发）。
@@ -285,6 +297,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+
 
 
 
