@@ -33,13 +33,13 @@ public class SelfToolVisibilityRule implements ToolVisibilityRule {
     private static final List<String> OWN_TIME_TOOL_PREFIXES = List.of("selfQuest", "selfWantToSay", "selfSeed");
 
     /**
-     * 工作区那组工具（2026-10-20）：**只有机主能用，别人一个都看不到**。
+     * 自主模块的平台级归属（2026-10-20）：**整套 self* 只属于机主那一个号**。
      *
-     * <p>用户的原话："只有我的 QQ 主账号的笨鱼才有工作区，别的人都没有"。
-     * 所以这里不是"藏起来不给看"，而是**每个人问到的工具集本来就不一样**——
-     * 陌生人既看不到、也调不到，工作区里不会有别人的东西。
+     * <p>用户的原话："只有我自己的主账号的那个 QQ 号对应的笨鱼才有自主模块，其他别人的账号都没有"。
+     * 判据是 {@code selfCore.isOwner(userId)} —— 陌生人在下面第一个分支里就被整组藏掉，
+     * 连工具描述都不会进上下文。
      */
-    private static final List<String> OWNER_ONLY_TOOL_PREFIXES = List.of("selfWork");
+    private static final String SELF_TOOL_PREFIX = "self";
 
     private final SelfCoreService selfCore;
 
@@ -59,7 +59,7 @@ public class SelfToolVisibilityRule implements ToolVisibilityRule {
         }
         boolean ownTime = userId != null && SelfCoreService.SELF_SCOPE.equals(userId.trim());
         boolean owner = selfCore.isOwner(userId);
-        // 它自己的时间里要能调「自己的时间」那组工具
+        // 它自己的时间里要能调全部 self* 工具
         if (ownTime) {
             return Set.of();
         }
@@ -68,24 +68,28 @@ public class SelfToolVisibilityRule implements ToolVisibilityRule {
             if (spec == null || spec.name() == null) {
                 continue;
             }
+            String name = spec.name();
             boolean hide = false;
-            for (String prefix : OWN_TIME_TOOL_PREFIXES) {
-                if (spec.name().startsWith(prefix)) {
+
+            // 2026-10-20 用户明确：「只有我自己的主账号那个 QQ 号对应的笨鱼才有自主模块，
+            // 其他别人的账号都没有」。所以**非机主连 self* 的 schema 都不下发**——
+            // 不是"看得见但被拒"，是那一轮的工具集里压根没有这几项。
+            if (!owner) {
+                if (name.startsWith("self")) {
                     hide = true;
-                    break;
                 }
-            }
-            // 工作区：只有机主能拿到（陌生人连 schema 都不出现在上下文里）
-            if (!hide && !owner) {
-                for (String prefix : OWNER_ONLY_TOOL_PREFIXES) {
-                    if (spec.name().startsWith(prefix)) {
+            } else {
+                // 机主在**普通对话**里：只藏"它自己的时间"那组（开方向、写念头、私下说话），
+                // 但 selfRead/selfRecall/selfNote 这些允许用——那是他在看它自己的记录。
+                for (String prefix : OWN_TIME_TOOL_PREFIXES) {
+                    if (name.startsWith(prefix)) {
                         hide = true;
                         break;
                     }
                 }
             }
             if (hide) {
-                hidden.add(spec.name());
+                hidden.add(name);
             }
         }
         return hidden;

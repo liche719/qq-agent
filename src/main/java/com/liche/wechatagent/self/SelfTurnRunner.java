@@ -66,12 +66,10 @@ public class SelfTurnRunner {
 
         double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
         long started = System.nanoTime();
-        // 2026-10-20：这一轮绑定 SELF 场景，思考档位配成 none（用户要求"发 B 站评论的思考程度设置成无"）。
-        // 实测 reasoning_effort=none 时上游 reasoning_tokens=0；想太多反而写出 AI 腔。
-        String reply = com.liche.wechatagent.config.LlmScenario.run(
-                com.liche.wechatagent.config.LlmScenario.SELF,
-                () -> agentLoop.chat(SelfCoreService.SELF_SCOPE, null, null, personaOf(owner), null, null,
-                        List.of(), instruction, List.of(), List.of(), null, scope));
+        // 2026-10-20：这一轮**不关思考**（用户明确"其他时候按原来的不变"）。
+        // 只有"写那句评论"是单独一次 SELF_COMMENT 调用，见 BiliCommentTool#draftBilibiliComment。
+        String reply = agentLoop.chat(SelfCoreService.SELF_SCOPE, null, null, personaOf(owner), null, null,
+                List.of(), instruction, List.of(), List.of(), null, scope);
         long durationMs = Math.max(0, (System.nanoTime() - started) / 1_000_000L);
         double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
         return new Result(reply, 0, 0, durationMs, yuan);
