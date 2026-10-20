@@ -34,6 +34,14 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     private final int maxRedirects;
     private final String userAgent;
     private final PublicUrlValidator urlValidator;
+    /**
+     * 本地抓不到正文时的补救（2026-10-20 加）：DS 的 `tools/fetch` 是渲染后取正文，
+     * 能救回**靠 JS 渲染**的站点。按次收费，所以只在"确实没抓到东西"时才调，并共用搜索配额。
+     */
+    private DeepSeekSearchClient deepSeekSearchClient;
+    private DeepSeekSearchQuota quota;
+    /** 正文少于这么多字就认为"没抓到内容"（导航栏/空壳页面通常不足 300 字） */
+    private int deepSeekFetchMinChars = 300;
 
     /**
      * 确定性不可读：链接非法、HTTP 4xx、不是网页文本、跳转异常……同一个链接再试多少次都一样。
@@ -54,8 +62,13 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     public ToolBusinessResult readWebPage(String url) {
         status("我正在打开这个网页…");
         try {
-            return ToolBusinessResult.success(openAndExtract(url));
+            return ToolBusinessResult.success(fillIfTooShort(url, openAndExtract(url)));
         } catch (UnreadablePageException exception) {
+            // 本地读不了（常见于纯 JS 渲染 / 需要执行脚本的站）：让 DS 试着抓一次
+            String rescued = fetchFromDeepSeek(url);
+            if (!rescued.isBlank()) {
+                return ToolBusinessResult.success(rescued);
+            }
             return ToolBusinessResult.failure(exception.getMessage());
         } catch (IllegalArgumentException exception) {
             return ToolBusinessResult.failure("这个链接不安全或格式不正确，无法访问");
@@ -104,6 +117,40 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
         throw new UnreadablePageException("网页跳转次数过多，无法继续访问");
     }
 
+    /**
+     * 本地抓到的正文太短时，用 DS 再抓一次（2026-10-20）。
+     *
+     * <p>判断依据故意用**字数**而不是"看起来像不像空壳"：中文网页的正文很少少于这个数，
+     * 而导航栏 + 版权声明通常凑不够。误判的代价是白花一次 fetch（约 0.005 元），可接受。
+     */
+    private String fillIfTooShort(String url, String text) {
+        if (text == null || text.length() >= deepSeekFetchMinChars) {
+            return text;
+        }
+        String rescued = fetchFromDeepSeek(url);
+        if (rescued.isBlank()) {
+            return text;
+        }
+        return rescued;
+    }
+
+    /** 走 DS fetch 补一次；任何人任何一步不满足就返回空串，调用方保持原结果 */
+    private String fetchFromDeepSeek(String url) {
+        if (deepSeekSearchClient == null || !deepSeekSearchClient.enabled()) {
+            return "";
+        }
+        String userId = statusService.currentUserId();
+        if (quota != null && !quota.tryConsume(userId)) {
+            return "";
+        }
+        String content = deepSeekSearchClient.fetch(url);
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        String clipped = content.length() > maxTextChars ? content.substring(0, maxTextChars) : content;
+        return clipped + "\n\n（这一段是 DeepSeek 渲染后取回的正文，本地直接抓只拿到空壳页面）";
+    }
+
     private boolean hasCauseMessage(Throwable throwable, String expected) {
         Throwable current = throwable;
         while (current != null) {
@@ -130,6 +177,14 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     }
 
     private final ToolStatusService statusService;
+
+    @Autowired(required = false)
+    public void setDeepSeekFallback(DeepSeekSearchClient deepSeekSearchClient, DeepSeekSearchQuota quota,
+                                    @Value("${web.deepseek-fetch-min-chars:300}") int minChars) {
+        this.deepSeekSearchClient = deepSeekSearchClient;
+        this.quota = quota;
+        this.deepSeekFetchMinChars = Math.max(0, minChars);
+    }
 
     @Autowired
     public WebPageTool(ToolStatusService statusService,

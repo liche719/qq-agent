@@ -171,6 +171,60 @@ public class DeepSeekSearchClient {
     }
 
     /** 把我们的检索条件翻译成它支持的搜索语法（{@code after:} 限定发布时间） */
+    /**
+     * 抓一个网页的正文（2026-10-20 加，`POST /v1/tools/fetch`）。
+     *
+     * <p>为什么需要它：本地那套 Jsoup 抓取对**靠 JS 渲染**的站点拿不到正文（返回的 HTML 里没有内容），
+     * 于是 `readWebPage` 会拿到一坨导航文字或者干脆空白。DS 的 fetch 是它自己渲染后取正文，
+     * 这种站能救回来。
+     *
+     * <p>**按次收费**，所以调用方必须先确认"确实需要"（正文太短 / 本地抓不到），并且**共用同一份每日配额**。
+     *
+     * @return 正文（markdown 风格）；拿不到就返回空串，调用方保持原有结果
+     */
+    public String fetch(String url) {
+        if (!enabled || url == null || url.isBlank()) {
+            return "";
+        }
+        long started = System.nanoTime();
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("url", url.trim());
+
+            SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+            factory.setConnectTimeout(Duration.ofSeconds(8));
+            factory.setReadTimeout(Duration.ofSeconds(timeoutSeconds));
+            RestClient client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+
+            String json = client.post()
+                    .uri("/v1/tools/fetch")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .body(payload)
+                    .retrieve()
+                    .body(String.class);
+
+            if (json == null || json.isBlank()) {
+                return "";
+            }
+            JsonNode root = objectMapper.readTree(json);
+            String content = root.path("data").path("content").asText("");
+            if (content.isBlank()) {
+                content = root.path("content").asText("");
+            }
+            if (content.isBlank()) {
+                log.info("DeepSeek 抓取没有正文 url={} ms={}", url, (System.nanoTime() - started) / 1_000_000L);
+                return "";
+            }
+            log.info("DeepSeek 抓取成功 url={} chars={} ms={}", url, content.length(),
+                    (System.nanoTime() - started) / 1_000_000L);
+            return content;
+        } catch (Exception exception) {
+            log.warn("DeepSeek 抓取失败 url={} error={}", url, exception.getMessage());
+            return "";
+        }
+    }
+
     private String applyFilters(String query, LocalDate publishedAfter) {
         StringBuilder sb = new StringBuilder(query);
         if (publishedAfter != null) {
