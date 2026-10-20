@@ -63,6 +63,25 @@ final class BiliClientCookieSupport {
         return "";
     }
 
+    /** 列出 Cookie 里都有哪些字段名（**只给日志用，不含值**） */
+    static String names(String cookie) {
+        if (cookie == null || cookie.isBlank()) {
+            return "(空)";
+        }
+        StringBuilder joined = new StringBuilder();
+        for (String part : cookie.split("[;\\r\\n]+")) {
+            int eq = part.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            if (joined.length() > 0) {
+                joined.append(',');
+            }
+            joined.append(part.substring(0, eq).trim());
+        }
+        return joined.length() == 0 ? "(空)" : joined.toString();
+    }
+
     private static String randomBuvid() {
         StringBuilder sb = new StringBuilder();
         String hex = java.util.UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);

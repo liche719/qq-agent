@@ -119,8 +119,12 @@ public class BiliQrLoginService {
                 // 只记状态与码，不记 cookie（凭据绝不进日志）。排"扫了两次都没成功"这类问题时，
                 // 这几行能直接看出是"没人扫"（一直 86101）、"扫了没确认"（停在 86090）还是"过期了"（86038）。
                 log.info("B站扫码状态 code={} state={}", code, result.get("state"));
-                if (code == 86100) {
+                // 注意这里是"状态是 confirmed"而不是 `code == 86100`：B站成功时回的是 0。
+                // 2026-10-20 第一版只改了状态判断、没改这个分支，结果"面板显示登录成功、凭据没存"。
+                if ("confirmed".equals(result.get("state"))) {
                     String cookie = mergeSetCookies(response.headers("Set-Cookie"));
+                    // 只记字段名，不记值——万一以后哪次"成功但没拿到 bili_jct"，这条能一眼看出来
+                    log.info("B站扫码：Set-Cookie 字段={}", BiliClientCookieSupport.names(cookie));
                     String mid = BiliClientCookieSupport.field(cookie, "DedeUserID");
                     String uname = "";
                     BilibiliClient.NavInfo nav = null;

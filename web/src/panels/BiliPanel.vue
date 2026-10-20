@@ -22,6 +22,7 @@ const pollText = ref('')
 const pollState = ref('')
 const done = ref(null)        // 登录成功后的用户信息
 let timer = null
+let session = 0
 let expiresAt = 0
 
 const readable = computed(() => Boolean(status.value?.readable))
@@ -49,23 +50,30 @@ function stopPolling() {
 
 async function startLogin() {
   stopPolling()
+  // 每次点生成都算新的一轮：旧那轮的回调一律作废。
+  // 2026-10-20 踩过：连点两下会同时存在两个轮询，日志里两个 key 交叉出现，很难看出哪条才是真的。
+  const mine = ++session
   error.value = ''
   done.value = null
   pollText.value = '正在向 B 站要二维码…'
   pollState.value = ''
   try {
-    qr.value = await api('/bilibili/login/qrcode', { method: 'POST' })
-    expiresAt = Date.now() + (qr.value.expiresInSeconds || 180) * 1000
+    const fresh = await api('/bilibili/login/qrcode', { method: 'POST' })
+    if (mine !== session) return
+    qr.value = fresh
+    expiresAt = Date.now() + (fresh.expiresInSeconds || 180) * 1000
     pollText.value = '用 B 站 App 扫上面这张二维码'
-    timer = setInterval(poll, 2000)
+    timer = setInterval(() => poll(mine), 2000)
   } catch (e) {
+    if (mine !== session) return
     error.value = e.message
     pollText.value = ''
     qr.value = null
   }
 }
 
-async function poll() {
+async function poll(mine) {
+  if (mine !== session) return
   if (!qr.value) return stopPolling()
   // 本地计时**只用于提示，不用于停止**：B站返回 86038 才是"真过期"。
   // 2026-10-20 踩过一次：手机在临界点确认、前端按本地 180 秒先停了，那次成功被丢掉，
@@ -195,4 +203,5 @@ loadStatus()
 .banner-bad { background: rgba(200, 60, 60, .12); color: #b3261e; }
 .banner-ok { background: rgba(40, 140, 80, .12); color: #1b5e20; }
 </style>
+
 
