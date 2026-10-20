@@ -54,7 +54,7 @@ public class SelfWorkspaceTool implements AgentToolProvider {
     }
 
     @Tool(value = "往你自己工作区里写一个文件。mode 传 append 就是追加（适合记流水），"
-            + "不传就是覆盖（适合改草稿）。目录不存在会自动建。单个文件最多 1 MB。")
+            + "不传就是覆盖（适合改草稿）。目录不存在会自动建。单个文件最多 16 MB。")
     @ToolExecutionPolicy(ToolExecutionClass.FAST)
     public ToolBusinessResult selfWorkWrite(String path, String content, String mode) {
         if (!workspace.enabled()) {

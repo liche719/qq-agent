@@ -26,7 +26,7 @@ import java.util.stream.Stream;
  *   <li>每次操作都把路径 `normalize()` + `toRealPath()`（文件还不存在时校验它的**父目录**），
  *       再判断是否 `startsWith(root)` —— 这样 `../` 和**符号链接**都逃不出去；</li>
  *   <li>只做**文本**读写，不执行任何命令 —— "能做的事"限定在文件层面，没有 shell 就没有破坏力；</li>
- *   <li>单个文件上限 {@code maxFileBytes}（默认 1 MB），防止它把磁盘写满；</li>
+ *   <li>单个文件上限 {@code maxFileBytes}（默认 16 MB）、总量上限 {@code maxTotalBytes}（默认 1 GB），防止它把磁盘写满；</li>
  *   <li>根目录**必须配了才工作**（空配置 = 关掉），默认不启用。</li>
  * </ol>
  *

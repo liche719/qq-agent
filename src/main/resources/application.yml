@@ -472,10 +472,11 @@ memory:
 
   # 它自己的工作区（2026-10-20 加）：一个有边界的文件夹，它在里面随便折腾，出不去。
   # 留空 = 关闭（工具会明确告诉它"没启用"）。生产挂一个卷：/app/self-workspace
+  # 单文件默认 16 MB（有一本 PDF 那么大的纯文本也放得下）；总量仍是 1 GB。
   # 安全边界：路径 normalize + toRealPath 之后必须仍在根目录内（防 ../ 与符号链接），
   # 只做文本读写、**不执行命令**、单文件上限 1 MB。
   self-workspace-dir: ${MEMORY_SELF_WORKSPACE_DIR:}
-  self-workspace-max-file-bytes: ${MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES:1048576}
+  self-workspace-max-file-bytes: ${MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES:16777216}
   # 整个工作区的总量上限（默认 1 GB）：写满就让它自己清理，不等服务器磁盘告急
   self-workspace-max-total-bytes: ${MEMORY_SELF_WORKSPACE_MAX_TOTAL_BYTES:1073741824}
   self-workspace-max-list-entries: ${MEMORY_SELF_WORKSPACE_MAX_LIST_ENTRIES:200}
