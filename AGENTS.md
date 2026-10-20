@@ -185,6 +185,11 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     并按"**账号 + 当天 20 次**"配额（`DeepSeekSearchQuota`，Redis 计数，key=`ds-search:<日期>:<userId>`，
     重启不重置；Redis 挂了降级进程内计数）。超了自动改走 SearXNG，并在结果里如实说明。
     顺带把旧的 `withFallback/fallbackReason/siteOperators/hostMatches` 四段兜底逻辑变成死代码。
+
+  - **DS 的第二个接口 `tools/fetch` 也接上了**（用户说"要接"）：它**渲染后取正文**，能救回**靠 JS 渲染**的站。
+    触发条件是「正文少于 `web.deepseek-fetch-min-chars`（默认 300 字）」或者本地直接 4xx；
+    **共用同一份每日配额**（一次 fetch 也算一次），拿不到就保持原结果。
+    本地实测：`readWebPage https://example.com`（本地只抓到空壳）→ `DeepSeek 抓取成功 chars=931`、配额 0→1。
   - ⚠️ **删模块时唯一要小心的不是代码，是"注释里的举例"**：`MemoryExtractor`/`MemoryTextSimilarity`/
     `CommandRegistry` 里都有「考研数学目标分是130」这类**历史实测案例**，它们描述的是当时的真实数据、改了反而失真。
     所以保留了，只删真正指向已删代码的引用（见坑 75）。
