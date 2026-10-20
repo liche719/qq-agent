@@ -224,10 +224,19 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:87eaafda1adc…`，`13 个类 / 54 个工具`、0 ERROR。
-  **B站这条线通了：扫码登录 → 自己刷 → 自己发评论**。
-  - 凭据：`bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，面板显示 `扫码登录（库里）· 可写`；
-    **CSRF 已验证**（不存在的 oid 返回 `12002` 而不是 `-111`）。
+- **最近一次部署**（2026-10-20）：`wechat-agent:40f5d16a1969…`，`13 个类 / 54 个工具`、0 ERROR。
+  **这次是"零行为变化"的铺垫**：`memory.self-enabled` 仍是 `false`，所以 `AgentSeedTool` 按
+  `@ConditionalOnProperty` 不创建，工具数和聊天行为一个字没变，只是把表和代码先放上去。
+  - 新增「念头」`agent_seed`（**活动之间"相辅相成"的接头**）：用户要的是"刷到视频 → 有想法 →
+    研究 → 再定向找视频"；`agent_quest` 太重（要开题）、`agent_self_event` 只是流水账，中间缺一个轻量对象。
+    工具 `selfSeedNote` / `selfSeedClose`（只在它自己的时间里下发）。
+  - `SelfLoader` 加了两段注入：**最近干过的几件事**（`recentEvents`）+ **心里还惦记着的念头**（OPEN seeds）；
+    配置 `memory.self-max-recent-events`（默认 3）、`memory.self-max-seeds-in-prompt`（5）。
+  - **本地行为级验证没做成**：本地 `.env` 的 LLM key 被上游拒了（`模型密钥被上游拒了`），
+    只验到"启动成功 + 开着 self 时 78 个工具"；注入效果要等 self 打开后在线上验。
+- **上一版**（2026-10-20）：`wechat-agent:87eaafda1adc…`，**B站这条线通了：扫码登录 → 自己刷 → 自己发评论**。
+  凭据：`bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，面板显示 `扫码登录（库里）· 可写`；
+  **CSRF 已验证**（不存在的 oid 返回 `12002` 而不是 `-111`）。
   - 读：`browseBilibili`（热门/关注动态/稍后再看，三个来源都**不需要 wbi 签名**）。
   - 写：`commentBilibili`（新类 `BiliCommentTool`，54 个工具里的第 54 个），
     注册为 `EXTERNAL_ACTION · sideEffect=true · retryable=false · risk=HIGH`；
