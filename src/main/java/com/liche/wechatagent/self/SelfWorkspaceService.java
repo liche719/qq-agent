@@ -40,12 +40,15 @@ public class SelfWorkspaceService {
 
     private final Path root;
     private final int maxFileBytes;
+    private final long maxTotalBytes;
     private final int maxListEntries;
 
     public SelfWorkspaceService(@Value("${memory.self-workspace-dir:}") String dir,
                                 @Value("${memory.self-workspace-max-file-bytes:1048576}") int maxFileBytes,
+                                @Value("${memory.self-workspace-max-total-bytes:536870912}") long maxTotalBytes,
                                 @Value("${memory.self-workspace-max-list-entries:200}") int maxListEntries) {
         this.maxFileBytes = Math.max(1024, maxFileBytes);
+        this.maxTotalBytes = Math.max(1L << 20, maxTotalBytes);
         this.maxListEntries = Math.max(10, maxListEntries);
         Path resolved = null;
         if (dir != null && !dir.isBlank()) {
@@ -170,6 +173,15 @@ public class SelfWorkspaceService {
             throw new IllegalArgumentException("内容太大，超过单文件上限（" + maxFileBytes + " 字节）");
         }
         try {
+            // 总量限额（2026-10-20）：工作区不是网盘，写满 512 MB 就该提醒它清理，
+            // 而不是等服务器磁盘满了再被运维发现。
+            long existing = Files.exists(file) ? Files.size(file) : 0L;
+            long used = totalBytes();
+            long delta = Math.max(0, text.getBytes(StandardCharsets.UTF_8).length - existing);
+            if (used + delta > maxTotalBytes) {
+                throw new IllegalArgumentException("工作区快满了（已用 " + readable(used) + " / 上限 "
+                        + readable(maxTotalBytes) + "）——先删掉一些不用的东西再写");
+            }
             if (file.getParent() != null) {
                 Files.createDirectories(file.getParent());
             }
@@ -214,6 +226,43 @@ public class SelfWorkspaceService {
         } catch (IOException exception) {
             throw new IllegalArgumentException("删除失败：" + exception.getMessage());
         }
+    }
+
+    /** 递归统计工作区已用字节（文件数不多时够快；超限判定不需要精确到毫秒） */
+    private long totalBytes() {
+        if (root == null) {
+            return 0L;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            return walk.filter(Files::isRegularFile).mapToLong(path -> {
+                try {
+                    return Files.size(path);
+                } catch (IOException ignored) {
+                    return 0L;
+                }
+            }).sum();
+        } catch (IOException exception) {
+            return 0L;
+        }
+    }
+
+    /** 给模型看的用量说明（进面板/日志也用它） */
+    public String usage() {
+        return readable(totalBytes()) + " / " + readable(maxTotalBytes);
+    }
+
+    public long maxTotalBytes() {
+        return maxTotalBytes;
+    }
+
+    private static String readable(long bytes) {
+        if (bytes >= 1024L * 1024) {
+            return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1024.0 / 1024.0);
+        }
+        if (bytes >= 1024) {
+            return (bytes / 1024) + " KB";
+        }
+        return bytes + " 字节";
     }
 
     /** 建目录（含中间层级） */
