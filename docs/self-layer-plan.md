@@ -466,3 +466,48 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 | `deploy/mysql/V5__…sql` | **已写**：`V5__create_agent_self_tables.sql`（4 张表，纯新增，回滚＝drop）——**2026-10-10 现状：`V5` 里后来还加了 `agent_stance`，另有 `agent_lesson`（V6）、`agent_quest{,_note,_run}`（V7）、`agent_self_utterance`（V8）与 `agent_quest_run.cost_yuan`（V9），见 §7.2 ~ §7.6** |
 | `src/main/java/…/self/` | 已写：4 实体 + 4 仓库 + `SelfService` + `SelfLoader` + `AgentSelfTool`（10 工具）——**2026-10-10 现状：`SelfService` 已按 §7.2/§7.3 拆成 `SelfCoreService` / `SelfStanceService` / `SelfLessonService` / `SelfQuestStore` / `SelfReflectionService`，实体与仓库也远不止 4 个** |
 | `src/main/java/…/agent/PromptSection*.java` | 已写：通用注入挂点（下个模块直接复用） |
+
+---
+
+## 2026-10-20：这一层被改了三处（以本节为准，前面几节的实现细节可能已过时）
+
+### 1. 存储：块 + 事件并成一张 `agent_self_note`
+
+块的当前值和它的历史流水本来是同一件事的两个投影（块每次更新都会写一条事件），却各带一个 repo、
+各一套方法，工具层因此长出 `selfAppend/selfReplace/selfSummarize` 三个"差不多"的东西（实测合计只调用 2 次）。
+
+现在一张表：`kind=BLOCK` + `slot`（PERSONA/TASK/PROJECT）表达块（每个槽位一条 `active`，
+改写时旧行标 `active=false, superseded_by=新id`，**历史自带**），其它 `kind` 只追加。
+
+**老表 `agent_self_block` / `agent_self_event` / `agent_commitment` 已 DROP**（用户明确"数据可以完全删掉"），
+`agent_quest*` / `agent_lesson` / `agent_stance` / `agent_self_utterance` / `agent_reflection` 数据已清空（表留着）。
+
+`AgentSelfBlock` / `AgentSelfEvent` 降级成 **POJO**（不再是 `@Entity`）—— 8 个调用方一行逻辑都没改，
+改动风险全关在 `SelfCoreService` 一个类里。
+
+### 2. 工具：24 → 14，删的都是"从没被用过"的
+
+| 删掉 | 证据 |
+|---|---|
+| `goalOpen` / `goalClose` / `commit` / `commitResolve` | **0 次调用、0 行数据**，语义被「开方向 + 写下一步」覆盖 |
+| `selfReplace` / `selfSummarize` | 0 次调用；块只有 180 字，一个追加入口够用 |
+| `selfLessonEdit` / `selfQuestRest` | 0 次调用 |
+
+教训写成坑 75（删模块真正要小心的是"注释里的举例"，不是代码）。
+
+### 3. 加了两个新东西
+
+- **工作区**（`SelfWorkspaceService` + 5 个 `selfWork*` 工具）：一个有边界的文件夹，
+  它在里面随便折腾、出不去。边界是 `normalize()` + `toRealPath()` 后必须 `startsWith(root)`
+  （防 `../`、绝对路径、符号链接），**不执行命令**，单文件 16 MB / 总量 1 GB。
+  **只有机主那一个号能用**（非机主时整套 `self*` 都不下发）。
+- **评论草稿**（`draftBilibiliComment`）：把"落笔那句评论"拆成一次独立窄调用，
+  场景 `SELF_COMMENT` 配 `reasoning_effort=none`（实测 `reasoning_tokens=0`）。
+  **只有这一次关思考**，判断/读视频/写总结仍是 `dialog=low`——用户的原话是
+  "关思考只是指生成评论内容的时候，其他时候按原来的不变"。
+
+### 4. 现在它真的在跑
+
+生产 `MEMORY_SELF_ENABLED=true`、`MEMORY_SELF_RESEARCH_ENABLED=false`（研究关着，只留刷 B 站）。
+它已经在工作区写了 `notes/待改进清单.md`（记忆信任分级、新旧事实冲突）和
+`notes/关于他的表达.md`（面试陪练怎么带、"他不太有朋友，别搞得像考核"）。

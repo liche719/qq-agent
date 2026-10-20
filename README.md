@@ -79,12 +79,11 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 | 媒体记忆 | `media/` | 保存/检索/审阅删除；一次任务读文件有上限；模型看完图要把"图里是什么"写回，否则以后搜不到 |
 | 提醒 | `reminder/` | 解析/列表/取消/安全替换；到点只发一句话 |
 | 定时任务 | `schedule/` | 到点**重跑一遍完整 Agent**（可搜索、可调工具）再发结果；与"提醒"不是一回事 |
-| 考研规划 | `exam/` | 备考计划、每日任务、打卡、章节进度、错题本（1/3/7/15/30 天回收）、里程碑、正计时；三条推送 |
 | 面试陪练 | `interview/` | 有题库 + 评分卡 + 复盘报告的模拟面试（不是"换个人设聊天"） |
-| 墨墨背单词 | `maimemo/` | OIDC 授权（1 小时 access + 90 天 refresh）、进度查询、每日推送、面板页签 |
-| 自主模块「它自己」 | `self/` | 独立作用域 `__self__`，攒够轮次触发反思；**有兴趣、有承诺、有预算（按钱算）、还有嘴**（想说话当场发） |
+| 自主模块「它自己」 | `self/` | 独立作用域 `__self__`；**只属于机主那一个号**。自己的时间（刷 B 站、写评论）、自己的记录（`agent_self_note`）、自己的工作区（1 GB 沙箱，出不去）、心里惦记的念头 |
 | 运维告警 | `alert/` | 60 秒巡检 QQ 网关 / PostgreSQL / Redis / Quartz / 磁盘 / 堆 / 备份新鲜度，只在"新出现问题或恢复"时推 QQ |
 | 备份 | `backup/` | 每天 03:00 一个 zip + 媒体按 sha256 共享存一份；恢复步骤见 `docs/backup.md` |
+| 搜索 | `search/` | **DeepSeek 搜索优先**（每个账号每天 30 次），超了自动落到自托管 SearXNG；抓网页在本地 Jsoup 抓不到时用 DS `fetch` 兜底 |
 
 **LLM 记账**：每次调用落 `llm_call_audit`（场景 / 流式 / 耗时 / token / 命中与未命中 / 费用 / 错误），
 面板可看花费与各场景的**思考强度**（`llm_scenario_setting`）。计价口径见 `docs/llm-call-modes.md`。
@@ -102,11 +101,9 @@ src/main/java/com/liche/wechatagent
 ├── config/       # LLM 配置、场景档位、线程池、策略
 ├── controller/   # 面板 REST、模拟器、健康检查
 ├── document/     # PDF / DOCX 文本提取
-├── exam/         # 考研规划
 ├── exception/    # 全局异常
 ├── interview/    # 面试陪练
 ├── log/          # 操作日志
-├── maimemo/      # 墨墨背单词（含 OIDC）
 ├── media/        # 当前消息媒体授权、长期存储、检索、审阅删除
 ├── memory/       # 三层记忆、提取、向量召回、备份
 ├── metrics/      # 运行时指标
