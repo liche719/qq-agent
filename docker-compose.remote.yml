@@ -162,7 +162,7 @@ services:
       MEMORY_SELF_MAX_LESSONS_IN_PROMPT: ${MEMORY_SELF_MAX_LESSONS_IN_PROMPT:-3}
       # 三期领域②「它自己的时间」：**必须透传**（坑 36）——关掉它、调预算或改触发条件都要能改
       MEMORY_SELF_QUEST_MODE: ${MEMORY_SELF_QUEST_MODE:-daily}
-      MEMORY_SELF_QUEST_CHECK_CRON: ${MEMORY_SELF_QUEST_CHECK_CRON:-0 0 */2 * * *}
+      MEMORY_SELF_QUEST_CHECK_CRON: ${MEMORY_SELF_QUEST_CHECK_CRON:-0 10 */2 * * *}
       # 整个自主模块只在 DeepSeek 谷时生效（工作日北京 09–12、14–18 是峰时，贵一倍）
       MEMORY_SELF_OFFPEAK_ONLY: ${MEMORY_SELF_OFFPEAK_ONLY:-true}
       # 预算按**钱**算（用户 2026-09-15 定）：日 0.5 元、单次 60%、没落产出才续一次、封顶 ×1.5

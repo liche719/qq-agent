@@ -438,7 +438,10 @@ memory:
   # **预算按钱算**（同日用户定）：日 0.5 元、单次先给 60%、**没落产出才续一次**、当天封顶 ×1.5。
   # 按钱不按轮数：每轮 prompt 大小差一倍，轮数不是钱的代理。花超了面板上看得见。
   self-quest-mode: ${MEMORY_SELF_QUEST_MODE:daily}
-  self-quest-check-cron: ${MEMORY_SELF_QUEST_CHECK_CRON:0 0 */2 * * *}
+  # 心跳放在整点后 10 分钟，**不要改回整点**（2026-10-21）：工作的时间间隔是按"上次实际跑完的时刻"算的，
+  # 而那一轮通常比整点晚几十秒开始。心跳若卡在整点，就会永远差那二十来秒、due() 一直返回 false，
+  # 实际效果从"每 6 小时一次"退化成"每 8 小时一次"（实测 18:00:22 跑完 → 00:00:00 心跳差 22 秒跳过）。
+  self-quest-check-cron: ${MEMORY_SELF_QUEST_CHECK_CRON:0 10 */2 * * *}
   self-quest-daily-budget-yuan: ${MEMORY_SELF_QUEST_DAILY_BUDGET_YUAN:0.5}
   self-quest-budget-overrun-factor: ${MEMORY_SELF_QUEST_BUDGET_OVERRUN_FACTOR:1.5}
   self-quest-single-budget-ratio: ${MEMORY_SELF_QUEST_SINGLE_BUDGET_RATIO:0.6}
