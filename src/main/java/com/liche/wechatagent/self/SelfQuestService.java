@@ -328,6 +328,8 @@ public class SelfQuestService {
         }
         text.append("\n你能用的：搜索、读网页、写笔记（带来源）、撤回你自己写错的旧结论、改下一步、")
                 .append("换方向或者收掉它。\n");
+        text.append("**想看视频就用 browseBilibili**（hot=全站热门、following=他关注的人、later=他的稍后再看），")
+                .append("挑到有意思的再用 readBilibiliVideo 看它讲了什么。\n");
         text.append("\n规矩：\n");
         text.append("1. **这次至少落一条笔记**（selfQuestNote）：写你**因此得出的**判断，不是资料摘抄；")
                 .append("来源能写就写进 sourceUrl。一条笔记都没有 = 这次白跑了。\n");

@@ -22,6 +22,8 @@ import org.springframework.stereotype.Component;
 public class BilibiliTool implements AgentToolProvider {
 
     private static final int DESC_PREVIEW_CHARS = 300;
+    /** browseBilibili 默认给几条候选：够挑又不至于让他看得眼花 */
+    private static final int DEFAULT_BROWSE_COUNT = 12;
 
     private final BilibiliClient client;
     private final com.liche.wechatagent.media.VideoFrameService videoFrameService;
@@ -113,6 +115,50 @@ public class BilibiliTool implements AgentToolProvider {
         } catch (Exception exception) {
             // 网络类瞬时故障：抛出去按策略重试
             throw new IllegalStateException("读 B 站视频失败：" + exception.getMessage(), exception);
+        }
+    }
+
+    @Tool(value = "看看 B 站上有什么视频。用户说「看看 B 站」「刷会儿 B 站」「有什么好玩的」时调用，"
+            + "或者你自己想找点东西看时也可以。source 三选一："
+            + "hot=全站热门（不用登录）、following=他关注的 UP 主更新（要登录）、later=他的稍后再看（要登录）；"
+            + "count 是条数，1~30，默认 12。返回标题、UP 主、时长、播放量、BV 号。"
+            + "**它只是目录**：想知道某个视频讲了什么，把 BV 号传给 readBilibiliVideo 再读字幕/抽帧。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public ToolBusinessResult browseBilibili(String source, Integer count) {
+        int limit = count == null ? DEFAULT_BROWSE_COUNT : Math.max(1, Math.min(30, count));
+        try {
+            String wanted = source == null || source.isBlank() ? "hot" : source.trim().toLowerCase(java.util.Locale.ROOT);
+            java.util.List<BilibiliClient.FeedItem> items = client.feed(wanted, limit);
+            if (items.isEmpty()) {
+                return ToolBusinessResult.failure("这个来源现在没有可看的视频（可能关注列表是空的，或者登录态过期了）。"
+                        + "如实跟他说没看到什么，别编。");
+            }
+            String from = items.get(0).source();
+            StringBuilder out = new StringBuilder("【B站·").append(from).append("】").append(items.size()).append(" 条：\n");
+            int index = 1;
+            for (BilibiliClient.FeedItem item : items) {
+                out.append(index++).append(". ").append(item.title()).append('\n')
+                        .append("   BV：").append(item.bvid());
+                if (!item.owner().isBlank()) {
+                    out.append("；UP：").append(item.owner());
+                }
+                if (item.durationSeconds() > 0) {
+                    out.append("；时长：").append(duration(item.durationSeconds()));
+                }
+                if (item.view() > 0) {
+                    out.append("；播放：").append(item.view());
+                }
+                out.append('\n');
+                if (!item.desc().isBlank()) {
+                    out.append("   简介：").append(clip(item.desc(), 120)).append('\n');
+                }
+            }
+            out.append("\n（这只是目录。要看某个视频讲了什么，把它的 BV 号传给 readBilibiliVideo。）");
+            return ToolBusinessResult.success(out.toString());
+        } catch (BilibiliClient.BilibiliException exception) {
+            return ToolBusinessResult.failure(exception.getMessage());
+        } catch (Exception exception) {
+            throw new IllegalStateException("看 B 站失败：" + exception.getMessage(), exception);
         }
     }
 

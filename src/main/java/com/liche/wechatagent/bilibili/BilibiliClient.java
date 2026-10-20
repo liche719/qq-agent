@@ -90,6 +90,15 @@ public class BilibiliClient {
     }
 
     /**
+     * 一条候选视频（2026-10-20 加：给「它自己刷 B 站」用）。
+     *
+     * @param source 从哪儿看到的（hot / following / later），推给他时要说清楚
+     */
+    public record FeedItem(String bvid, String title, String owner, String desc,
+                           int durationSeconds, long view, String source) {
+    }
+
+    /**
      * 从任意输入里认视频：完整链接 / BV 号 / av 号 / b23.tv 短链 / 带 {@code ?p=3} 的分 P。
      *
      * <p>认不出来属于**确定性失败**（同一个输入再试多少次都一样），所以抛业务异常让工具直接回话，不走重试。
@@ -227,6 +236,113 @@ public class BilibiliClient {
     }
 
     // ------------------------------------------------------------------ 内部
+
+    /**
+     * 找一批候选视频（2026-10-20 加，「它自己刷 B 站」的入口）。
+     *
+     * <p><b>三个来源都实测过（2026-10-20，带 SESSDATA 直连）</b>：
+     * <ul>
+     *   <li>{@code hot} 全站热门排行 {@code /x/web-interface/ranking/v2?rid=0&type=all} —— **不用登录**、100 条；</li>
+     *   <li>{@code following} 关注动态 {@code /x/polymer/web-dynamic/v1/feed/all?type=video} —— 要登录，20 条；</li>
+     *   <li>{@code later} 稍后再看 {@code /x/v2/history/toview} —— 要登录，他当前 25 条。</li>
+     * </ul>
+     * 三个**都不需要 wbi 签名**（原来以为要，实测直接 GET 就是 {@code code:0}），所以没引入签名那套。
+     * 拿不到视频时就返回空列表，让上层如实说"这边没看到什么"，别编。
+     */
+    public List<FeedItem> feed(String source, int count) throws IOException {
+        int limit = Math.max(1, Math.min(30, count));
+        String normalized = source == null ? "hot" : source.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.equals("following") && !normalized.equals("later")) {
+            normalized = "hot";
+        }
+        if (normalized.equals("hot")) {
+            JsonNode root = get(API + "/x/web-interface/ranking/v2?rid=0&type=all", HOME);
+            if (root.path("code").asInt(-1) != 0) {
+                throw new BilibiliException("取热门榜失败：" + root.path("message").asText(""));
+            }
+            List<FeedItem> items = new ArrayList<>();
+            for (JsonNode video : root.path("data").path("list")) {
+                FeedItem item = toFeedItem(video, "热门", "");
+                if (item != null && items.size() < limit) {
+                    items.add(item);
+                }
+            }
+            return items;
+        }
+
+        if (!configured) {
+            throw new BilibiliException("这条要靠登录态，但现在没配置 B 站账号（服务器 .env 的 BILI_SESSDATA）。");
+        }
+        if (normalized.equals("later")) {
+            JsonNode root = get(API + "/x/v2/history/toview", HOME);
+            if (root.path("code").asInt(-1) != 0) {
+                throw new BilibiliException("取「稍后再看」失败：" + root.path("message").asText("")
+                        + "（登录态可能过期了）。");
+            }
+            List<FeedItem> items = new ArrayList<>();
+            for (JsonNode video : root.path("data").path("list")) {
+                FeedItem item = toFeedItem(video, "稍后再看", video.path("desc").asText(""));
+                if (item != null && items.size() < limit) {
+                    items.add(item);
+                }
+            }
+            return items;
+        }
+
+        JsonNode root = get(API + "/x/polymer/web-dynamic/v1/feed/all?type=video&page=1",
+                "https://t.bilibili.com/");
+        if (root.path("code").asInt(-1) != 0) {
+            throw new BilibiliException("取关注动态失败：" + root.path("message").asText("")
+                    + "（登录态可能过期了）。");
+        }
+        List<FeedItem> items = new ArrayList<>();
+        for (JsonNode entry : root.path("data").path("items")) {
+            JsonNode archive = entry.path("modules").path("module_dynamic").path("major").path("archive");
+            if (archive.isMissingNode() || archive.isEmpty()) {
+                continue;
+            }
+            String bvid = archive.path("bvid").asText("");
+            if (bvid.isBlank()) {
+                continue;
+            }
+            if (items.size() >= limit) {
+                break;
+            }
+            items.add(new FeedItem(bvid, archive.path("title").asText(""),
+                    "", archive.path("desc").asText(""),
+                    seconds(archive.path("duration_text").asText("")),
+                    archive.path("stat").path("play").asLong(0), "关注动态"));
+        }
+        return items;
+    }
+
+    private FeedItem toFeedItem(JsonNode video, String source, String desc) {
+        String bvid = video.path("bvid").asText("");
+        if (bvid.isBlank()) {
+            return null;
+        }
+        return new FeedItem(bvid, video.path("title").asText(""),
+                video.path("owner").path("name").asText(""),
+                desc.isBlank() ? video.path("desc").asText("") : desc,
+                video.path("duration").asInt(0),
+                video.path("stat").path("view").asLong(0), source);
+    }
+
+    /** {@code "12:34"} / {@code "1:02:03"} → 秒；解析不了给 0 */
+    private static int seconds(String durationText) {
+        if (durationText == null || durationText.isBlank()) {
+            return 0;
+        }
+        int total = 0;
+        for (String part : durationText.trim().split(":")) {
+            try {
+                total = total * 60 + Integer.parseInt(part.trim());
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return total;
+    }
 
     /**
      * 取一个**能直接下载的 mp4 地址**（2026-10-17 加，给"没字幕就抽帧"兜底用）。
