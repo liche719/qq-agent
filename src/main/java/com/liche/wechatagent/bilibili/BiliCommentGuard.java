@@ -59,6 +59,21 @@ public class BiliCommentGuard {
      * @return 空 = 可以；有值 = 拒绝理由（直接给模型看，它会如实转述）
      */
     public Optional<String> reject(String bvid, String message) {
+        return reject(bvid, message, null);
+    }
+
+    /**
+     * 同上，但**区分顶级评论和楼中楼回复**（2026-10-20 加）。
+     *
+     * <p>为什么必须分：`rootRpid > 0` 是"在某个楼层里回复别人"，而"同一个视频只评一次"
+     * 这条规则本来是为了防止**在别人视频底下刷多条独立评论**。如果连回复也拦，
+     * 那它一旦在某个视频下评过，别人再怎么回它、它都只能干看着——这不是护栏，是哑巴。
+     *
+     * <p>所以：顶级评论照旧"一个视频一条"；回复只保留"每条回复只回一次"（由台账判重）
+     * 加上每日总量与间隔，防刷屏的底线都还在。
+     */
+    public Optional<String> reject(String bvid, String message, Long rootRpid) {
+        boolean isReply = rootRpid != null && rootRpid > 0;
         if (!enabled) {
             return Optional.of("评论功能被配置关掉了（bilibili.comment.enabled=false），只能看不能发。");
         }
@@ -83,9 +98,12 @@ public class BiliCommentGuard {
         if (today >= dailyLimit) {
             return Optional.of("今天已经评论 " + today + " 条，到上限了（" + dailyLimit + " 条/天）。");
         }
-        long sameVideo = logs.countSucceededForVideo(bvid == null ? "" : bvid.trim());
-        if (sameVideo > 0) {
-            return Optional.of("这个视频已经评过 " + sameVideo + " 次了，同一个视频只评一次。");
+        if (!isReply) {
+            long sameVideo = logs.countSucceededForVideo(bvid == null ? "" : bvid.trim());
+            if (sameVideo > 0) {
+                return Optional.of("这个视频已经评过 " + sameVideo + " 次了，同一个视频只评一次。"
+                        + "（想接着聊就用回复：把 rootRpid 填你那条评论的 rpid）");
+            }
         }
         Optional<LocalDateTime> last = logs.lastSucceededAt();
         if (last.isPresent()) {

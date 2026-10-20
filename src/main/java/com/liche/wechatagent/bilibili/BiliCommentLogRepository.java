@@ -1,6 +1,8 @@
 package com.liche.wechatagent.bilibili;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -21,4 +23,10 @@ public interface BiliCommentLogRepository extends JpaRepository<BiliCommentLog, 
     /** 最后一条成功的评论时间（冷却间隔按它算） */
     @Query("select max(l.createdAt) from BiliCommentLog l where l.resultCode = 0")
     Optional<LocalDateTime> lastSucceededAt();
+
+    /** 它自己发成功、且拿得到 rpid 的评论（最近的在前）——拉回复时用 */
+    List<BiliCommentLog> findTop20ByResultCodeAndRpidGreaterThanOrderByIdDesc(int resultCode, long rpid);
+
+    /** 这条回复是不是已经回过了（按对方那条回复的 rpid 判重） */
+    boolean existsByParentRpidAndResultCode(long parentRpid, int resultCode);
 }

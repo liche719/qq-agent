@@ -32,15 +32,18 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
      * 不去动整个自主轮的思考设置。
      */
     private final dev.langchain4j.model.chat.ChatModel chatModel;
+    /** 评论台账：查"我发过哪些评论"和"这条回复我回过没有" */
+    private final BiliCommentLogRepository comments;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public BiliCommentTool(BilibiliClient client, BiliCommentGuard guard,
+    public BiliCommentTool(BilibiliClient client, BiliCommentGuard guard, BiliCommentLogRepository comments,
                            org.springframework.beans.factory.ObjectProvider<dev.langchain4j.model.chat.ChatModel> chatModels) {
-        this(client, guard, chatModels == null ? null : chatModels.getIfAvailable());
+        this(client, guard, comments, chatModels == null ? null : chatModels.getIfAvailable());
     }
 
-    private BiliCommentTool(BilibiliClient client, BiliCommentGuard guard,
+    private BiliCommentTool(BilibiliClient client, BiliCommentGuard guard, BiliCommentLogRepository comments,
                             dev.langchain4j.model.chat.ChatModel chatModel) {
+        this.comments = comments;
         this.chatModel = chatModel;
         this.client = client;
         this.guard = guard;
@@ -104,6 +107,66 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
         }
     }
 
+    /** 截断（按列宽留出省略号） */
+    private static String clip(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(1, max - 1)) + "…";
+    }
+
+    /**
+     * 列出「别人在**它自己发的评论**下的回复」（2026-10-20 加）。
+     *
+     * <p>为什么要有这个工具：它发完评论就走了，别人回了它也不会知道。用户的要求是
+     * 「回复笨鱼自己发的评论下，别人回复的话」——所以它得先**看得见**，才谈得上回。
+     *
+     * <p>会过滤掉两类：**它自己发的**（同 mid）和**已经回过的**（台账里有 parent_rpid 记录），
+     * 所以重复调用不会给它一堆"已经处理过"的噪音。
+     */
+    @Tool(value = "看看有没有人在你发过的 B 站评论下面回复你。只列出**你还没回过的**。"
+            + "看到想回的，用 commentBilibili（rootRpid 填你那条评论的 rpid，parentRpid 填对方那条回复的 rpid）去回。"
+            + "**别人没回你就别主动找话说**；也别为了「有互动」去回一句没内容的。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public ToolBusinessResult listMyCommentReplies(Integer limit) {
+        if (!client.configured()) {
+            return ToolBusinessResult.failure("B 站登录态没配，读不到回复");
+        }
+        int perComment = Math.max(1, Math.min(20, limit == null ? 10 : limit));
+        java.util.List<BiliCommentLog> mine = comments
+                .findTop20ByResultCodeAndRpidGreaterThanOrderByIdDesc(0, 0L).stream().limit(8).toList();
+        if (mine.isEmpty()) {
+            return ToolBusinessResult.success("你还没在 B 站发过评论，没有人会回复你。");
+        }
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (BiliCommentLog log : mine) {
+            java.util.List<BilibiliClient.CommentReply> replies;
+            try {
+                replies = client.replies(log.getAid(), log.getRpid(), perComment);
+            } catch (Exception exception) {
+                // 单条拉失败不影响其他条（风控 -352 很常见）
+                continue;
+            }
+            for (BilibiliClient.CommentReply reply : replies) {
+                if (reply.rpid() == log.getRpid() || reply.message().isBlank()) {
+                    continue;
+                }
+                if (comments.existsByParentRpidAndResultCode(reply.rpid(), 0)) {
+                    continue; // 已经回过了
+                }
+                lines.add("· 在《" + clip(log.getVideoTitle(), 30) + "》下，" + reply.uname()
+                        + " 回你：「" + clip(reply.message(), 120) + "」\n"
+                        + "  BV：" + log.getBvid() + "  你的评论 rpid=" + log.getRpid()
+                        + "  对方回复 rpid=" + reply.rpid());
+            }
+        }
+        if (lines.isEmpty()) {
+            return ToolBusinessResult.success("你发过的评论下面还没有人回复你（或者都已经回过了）。");
+        }
+        return ToolBusinessResult.success("有 " + lines.size() + " 条新回复：\n" + String.join("\n", lines));
+    }
+
     @Tool(value = "在 B 站视频下发一条评论，或回复某条评论（楼中楼）。"
             + "**这是拿机主的账号说话，只有这两种情况才用**：①你自己刷视频时确实有话想说；"
             + "②机主明确让你去发。别因为一句闲聊就发评论。"
@@ -122,7 +185,7 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
             return ToolBusinessResult.failure("B 站没有登录态，发不了评论——让机主去面板「B站」页签扫一次码。");
         }
 
-        Optional<String> rejected = guard.reject(videoId, message);
+        Optional<String> rejected = guard.reject(videoId, message, rootRpid);
         if (rejected.isPresent()) {
             return ToolBusinessResult.failure(rejected.get());
         }

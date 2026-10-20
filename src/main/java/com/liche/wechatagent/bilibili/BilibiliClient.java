@@ -615,6 +615,67 @@ public class BilibiliClient {
         }
     }
 
+    /** 别人在某条评论下的一条回复 */
+    public record CommentReply(long rpid, long rootRpid, long parentRpid, long mid,
+                               String uname, String message, long createdAtEpoch) {
+    }
+
+    /**
+     * 拉「某条评论下的回复」（2026-10-20 加，用于回复别人对它的回复）。
+     *
+     * <p>实测（`/x/v2/reply/reply?oid=<aid>&type=1&root=<评论rpid>`）：
+     * {@code code:0} + {@code data.replies} 数组；没人回复时 {@code replies} 是 {@code null} 而不是空数组。
+     * **不需要 wbi 签名**，但要带 Cookie（否则看不到部分内容）。
+     *
+     * @param rootRpid 那条被回复的评论（就是它自己发的那条）
+     */
+    public java.util.List<CommentReply> replies(long aid, long rootRpid, int limit) throws IOException {
+        java.util.List<CommentReply> result = new java.util.ArrayList<>();
+        if (aid <= 0 || rootRpid <= 0) {
+            return result;
+        }
+        int size = Math.max(1, Math.min(20, limit));
+        Request request = new Request.Builder()
+                .url(API + "/x/v2/reply/reply?oid=" + aid + "&type=1&root=" + rootRpid
+                        + "&ps=" + size + "&pn=1")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/video/av" + aid)
+                .header("Cookie", cookieHeader())
+                .get()
+                .build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站回复接口 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            if (code != 0) {
+                // -352 = 风控；其他码也照实说，别让调用方以为"没人回复"
+                throw new BilibiliException("拉回复失败（code " + code + "）："
+                        + json.path("message").asText(""));
+            }
+            JsonNode arr = json.path("data").path("replies");
+            if (arr == null || !arr.isArray()) {
+                return result;
+            }
+            for (JsonNode node : arr) {
+                long rpid = node.path("rpid").asLong(0);
+                if (rpid <= 0) {
+                    continue;
+                }
+                result.add(new CommentReply(
+                        rpid,
+                        node.path("root").asLong(0),
+                        node.path("parent").asLong(0),
+                        node.path("mid").asLong(0),
+                        node.path("member").path("uname").asText(""),
+                        node.path("content").path("message").asText(""),
+                        node.path("ctime").asLong(0)));
+            }
+            return result;
+        }
+    }
+
     private String viewError(int code, String message) {
         if (code == -404) {
             return "这个视频不存在或已被删除。";
