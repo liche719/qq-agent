@@ -1,4 +1,4 @@
-# 已知坑与约定（完整版 · 72 条）
+# 已知坑与约定（完整版 · 74 条）
 
 > 本文件是 `AGENTS.md` 第 5 节的**完整版**。`AGENTS.md` 因为超过 harness 的 64 KB 读取上限会被截断，
 > 现在只保留「违反就出线上事故」的十几条硬约定；**细节、来龙去脉、实测证据全在这里**。
@@ -6,7 +6,7 @@
 > **编号是稳定契约：不要重排、不要插号、不要合并。** 全项目的代码注释和 `docs/` 其它文档都按
 > 「坑 38」「坑 52」这样引用；改了编号会让这些引用全部指错。
 >
-> 新踩的坑**追加到下一条编号**（现在最后一条是 72），别往中间插。
+> 新踩的坑**追加到下一条编号**（现在最后一条是 74），别往中间插。
 >
 > ⚠️ **这是一份按时间累积的记录，条目本身不改写**（改了就等于抹掉当时为什么这么做）。
 > 但凡某条的**结论/现状**后来变了，都在原条目后面用 `（日期 注：…）` 标注。
@@ -33,11 +33,11 @@
 | **记忆与提示词** | 16、42、43、62、63 |
 | **工具框架与 AgentLoop** | 27、28、39、45、55、60、61、**66、67** |
 | **外部集成**（SearXNG / 墨墨 / 证书 / 域名 / B站） | 3、21、22、23、26、**70、72** |
-| **自主模块「它自己」** | 64、65 |
+| **自主模块「它自己」** | 64、65、74 |
 
 ---
 
-## 原文（1 ~ 72）
+## 原文（1 ~ 74）
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
    **（2026-10-10 注：生产 2026-09-18 已迁到 PostgreSQL 16 + pgvector、MySQL 容器 2026-09-20 退役，
@@ -305,5 +305,23 @@
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
+
+
+
+73. **「记账」是护栏的前置条件：记账失败必须让护栏降级，不能静默通过**（2026-10-20 实测，差点一天烧 30 元）：
+   新增的自主活动「刷会儿 B 站」用 `agent_self_event` 里 `topic=bilibili` 的事件当"今天跑过没"的依据。
+   记账写的是 `SelfCoreService.appendEvent(...)`，**它会校验 evidence 必须指向真实记录**
+   （`conv:<id>` / `event:<id>` / `quest:<id>` / `note:<id>` / `run:<id>`）。我传了 `run:bilibili`，被判
+   **「证据对不上任何真实记录：run:bilibili」** 抛异常，而调用处 `catch` 只打了条 WARN —— 于是：
+   事件没落库 → `due()` 查不到"刚跑过" → **下一个心跳（每分钟）又跑一轮，每轮约 0.02 元 = 一天 30 元**。
+   实测日志就是这个形状：`14:19:56 跑完` → `14:20:00 又开跑`。
+   - **修法两条一起**：① 记账别走那个带证据校验的入口，直接 `events.save(new AgentSelfEvent(...))`；
+     ② **进程内再加一个 `volatile lastRunAt` 兜底**——表写失败也挡住连跑（重启后靠表里的 topic 事件）。
+   - **教训（可迁移）**：凡是"这次做过了没有"靠某条记录来判断的护栏，**记录失败就等于护栏失效**。
+     要么让记录失败=整轮失败，要么加一条不依赖外部存储的兜底。
+   - 顺带两条同轮发现：① 本地容器**没装 ffmpeg/ffprobe**，`readBilibiliVideo` 对没字幕的视频抽帧失败
+     （生产镜像里有，这是本地环境差异，不是 bug）；② 刷视频这个活动要能说话就得把
+     `AgentQuestTool` 放进工具白名单（`selfWantToSay` 在它里面），但要用 `deniedTools` 挡掉
+     `selfQuest*` 那一串，否则"刷会儿"会变成"开方向"。
 
 

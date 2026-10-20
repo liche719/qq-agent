@@ -457,6 +457,14 @@ memory:
   # 触发条件：自上次作业以来它自己事件的兴趣累积过阈值 / 闲置这么久且手上还有没结的事
   self-quest-interest-threshold: ${MEMORY_SELF_QUEST_INTEREST_THRESHOLD:8}
   self-quest-idle-hours: ${MEMORY_SELF_QUEST_IDLE_HOURS:10}
+  # 「刷会儿 B 站」这个自主活动（2026-10-20）。只在谷时跑：北京时间 09–12、14–18 是 DeepSeek 峰时，
+  # 刷视频不是急事，躲开它省钱；周末整天算谷时。评论的硬护栏另有 bilibili.comment.*。
+  self-bilibili-enabled: ${MEMORY_SELF_BILIBILI_ENABLED:true}
+  self-bilibili-daily-limit: ${MEMORY_SELF_BILIBILI_DAILY_LIMIT:1}
+  self-bilibili-interval-hours: ${MEMORY_SELF_BILIBILI_INTERVAL_HOURS:6}
+  self-bilibili-offpeak-only: ${MEMORY_SELF_BILIBILI_OFFPEAK_ONLY:true}
+  self-bilibili-max-rounds: ${MEMORY_SELF_BILIBILI_MAX_ROUNDS:8}
+  self-bilibili-budget-yuan: ${MEMORY_SELF_BILIBILI_BUDGET_YUAN:0.15}
   # 它的「嘴」：想说的话**当场就发**（作业跑完立刻发，没跑作业时下一次心跳发），
   # 一天最多 N 条，**发出去才算**；拦住的不丢，标 SUPPRESSED 留在库里让面板看得见。
   self-speak-enabled: ${MEMORY_SELF_SPEAK_ENABLED:true}

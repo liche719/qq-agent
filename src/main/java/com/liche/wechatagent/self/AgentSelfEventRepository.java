@@ -26,4 +26,14 @@ public interface AgentSelfEventRepository extends JpaRepository<AgentSelfEvent, 
 
     /** 判断类事件的类别清单（去重靠服务层，SQL 层不做 distinct 以免方言差异） */
     List<AgentSelfEvent> findByKindAndCreatedAtAfterOrderByIdAsc(String kind, LocalDateTime after);
+
+    /**
+     * 某个活动（用 {@code topic} 标记，如 {@code bilibili}）在这个时间点之后跑过几次
+     * —— 2026-10-20 加：自主活动用它算"今天还欠不欠"，**不新建表**。
+     */
+    long countByTopicAndCreatedAtAfter(String topic, LocalDateTime after);
+
+    /** 某个活动最近跑过的那条（冷却间隔按它算） */
+    List<AgentSelfEvent> findByTopicAndCreatedAtAfterOrderByIdDesc(String topic, LocalDateTime after,
+                                                                   Pageable pageable);
 }
