@@ -84,6 +84,18 @@
             <artifactId>jsoup</artifactId>
             <version>1.18.3</version>
         </dependency>
+        <!-- 二维码生成（B站扫码登录用，2026-10-20 加）：core 是纯 Java 编码器，
+             javase 只用它的 MatrixToImageWriter 输出 PNG。 -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+            <version>3.5.3</version>
+        </dependency>
         <!-- 微信 iLink Bot Java SDK（官方 iLink 协议客户端，已通过供应链安全审计） -->
         <dependency>
             <groupId>io.github.lith0924</groupId>

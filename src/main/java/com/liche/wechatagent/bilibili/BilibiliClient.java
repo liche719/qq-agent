@@ -48,15 +48,33 @@ public class BilibiliClient {
     private final OkHttpClient http;
     private final OkHttpClient redirectProbe;
     private final ObjectMapper objectMapper;
-    private final String cookie;
-    private final boolean configured;
+    /** .env 里的那份（历史遗留，只有一个 SESSDATA）；库里有扫码凭据时以库里为准 */
+    private final String envCookie;
+    /** 扫码登录存库的凭据（2026-10-20 加）；为空表示还没接上 */
+    private BiliCredentialService credentialService;
+
+    /** 扫码登录后库里那份优先；没有才用 .env 这份老的 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCredentialService(BiliCredentialService credentialService) {
+        this.credentialService = credentialService;
+    }
+
+    /** 当前生效的 Cookie 头（每次调用现取：扫码登录后不用重启） */
+    private String cookieHeader() {
+        if (credentialService != null) {
+            String fromStore = credentialService.cookieHeader();
+            if (fromStore != null && !fromStore.isBlank()) {
+                return fromStore;
+            }
+        }
+        return envCookie;
+    }
 
     public BilibiliClient(ObjectMapper objectMapper,
                           @Value("${bilibili.sessdata:}") String sessdata,
                           @Value("${bilibili.timeout-seconds:20}") int timeoutSeconds) {
         this.objectMapper = objectMapper;
-        this.cookie = buildCookieHeader(sessdata);
-        this.configured = !cookie.isBlank();
+        this.envCookie = buildCookieHeader(sessdata);
         int timeout = Math.max(3, Math.min(120, timeoutSeconds));
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(Math.min(timeout, 8)))
@@ -68,7 +86,38 @@ public class BilibiliClient {
     }
 
     public boolean configured() {
-        return configured;
+        return !cookieHeader().isBlank();
+    }
+
+    /**
+     * 登录态自检（2026-10-20 加）：{@code /x/web-interface/nav} 会回 {@code isLogin}、昵称和 uid。
+     * 面板"扫码完了到底登没登"就看它。
+     */
+    public record NavInfo(boolean loggedIn, long mid, String uname) {
+    }
+
+    public NavInfo nav() throws IOException {
+        return navWithCookie(cookieHeader());
+    }
+
+    /** 用指定 Cookie 问一次登录态（扫码成功后还没存库时要先验证再存） */
+    public NavInfo navWithCookie(String cookie) throws IOException {
+        Request.Builder builder = new Request.Builder()
+                .url(API + "/x/web-interface/nav")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", HOME);
+        if (cookie != null && !cookie.isBlank()) {
+            builder.header("Cookie", cookie);
+        }
+        try (Response response = http.newCall(builder.get().build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站接口 HTTP " + response.code());
+            }
+            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode data = root.path("data");
+            return new NavInfo(data.path("isLogin").asBoolean(false),
+                    data.path("mid").asLong(0), data.path("uname").asText(""));
+        }
     }
 
     /** 视频标识：BV 号优先；只有 av 号时用 aid。page 是分 P（1 起）。 */
@@ -210,7 +259,7 @@ public class BilibiliClient {
             }
         }
         if (usable.isEmpty()) {
-            return new Transcript(false, configured
+            return new Transcript(false, configured()
                     ? "这个视频没有可用字幕（UP 主没传、也没有 B 站 AI 字幕）。"
                     : "这个视频没读到字幕（也可能是没登录 B 站账号，AI 字幕需要登录态）。",
                     "", false, "");
@@ -270,7 +319,7 @@ public class BilibiliClient {
             return items;
         }
 
-        if (!configured) {
+        if (!configured()) {
             throw new BilibiliException("这条要靠登录态，但现在没配置 B 站账号（服务器 .env 的 BILI_SESSDATA）。");
         }
         if (normalized.equals("later")) {
@@ -384,8 +433,8 @@ public class BilibiliClient {
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", "https://www.bilibili.com/video/" + bvid)
                 .get();
-        if (!cookie.isBlank()) {
-            builder.header("Cookie", cookie);
+        if (!cookieHeader().isBlank()) {
+            builder.header("Cookie", cookieHeader());
         }
         try (Response response = http.newCall(builder.build()).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
@@ -503,8 +552,8 @@ public class BilibiliClient {
                 .header("Referer", referer == null ? HOME : referer)
                 .header("Accept-Language", "zh-CN,zh;q=0.9")
                 .get();
-        if (!cookie.isBlank()) {
-            builder.header("Cookie", cookie);
+        if (!cookieHeader().isBlank()) {
+            builder.header("Cookie", cookieHeader());
         }
         try (Response response = http.newCall(builder.build()).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
@@ -586,3 +635,5 @@ public class BilibiliClient {
         }
     }
 }
+
+

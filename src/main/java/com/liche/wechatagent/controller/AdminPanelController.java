@@ -42,6 +42,7 @@ public class AdminPanelController {
         tabs.add(core("overview", "总览"));
         tabs.add(core("qq", "QQ 通道"));
         tabs.add(core("llm", "模型与搜索"));
+        tabs.add(core("bili", "B站"));
         tabs.add(core("maimemo", "背单词"));
         tabs.add(core("tasks", "任务"));
         tabs.add(core("scheduled", "定时任务"));
