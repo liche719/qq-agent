@@ -180,6 +180,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - **它自己的话**在一张表 `agent_self_note`：`kind=BLOCK` + `slot` 表达"我对自己的描述"（改写=插新行+旧行标失效，
     历史自带），其它 kind 只追加。
   - 研究活动**当前关着**（`MEMORY_SELF_RESEARCH_ENABLED=false`），只留刷 B 站。
+- **对话的思考档位按跳分**：第一跳 `dialog_first=high`（读懂意图、决定动不动手），之后 `dialog=low`（填参数、看结果、收尾）。实测同题 high/low 的思考量只差 100~200 token（约 0.0008 元），而少一跳能省 0.007 元。
 - **搜索**：DeepSeek 优先（**每账号每天 30 次**，Redis 计数、重启不重置），超了自动落 SearXNG 兜底。
   抓网页在 Jsoup 拿不到东西时才用 DS `fetch` 补一次，共用同一份配额；`github.com/.../blob/...` 自动转 raw 纯文本（免费）。
 - **⚠️ 真实用户数据，不许动**：`memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；

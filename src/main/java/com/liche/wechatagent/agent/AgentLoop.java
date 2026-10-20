@@ -306,7 +306,7 @@ public class AgentLoop {
                 }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
                 String roundText = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
-                        toolResults, scope);
+                        toolResults, scope, round);
                 if (roundText != null) {
                     return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
                 }
@@ -388,15 +388,21 @@ public class AgentLoop {
     private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
                                   Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                   Map<String, ToolExecutionOutcome> toolResults,
-                                  TurnScope scope) {
+                                  TurnScope scope, int round) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicReference<Boolean> hasTools = new AtomicReference<>(false);
 
         final long traceStartedNanos = System.nanoTime();
-        streamingChatModel.chat(ChatRequest.builder().messages(messages).toolSpecifications(specs).build(),
-                new StreamingChatResponseHandler() {
+        // 第一跳要规划（读意图、选工具），用 DIALOG_FIRST 那一档；后面几跳只是填参数/看结果/收尾。
+        // 注意：场景是 ThreadLocal，必须包住 chat() 这次**同步**调用（模型在 chat 开头读它），
+        // 回调是异步的、在别的线程，但那时候档位已经写进请求体了。
+        LlmScenario scenario = round == 0 ? LlmScenario.DIALOG_FIRST : LlmScenario.DIALOG;
+        dev.langchain4j.model.chat.request.ChatRequest chatRequest =
+                ChatRequest.builder().messages(messages).toolSpecifications(specs).build();
+        LlmScenario.run(scenario, () -> {
+            streamingChatModel.chat(chatRequest, new StreamingChatResponseHandler() {
                     @Override
                     public void onPartialResponse(String partial) {
                         acc.get().append(partial); // 仅内部累积
@@ -443,7 +449,9 @@ public class AgentLoop {
                         error.set(throwable);
                         latch.countDown();
                     }
-                });
+            });
+            return null;
+        });
 
         try {
             if (!latch.await(effectiveStreamTimeoutSeconds(), TimeUnit.SECONDS)) {
