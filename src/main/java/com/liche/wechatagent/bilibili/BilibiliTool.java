@@ -31,13 +31,17 @@ public class BilibiliTool implements AgentToolProvider {
     private final int maxTranscriptChars;
     /** 抽帧兜底最多下多少字节的视频（360p，2 分钟约 9MB；这里给到 60MB ≈ 十几分钟） */
     private final long maxDownloadBytes;
+    /** 「它看过哪些视频」的台账（2026-10-20）：**工具埋点，不靠模型自述** */
+    private final BiliViewLogRepository viewLog;
 
     public BilibiliTool(BilibiliClient client,
                         com.liche.wechatagent.media.VideoFrameService videoFrameService,
                         com.liche.wechatagent.media.MediaToolContextService mediaContext,
                         @Value("${bilibili.max-transcript-chars:6000}") int maxTranscriptChars,
-                        @Value("${bilibili.frame-fallback-max-bytes:62914560}") long maxDownloadBytes) {
+                        @Value("${bilibili.frame-fallback-max-bytes:62914560}") long maxDownloadBytes,
+                        BiliViewLogRepository viewLog) {
         this.client = client;
+        this.viewLog = viewLog;
         this.videoFrameService = videoFrameService;
         this.mediaContext = mediaContext;
         this.maxTranscriptChars = Math.max(500, Math.min(20_000, maxTranscriptChars));
@@ -79,6 +83,7 @@ public class BilibiliTool implements AgentToolProvider {
                     .append("，时长：").append(duration(info.durationSeconds())).append('\n');
 
             if (info.pages().isEmpty()) {
+                recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_FAILED, "拿不到分P信息");
                 out.append(describeUnavailable(info.title(), "拿不到分P信息（接口没返回），字幕读不了。"));
                 return ToolBusinessResult.success(out.toString());
             }
@@ -93,6 +98,7 @@ public class BilibiliTool implements AgentToolProvider {
             }
 
             BilibiliClient.Transcript transcript = client.transcript(info.bvid(), page.cid(), maxTranscriptChars);
+            FrameLook look = null;
             if (transcript.available()) {
                 out.append("字幕（").append(transcript.language().isBlank() ? "语言未知" : transcript.language())
                         .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传").append("）：\n");
@@ -100,13 +106,21 @@ public class BilibiliTool implements AgentToolProvider {
             } else {
                 // 没字幕不等于看不到：2026-10-17 起会下 360p 抽帧兜底，把画面交给视觉模型（见 lookAtFrames）
                 out.append("字幕：").append(transcript.reason()).append('\n');
-                FrameLook look = lookAtFrames(info.bvid(), page.cid());
+                look = lookAtFrames(info.bvid(), page.cid());
                 out.append(look.text());
                 if (!look.ok()) {
                     // 抽帧也没成，才说"只能依据标题和简介"——抽成了再说这句会自相矛盾
                     out.append("\n（所以**只能**依据上面的简介，不要凭标题「").append(info.title())
                             .append("」编造视频里讲了什么。）");
                 }
+            }
+            if (transcript.available()) {
+                recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_TRANSCRIPT,
+                        transcript.text() == null ? "" : transcript.text().length() + " 字");
+            } else {
+                recordView(info.bvid(), info.title(),
+                        look != null && look.ok() ? BiliViewLog.OUTCOME_FRAMES : BiliViewLog.OUTCOME_FAILED,
+                        look != null && look.ok() ? "抽帧成功" : "没字幕也没抽到帧");
             }
             return ToolBusinessResult.success(out.toString());
         } catch (BilibiliClient.BilibiliException exception) {
@@ -159,6 +173,29 @@ public class BilibiliTool implements AgentToolProvider {
             return ToolBusinessResult.failure(exception.getMessage());
         } catch (Exception exception) {
             throw new IllegalStateException("看 B 站失败：" + exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * 记一条「它看过这个视频」（2026-10-20）。
+     *
+     * <p>为什么在工具里记而不是让它自己报：**模型的自我总结不一定可信**，
+     * 而用户明确要求"不干扰它，但我得知道它做了什么"。台账失败不影像读取本身。
+     */
+    private void recordView(String bvid, String title, String outcome, String detail) {
+        if (viewLog == null) {
+            return;
+        }
+        try {
+            BiliViewLog entry = new BiliViewLog();
+            entry.setBvid(clip(bvid == null ? "" : bvid, 30));
+            entry.setTitle(clip(title == null ? "" : title, 250));
+            entry.setOutcome(outcome == null ? "" : outcome);
+            entry.setDetail(clip(detail == null ? "" : detail, 60));
+            entry.setCreatedAt(java.time.LocalDateTime.now());
+            viewLog.save(entry);
+        } catch (RuntimeException ignored) {
+            // 记台账失败不能盖过"读视频"这件事本身
         }
     }
 
@@ -265,3 +302,4 @@ public class BilibiliTool implements AgentToolProvider {
         return flat.length() <= max ? flat : flat.substring(0, max) + "…";
     }
 }
+

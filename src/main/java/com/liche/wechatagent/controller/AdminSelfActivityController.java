@@ -3,7 +3,10 @@ package com.liche.wechatagent.controller;
 import com.liche.wechatagent.self.AgentSelfNote;
 import com.liche.wechatagent.self.AgentSelfNoteRepository;
 import com.liche.wechatagent.self.AgentSeedRepository;
+import com.liche.wechatagent.bilibili.BiliCommentLog;
 import com.liche.wechatagent.bilibili.BiliCommentLogRepository;
+import com.liche.wechatagent.bilibili.BiliViewLog;
+import com.liche.wechatagent.bilibili.BiliViewLogRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +39,7 @@ public class AdminSelfActivityController {
     private final AgentSelfNoteRepository events;
     private final AgentSeedRepository seeds;
     private final BiliCommentLogRepository comments;
+    private final BiliViewLogRepository views;
     private final boolean selfEnabled;
     private final boolean researchEnabled;
     private final boolean bilibiliEnabled;
@@ -44,6 +48,7 @@ public class AdminSelfActivityController {
     public AdminSelfActivityController(AgentSelfNoteRepository events,
                                        AgentSeedRepository seeds,
                                        BiliCommentLogRepository comments,
+                                       BiliViewLogRepository views,
                                        @Value("${memory.self-enabled:false}") boolean selfEnabled,
                                        @Value("${memory.self-research-enabled:true}") boolean researchEnabled,
                                        @Value("${memory.self-bilibili-enabled:true}") boolean bilibiliEnabled,
@@ -51,6 +56,7 @@ public class AdminSelfActivityController {
         this.events = events;
         this.seeds = seeds;
         this.comments = comments;
+        this.views = views;
         this.selfEnabled = selfEnabled;
         this.researchEnabled = researchEnabled;
         this.bilibiliEnabled = bilibiliEnabled;
@@ -90,6 +96,50 @@ public class AdminSelfActivityController {
         row.put("lastAt", lastAt);
         row.put("lastSummary", lastSummary);
         return row;
+    }
+
+    /**
+     * 它**看过哪些视频**（2026-10-20）。
+     *
+     * <p>用户的原话：「我不干扰它，但是我得知道它做了什麼」。这张表是**工具埋点**写的，
+     * 不靠它自述——所以即使它的总结含糊，这里看到的也是真的。
+     */
+    @GetMapping("/bilibili-views")
+    public Map<String, Object> bilibiliViews() {
+        List<Map<String, Object>> rows = views.findTop100ByOrderByIdDesc().stream().map(view -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("at", view.getCreatedAt() == null ? "" : view.getCreatedAt().toString().replace('T', ' '));
+            row.put("title", "https://www.bilibili.com/video/" + view.getBvid());
+            row.put("video", view.getTitle());
+            row.put("outcome", view.getOutcome() + (view.getDetail().isBlank() ? "" : "（" + view.getDetail() + "）"));
+            return row;
+        }).toList();
+        return Map.of("rows", rows);
+    }
+
+    /**
+     * 它**在 B 站说过什么**（2026-10-20）：评论原文 + 结果。
+     *
+     * <p>数据一直在 {@code bili_comment_log} 里，只是没接到面板上；用户要"知道它做了什么"，
+     * 这是最该摊开看的一样——用的是他的账号在说话。
+     */
+    @GetMapping("/bilibili-comments")
+    public Map<String, Object> bilibiliComments() {
+        List<Map<String, Object>> rows = comments.findAll(
+                        org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id"))
+                .stream().limit(100).map(comment -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("at", comment.getCreatedAt() == null ? ""
+                            : comment.getCreatedAt().toString().replace('T', ' '));
+                    row.put("video", comment.getVideoTitle());
+                    row.put("content", comment.getMessage());
+                    row.put("result", comment.succeeded() ? "已发出" : ("被拒 " + comment.getResultCode()
+                            + "：" + comment.getResultMessage()));
+                    row.put("link", comment.getBvid().isBlank() ? ""
+                            : "https://www.bilibili.com/video/" + comment.getBvid());
+                    return row;
+                }).toList();
+        return Map.of("rows", rows);
     }
 }
 

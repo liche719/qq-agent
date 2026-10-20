@@ -112,6 +112,17 @@ public class AdminPanelController {
                         column("review", "复查（FSRS）", true),
                         column("status", "状态", false)), List.of()),
                 bars("每周教训事件数（看趋势，不看绝对值）", "/api/admin/self/lesson-bars?weeks=8", "次"),
+                table("它刷过的视频（工具埋点，不是它自述）", "/api/admin/self/bilibili-views", List.of(
+                        column("at", "时间", false),
+                        column("title", "链接", false),
+                        column("video", "视频", true),
+                        column("outcome", "读到了什么", false)), List.of()),
+                table("它在 B 站说过的话（用的是机主的账号）", "/api/admin/self/bilibili-comments", List.of(
+                        column("at", "时间", false),
+                        column("video", "视频", true),
+                        column("content", "评论原文", true),
+                        column("result", "结果", false),
+                        column("link", "链接", false)), List.of()),
                 table("自主活动（它自己的时间花在哪）", "/api/admin/self/activities", List.of(
                         column("state", "状态", false),
                         column("activity", "活动", true),
