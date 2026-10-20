@@ -136,6 +136,10 @@ services:
       # 自主模块（「它自己那一侧」）。**必须透传**：compose 只传列出的变量（坑 36）。
       # MEMORY_SELF_OWNER_OPENID 留空 = 模块不工作（fail-closed）；要启用得在服务器 .env 配机主 openid。
       MEMORY_SELF_ENABLED: ${MEMORY_SELF_ENABLED:-true}
+      # 留空 = 工作区关闭。生产在 .env 里设 /app/self-workspace
+      MEMORY_SELF_WORKSPACE_DIR: ${MEMORY_SELF_WORKSPACE_DIR:-}
+      MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES: ${MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES:-1048576}
+      MEMORY_SELF_WORKSPACE_MAX_LIST_ENTRIES: ${MEMORY_SELF_WORKSPACE_MAX_LIST_ENTRIES:-200}
       MEMORY_SELF_OWNER_OPENID: ${MEMORY_SELF_OWNER_OPENID:-}
       MEMORY_SELF_MAX_CHARS: ${MEMORY_SELF_MAX_CHARS:-800}
       MEMORY_SELF_BLOCK_CHAR_LIMIT: ${MEMORY_SELF_BLOCK_CHAR_LIMIT:-1200}
@@ -256,6 +260,9 @@ services:
       - ./backup:/app/backup
       - ./stored-media:/app/stored-media
       - ./logs:/app/logs
+      # 它自己的工作区（2026-10-20）：它在里面随便折腾、出不去（边界校验在 SelfWorkspaceService）。
+      # 挂出来是为了**重建容器不丢**——它写的东西是它自己的记忆资产，不是缓存。
+      - ./self-workspace:/app/self-workspace
     depends_on:
       # 2026-09-18：整库迁到 PostgreSQL 后，agent 不再依赖 mysql。
       # 2026-09-20：mysql 数据卷与镜像已按用户决定删除，**回滚到 MySQL 这条路已经没了**（见 docs/pg-migration.md）。
