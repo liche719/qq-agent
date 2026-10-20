@@ -185,6 +185,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   只允许被动回复 5 次（`msg_seq` 1~5，见 `QqChannel#buildMessageBody`），最终回复还要占一次。
   播报**不进对话记忆**（`conversation_memory` 只有最终答复），它是过程噪音。
 - **对话的思考档位按跳分**：第一跳 `dialog_first=high`（读懂意图、决定动不动手），之后 `dialog=low`（填参数、看结果、收尾）。实测同题 high/low 的思考量只差 100~200 token（约 0.0008 元），而少一跳能省 0.007 元。
+- **事实层的两条硬规矩**（2026-10-21 加）：① object 是「没有/不上/没课」这类**空信息**不入库
+  （原来 38 条有 8 条是这种，问「周三什么课」命中的就是「没有Java课」）；
+  ② 检索除了向量相似度，还会**按时间词重排**（查询里的「周X/明天/后天」与 subject 对上就排前面），
+  否则「周三」永远排在「周二」后面。细节见 `docs/memory-extraction.md` 最后一节。
 - **搜索**：DeepSeek 优先（**每账号每天 30 次**，Redis 计数、重启不重置），超了自动落 SearXNG 兜底。
   抓网页在 Jsoup 拿不到东西时才用 DS `fetch` 补一次，共用同一份配额；`github.com/.../blob/...` 自动转 raw 纯文本（免费）。
 - **⚠️ 真实用户数据，不许动**：`memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；

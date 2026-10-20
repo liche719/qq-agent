@@ -550,6 +550,13 @@ public class MemoryExtractor {
             if (candidate.confidence() < minConfidence) {
                 continue;
             }
+            if (isNullFact(candidate)) {
+                // 「周三·Java课 = 没有Java课」「本周日·补课 = 没课」这类：存了等于没存，
+                // 还会在检索时顶掉真正有用的事实（2026-10-21 实测：问"周三什么课"时，
+                // 命中的就是这个"没有Java课"，模型只能换关键词再试，连搜 7 次）。
+                log.debug("丢弃空信息事实 subject={} object={}", candidate.subject(), candidate.object());
+                continue;
+            }
             candidates.add(candidate);
         }
         if (candidates.isEmpty()) {
@@ -562,6 +569,29 @@ public class MemoryExtractor {
             tally("事实条数", written);
             log.info("事实层写入 user={} candidates={} new={}", userId, candidates.size(), written);
         });
+    }
+
+    /**
+     * 这条事实是不是**空信息**——"没有/不上/没课"这类。
+     *
+     * <p>为什么要挡：用户随口说一句"周三没有 Java 课"，提取器会老老实实记成
+     * `subject=周三·Java课, predicate=需带物品, object=没有Java课`。它字面上没错，
+     * 但**没有任何信息量**，而且会在检索时占掉名额——问"周三什么课"命中的就是它，
+     * 模型以为查到了、其实查了个寂寞（2026-10-21 真实故障）。
+     *
+     * <p>判据只认"整个 object 就是一句否定"，不做语义猜测：宁可漏挡，不要错杀
+     * （"不需要买教材"这种有时也算信息，只是价值低；真空到极致的才挡）。
+     */
+    private static boolean isNullFact(MemoryFactCandidate candidate) {
+        String object = candidate == null || candidate.object() == null ? "" : candidate.object().trim();
+        if (object.isEmpty()) {
+            return true;
+        }
+        // 单字/双字的 object 基本都是残句
+        if (object.length() <= 1) {
+            return true;
+        }
+        return object.matches("^(没有|没|无|不上|不去|不考|不用|不需要|不是|非|否|暂无|取消|已取消).*");
     }
 
     private void applyEpisodes(String userId, ExtractionResult result, Set<String> allowedSourceIds) {
@@ -970,6 +1000,12 @@ public class MemoryExtractor {
                         + "predicate=属性（教室 / 时间 / 教师 / 周次）；object=值；content=一句完整事实；"
                         + "**object 必须是「能被另一个值替换掉」的具体值**（303 / 周二 19:00 / 王老师）；"
                         + "「有课」「体育课」这种只是状态、没有信息量、也替换不了的，不要单独记一条；"
+                        + "**「没有 X」「不上课」「没课」「不需要」这类否定或空值同样不要记**——"
+                        + "它替换不了任何东西，还会在检索时占掉名额（2026-10-21 实测：库里 38 条有 8 条是这种，"
+                        + "问「周三什么课」时命中的正是「周三·Java课 = 没有Java课」，等于白查）；"
+                        + "**subject 里不要用「下周」「本周」「这周」「下个月」这类会过期的词**，"
+                        + "要写就直接写具体日期或周次（「10-08·周五·体育课」而不是「下周·体育课」），"
+                        + "否则过两周这条事实还活着、却已经指向不存在的时间；"
                         + "source=USER 表示用户自己说的，source=DOC 表示你是从用户发来的图片或文件里看到的（只看你确实看到的，图里没有的不要补）。"
                         + "课表图这类信息请**逐条拆开**写，不要写成一句话塞很多件事。\n")
                 .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"

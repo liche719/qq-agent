@@ -375,6 +375,46 @@ public class MemoryFactService {
                 ordered.add(fact);
             }
         }
+        return reorderByTimeWord(ordered, queryText);
+    }
+
+    /**
+     * 按「时间词」重排（2026-10-21 加）。
+     *
+     * <p>为什么需要：向量检索分不清"周三"和"周二"——它们字面差一个字，语义几乎一样近。
+     * 实测的后果很具体：用户问"明天什么课"，模型先换算成"周三"，然后调
+     * {@code recallMemoryFacts("周三课表 周三晚上什么课 教室")}；向量召回的**第一条**
+     * 却是「周二晚上·课」。模型以为查到了、其实查的别天，于是换个关键词再查——连查了 7 次。
+     *
+     * <p>做法：从查询里认出"周X / 明天 / 今天 / 下周"这类词，**subject 里带着同一个词的排在前面**，
+     * 其余保持原来的相似度顺序（稳定排序，不改相对次序）。只做排序、不做过滤——
+     * 宁可多给几条，也不要因为认错词而漏掉。
+     */
+    private List<MemoryFact> reorderByTimeWord(List<MemoryFact> facts, String queryText) {
+        if (facts.size() <= 1 || queryText == null || queryText.isBlank()) {
+            return facts;
+        }
+        java.util.Set<String> words = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(周[一二三四五六日天]|下周|本周|这周|明天|今天|后天|今晚|上午|下午|晚上)")
+                .matcher(queryText);
+        while (matcher.find()) {
+            words.add(matcher.group(1));
+        }
+        if (words.isEmpty()) {
+            return facts;
+        }
+        List<MemoryFact> ordered = new ArrayList<>(facts);
+        // 稳定排序：命中时间词的挪到前面，同组内保持向量顺序
+        ordered.sort(java.util.Comparator.comparingInt(fact -> {
+            String subject = fact.getSubject() == null ? "" : fact.getSubject();
+            for (String word : words) {
+                if (subject.contains(word)) {
+                    return 0;
+                }
+            }
+            return 1;
+        }));
         return ordered;
     }
 
