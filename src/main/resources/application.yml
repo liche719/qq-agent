@@ -438,7 +438,7 @@ memory:
   # **预算按钱算**（同日用户定）：日 0.5 元、单次先给 60%、**没落产出才续一次**、当天封顶 ×1.5。
   # 按钱不按轮数：每轮 prompt 大小差一倍，轮数不是钱的代理。花超了面板上看得见。
   self-quest-mode: ${MEMORY_SELF_QUEST_MODE:daily}
-  self-quest-check-cron: ${MEMORY_SELF_QUEST_CHECK_CRON:0 */10 * * * *}
+  self-quest-check-cron: ${MEMORY_SELF_QUEST_CHECK_CRON:0 0 */2 * * *}
   self-quest-daily-budget-yuan: ${MEMORY_SELF_QUEST_DAILY_BUDGET_YUAN:0.5}
   self-quest-budget-overrun-factor: ${MEMORY_SELF_QUEST_BUDGET_OVERRUN_FACTOR:1.5}
   self-quest-single-budget-ratio: ${MEMORY_SELF_QUEST_SINGLE_BUDGET_RATIO:0.6}
@@ -454,6 +454,8 @@ memory:
   self-bilibili-enabled: ${MEMORY_SELF_BILIBILI_ENABLED:true}
   self-bilibili-daily-limit: ${MEMORY_SELF_BILIBILI_DAILY_LIMIT:1}
   self-bilibili-interval-hours: ${MEMORY_SELF_BILIBILI_INTERVAL_HOURS:6}
+  # 整个自主模块的总闸：DeepSeek 峰时（工作日北京 09–12、14–18，价格翻倍）一律不动。
+  self-offpeak-only: ${MEMORY_SELF_OFFPEAK_ONLY:true}
   self-bilibili-offpeak-only: ${MEMORY_SELF_BILIBILI_OFFPEAK_ONLY:true}
   self-bilibili-max-rounds: ${MEMORY_SELF_BILIBILI_MAX_ROUNDS:8}
   self-bilibili-budget-yuan: ${MEMORY_SELF_BILIBILI_BUDGET_YUAN:0.15}

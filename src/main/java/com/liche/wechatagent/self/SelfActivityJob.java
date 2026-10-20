@@ -37,24 +37,39 @@ public class SelfActivityJob {
     private final String mode;
     private final String owner;
     private final double dailyBudgetYuan;
+    /**
+     * 整个自主模块的**峰谷总闸**（2026-10-20 加）。
+     *
+     * <p>用户要求：「dsapi 低谷期间才生效」。原来只有"刷 B 站"躲峰，研究活动照样在峰时烧钱；
+     * 现在提到这里统一挡——峰时连 {@link SelfActivity#due} 都不问，直接不动。
+     */
+    private final boolean offPeakOnly;
 
     public SelfActivityJob(List<SelfActivity> activities,
                            SelfQuestStore selfQuests,
                            SelfSpeakService speakService,
                            @Value("${memory.self-quest-mode:daily}") String mode,
                            @Value("${memory.self-owner-openid:}") String owner,
-                           @Value("${memory.self-quest-daily-budget-yuan:0.5}") double dailyBudgetYuan) {
+                           @Value("${memory.self-quest-daily-budget-yuan:0.5}") double dailyBudgetYuan,
+                           @Value("${memory.self-offpeak-only:true}") boolean offPeakOnly) {
         this.activities = activities;
         this.selfQuests = selfQuests;
         this.speakService = speakService;
         this.mode = mode == null ? MODE_DAILY : mode.trim().toLowerCase();
         this.owner = owner == null ? "" : owner.trim();
         this.dailyBudgetYuan = dailyBudgetYuan;
+        this.offPeakOnly = offPeakOnly;
     }
 
-    @Scheduled(cron = "${memory.self-quest-check-cron:0 */10 * * * *}")
+    // 2026-10-20：心跳从「每 10 分钟」改成「每 2 小时」——它要做的事都不着急，
+    // 10 分钟一次纯属白问；真正决定干不干活的是各个活动的 due()。
+    @Scheduled(cron = "${memory.self-quest-check-cron:0 0 */2 * * *}")
     public void tick() {
         if (!MODE_DAILY.equals(mode)) {
+            return;
+        }
+        if (offPeakOnly && SelfOffPeak.isPeakNow()) {
+            log.debug("现在是 DeepSeek 峰时（贵一倍），自主模块不动；{} 之后再说", SelfOffPeak.describeNow());
             return;
         }
         SelfActivity.ActivityContext context = new SelfActivity.ActivityContext(
