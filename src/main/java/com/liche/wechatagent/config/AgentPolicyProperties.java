@@ -42,7 +42,39 @@ public class AgentPolicyProperties {
             Map.entry("deleteStoredMedia", "删除文件"),
             Map.entry("findDownloadableLinks", "查找下载文件"),
             Map.entry("downloadWebFile", "下载文件"),
-            Map.entry("sendDownloadedFile", "发送文件"));
+            Map.entry("sendDownloadedFile", "发送文件"),
+        // 2026-10-20：补齐剩下的。原来只覆盖了 29 个，其余在回复底部会露出英文方法名
+        // （用户看到"调用工具：selfRead、digBilibili"这种）。57 个工具全部要有中文名。
+        Map.entry("searchVerifiedWeb", "交叉核对搜索"),
+        Map.entry("digBilibili", "定向搜B站"),
+        Map.entry("draftBilibiliComment", "写B站评论"),
+        Map.entry("recallMemoryFacts", "查事实记忆"),
+        Map.entry("recentExtractions", "看最近记住的"),
+        Map.entry("searchConversation", "翻聊天记录"),
+        // —— 它自己那一侧 ——
+        Map.entry("selfRead", "看自己的记录"),
+        Map.entry("selfRecall", "翻自己那边的对话"),
+        Map.entry("selfAppend", "记自己的动态"),
+        Map.entry("selfNote", "记一笔"),
+        Map.entry("selfJudge", "记自己的判断"),
+        Map.entry("selfDisagree", "记一次分歧"),
+        Map.entry("selfLesson", "记教训"),
+        Map.entry("selfQuest", "看自己的方向"),
+        Map.entry("selfQuestChoose", "开自己的方向"),
+        Map.entry("selfQuestStep", "改下一步"),
+        Map.entry("selfQuestNote", "写方向笔记"),
+        Map.entry("selfQuestRetract", "撤回方向笔记"),
+        Map.entry("selfQuestClose", "收掉自己的方向"),
+        Map.entry("selfQuestRest", "今天先到这"),
+        Map.entry("selfWantToSay", "攒句话想说"),
+        Map.entry("selfSeedNote", "记个念头"),
+        Map.entry("selfSeedClose", "关掉念头"),
+        // —— 它的工作区 ——
+        Map.entry("selfWorkList", "看工作区"),
+        Map.entry("selfWorkRead", "读工作区文件"),
+        Map.entry("selfWorkWrite", "写工作区文件"),
+        Map.entry("selfWorkDelete", "删工作区文件"),
+        Map.entry("selfWorkMkdir", "建工作区目录"));
 
     private String defaultPersona = DEFAULT_PERSONA;
     private int maxPersonaChars = 2_000;
