@@ -187,7 +187,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     顺带把旧的 `withFallback/fallbackReason/siteOperators/hostMatches` 四段兜底逻辑变成死代码。
 
   - **DS 的第二个接口 `tools/fetch` 也接上了**（用户说"要接"）：它**渲染后取正文**，能救回**靠 JS 渲染**的站。
-    触发条件是「正文少于 `web.deepseek-fetch-min-chars`（**默认 1500 字**）」或者本地直接 4xx；
+    触发条件有两层：**① 模型自己判断**——`readWebPage(url, fullText=true)` 就直接抓全文（程序只提供开关，不替它决定该不该花钱）；**② 程序兜底**——正文少于 200 字或本地直接 4xx 时补一次。
     **共用同一份每日配额**（一次 fetch 也算一次，配额默认 **30**/账号/天），拿不到就保持原结果。
     本地实测：`readWebPage https://example.com`（本地只抓到空壳）→ `DeepSeek 抓取成功 chars=931`、配额 0→1。
   - **代码托管站的网页视图会自动换成正文本地址**（2026-10-20，用户场景："去看我 GitHub 仓库的代码，一层层深入"）：
