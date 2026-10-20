@@ -176,11 +176,18 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 - **最近一次部署**（2026-10-20）：`wechat-agent:5823ed7`，**`16 个类 / 56 个工具`**、0 ERROR。
   **它有了自己的工作区**（用户原话："给它分配一个工作区文件夹，它可以在里面做任何想做的事情，但是不能影响工作区外面"）：
   - 宿主机 `self-workspace/` → 容器 `/app/self-workspace`（挂出来是为了**重建容器不丢**，那是它的记忆资产不是缓存）。
-  - 工具 5 个：`selfWorkList` / `selfWorkRead` / `selfWorkWrite`（append/覆盖）/ `selfWorkDelete` / `selfWorkMkdir`，
-    **只在它自己的时间里下发**（`BilibiliActivity` 白名单里已加）。
+  - 工具 5 个：`selfWorkList` / `selfWorkRead` / `selfWorkWrite`（append/覆盖）/ `selfWorkDelete` / `selfWorkMkdir`。
+  - **谁能用**：`SelfToolVisibilityRule` 里 `selfWork*` 前缀是 **OWNER_ONLY** —— 只有
+    `selfCore.isOwner(userId)`（机主 openid 或 `__self__` 作用域）才拿得到这组 schema；
+    **陌生人连工具描述都看不到**（不是"看到但拒绝调用"）。
+    用户原话："只有我的 QQ 主账号的笨鱼才有工作区，别的人都没有"。
+  - **在哪儿能用**：它自己的时间（`BilibiliActivity` 白名单已加）**和机主对话**（用户 2026-10-20 明确要）
+    —— 也就是"聊天时让它整理点东西"也能落盘。
+  - **空间**：单文件 ≤1 MB；**整个工作区 ≤1 GB**（`memory.self-workspace-max-total-bytes`，写前算总量，
+    满了就让它自己清理，不等服务器磁盘告急）。服务器 40 G / 已用 16 G，1 G 给它是安全的。
   - **边界是可证明的**：每次路径 `normalize()` + `toRealPath()`（文件不存在就校验父目录）之后必须
     `startsWith(root)`，所以 `../`、绝对路径、**符号链接**都出不去；只做文本读写、**不执行命令**；
-    单文件 ≤1 MB；删目录必须先清空（不递归）。实测 10 项边界全被拒（见坑 76 上面那段的输出）。
+    删目录必须先清空（不递归）。实测 10 项边界全被拒（见坑 76 上面那段的输出）。
   - **为什么不给 shell**：一旦能执行命令，"不能影响外面"就只剩容器边界，而容器里它还连着数据库和网络。
     文件沙箱是可证明的边界，shell 不是。
 - **上一版**（2026-10-20）：`wechat-agent:b1890be`（+ 文档收尾），**`15 个类 / 51 个工具`**、0 ERROR。
