@@ -112,6 +112,8 @@ public class AdminSelfActivityController {
             row.put("title", "https://www.bilibili.com/video/" + view.getBvid());
             row.put("video", view.getTitle());
             row.put("outcome", view.getOutcome() + (view.getDetail().isBlank() ? "" : "（" + view.getDetail() + "）"));
+            // 2026-10-20：把"它读完自己记的摘要"摊出来——这才是"它到底记住了什么"
+            row.put("summary", view.getSummary().isBlank() ? "（这条没记内容）" : view.getSummary());
             return row;
         }).toList();
         return Map.of("rows", rows);

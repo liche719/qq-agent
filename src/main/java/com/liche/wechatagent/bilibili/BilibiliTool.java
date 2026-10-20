@@ -32,16 +32,16 @@ public class BilibiliTool implements AgentToolProvider {
     /** 抽帧兜底最多下多少字节的视频（360p，2 分钟约 9MB；这里给到 60MB ≈ 十几分钟） */
     private final long maxDownloadBytes;
     /** 「它看过哪些视频」的台账（2026-10-20）：**工具埋点，不靠模型自述** */
-    private final BiliViewLogRepository viewLog;
+    private final BiliViewLogRepository viewLogs;
 
     public BilibiliTool(BilibiliClient client,
                         com.liche.wechatagent.media.VideoFrameService videoFrameService,
                         com.liche.wechatagent.media.MediaToolContextService mediaContext,
                         @Value("${bilibili.max-transcript-chars:6000}") int maxTranscriptChars,
                         @Value("${bilibili.frame-fallback-max-bytes:62914560}") long maxDownloadBytes,
-                        BiliViewLogRepository viewLog) {
+                        BiliViewLogRepository viewLogs) {
         this.client = client;
-        this.viewLog = viewLog;
+        this.viewLogs = viewLogs;
         this.videoFrameService = videoFrameService;
         this.mediaContext = mediaContext;
         this.maxTranscriptChars = Math.max(500, Math.min(20_000, maxTranscriptChars));
@@ -183,7 +183,7 @@ public class BilibiliTool implements AgentToolProvider {
      * 而用户明确要求"不干扰它，但我得知道它做了什么"。台账失败不影像读取本身。
      */
     private void recordView(String bvid, String title, String outcome, String detail) {
-        if (viewLog == null) {
+        if (viewLogs == null) {
             return;
         }
         try {
@@ -193,10 +193,102 @@ public class BilibiliTool implements AgentToolProvider {
             entry.setOutcome(outcome == null ? "" : outcome);
             entry.setDetail(clip(detail == null ? "" : detail, 60));
             entry.setCreatedAt(java.time.LocalDateTime.now());
-            viewLog.save(entry);
+            viewLogs.save(entry);
         } catch (RuntimeException ignored) {
             // 记台账失败不能盖过"读视频"这件事本身
         }
+    }
+
+    /**
+     * 记「这个视频讲了什么」（2026-10-20 加）。
+     *
+     * <p>为什么必须有这一步：台账原来只记"字幕 266 字"这种**字数**，内容一个字都没存。
+     * 结果它刷完就过去了，过两天想找"那个讲 git 记忆的视频"只能靠标题猜——等于没有记忆。
+     *
+     * <p>所以读完视频要**立刻**调用它，把摘要存进那条台账（同一个 bvid 覆盖最近一条，不重复插行）。
+     */
+    @Tool(value = "把你看过的这个视频**记下来**：summary 是它讲了什么（两三句，用你自己的话，带关键词），"
+            + "takeaway 是你自己的看法——为什么值得记、跟你自己有什么关系（一句话）。"
+            + "**每读完一个视频都要调用一次**，不然过几天你就只剩一个标题，想找也找不回来。")
+    @ToolExecutionPolicy(ToolExecutionClass.FAST)
+    public ToolBusinessResult noteWatchedVideo(String bvid, String summary, String takeaway) {
+        if (bvid == null || bvid.isBlank()) {
+            return ToolBusinessResult.failure("得给一个 BV 号，不然不知道记的是哪个视频");
+        }
+        String text = summary == null ? "" : summary.trim();
+        if (text.isBlank()) {
+            return ToolBusinessResult.failure("summary 不能空——把你读懂的东西写两三句，哪怕只记住一点");
+        }
+        String view = takeaway == null ? "" : takeaway.trim();
+        try {
+            java.util.List<BiliViewLog> found = viewLogs.findByBvidOrderByIdDesc(
+                    bvid.trim(), org.springframework.data.domain.PageRequest.of(0, 1));
+            BiliViewLog entry = found.isEmpty() ? new BiliViewLog() : found.get(0);
+            if (found.isEmpty()) {
+                entry.setBvid(bvid.trim());
+                entry.setTitle("");
+                entry.setOutcome(BiliViewLog.OUTCOME_TRANSCRIPT);
+                entry.setDetail("");
+                entry.setCreatedAt(java.time.LocalDateTime.now());
+            }
+            entry.setSummary(clip(text, 2000));
+            entry.setTakeaway(clip(view, 190));
+            viewLogs.save(entry);
+            return ToolBusinessResult.success("记下了：" + clip(text, 60)
+                    + (view.isBlank() ? "" : "（我的看法：" + clip(view, 40) + "）"));
+        } catch (RuntimeException exception) {
+            return ToolBusinessResult.failure("记摘要失败：" + exception.getMessage());
+        }
+    }
+
+    /**
+     * 找回「我以前看过什么」。
+     *
+     * <p>用户的原话：刷完了就过去了，想再回来找的时候找不到。所以给它一个按内容查的入口
+     * ——标题、摘要、它自己的看法三处都匹配。
+     */
+    @Tool(value = "翻你自己看过的 B 站视频。query 传关键词（比如「git 记忆」「听懂不会做」），留空就是看最近看过的。"
+            + "返回 BV 号、标题、你看的时候记的摘要和看法。想再看一遍就把 BV 号传给 readBilibiliVideo。")
+    @ToolExecutionPolicy(ToolExecutionClass.FAST)
+    public ToolBusinessResult recallWatchedVideos(String query, Integer limit) {
+        int size = Math.max(1, Math.min(20, limit == null ? 8 : limit));
+        java.util.List<BiliViewLog> rows;
+        String keyword = query == null ? "" : query.trim();
+        try {
+            if (keyword.isBlank()) {
+                rows = viewLogs.findTop100ByOrderByIdDesc().stream().limit(size).toList();
+            } else {
+                rows = viewLogs
+                        .findTop30ByTitleContainingIgnoreCaseOrSummaryContainingIgnoreCaseOrTakeawayContainingIgnoreCaseOrderByIdDesc(
+                                keyword, keyword, keyword)
+                        .stream().limit(size).toList();
+            }
+        } catch (RuntimeException exception) {
+            return ToolBusinessResult.failure("查台账失败：" + exception.getMessage());
+        }
+        if (rows.isEmpty()) {
+            return ToolBusinessResult.success(keyword.isBlank()
+                    ? "你还没看过什么视频。"
+                    : "没找到跟「" + keyword + "」相关的视频。换个词试试，或者留空看最近看过的。");
+        }
+        StringBuilder out = new StringBuilder("看过 " + rows.size() + " 条：\n");
+        for (BiliViewLog row : rows) {
+            out.append("· BV：").append(row.getBvid());
+            if (!row.getTitle().isBlank()) {
+                out.append("《").append(clip(row.getTitle(), 40)).append("》");
+            }
+            out.append("（").append(row.getCreatedAt() == null ? "?" :
+                    row.getCreatedAt().toLocalDate().toString()).append("）\n");
+            if (row.getSummary().isBlank()) {
+                out.append("  摘要：（这条当时没记内容，只有标题）\n");
+            } else {
+                out.append("  讲了什么：").append(clip(row.getSummary(), 260)).append('\n');
+            }
+            if (!row.getTakeaway().isBlank()) {
+                out.append("  我当时想：").append(clip(row.getTakeaway(), 120)).append('\n');
+            }
+        }
+        return ToolBusinessResult.success(out.toString());
     }
 
     private String describeUnavailable(String title, String reason) {

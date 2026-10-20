@@ -49,6 +49,8 @@ public class AgentPolicyProperties {
         Map.entry("digBilibili", "定向搜B站"),
         Map.entry("draftBilibiliComment", "写B站评论"),
         Map.entry("listMyCommentReplies", "看谁回了我"),
+        Map.entry("noteWatchedVideo", "记视频笔记"),
+        Map.entry("recallWatchedVideos", "翻看过的视频"),
         Map.entry("recallMemoryFacts", "查事实记忆"),
         Map.entry("recentExtractions", "看最近记住的"),
         Map.entry("searchConversation", "翻聊天记录"),

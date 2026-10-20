@@ -49,6 +49,19 @@ public class BiliViewLog {
     @Column(name = "detail", length = 64, nullable = false)
     private String detail = "";
 
+    /**
+     * **这视频讲什么**（2026-10-20 加）：它读完自己写的两三句。
+     *
+     * <p>没有这一列的时候台账只有"字幕 266 字"这种字数——过两天它想找
+     * "那个讲 git 记忆的视频"就只能靠标题猜，等于没记住。
+     */
+    @Column(name = "summary", nullable = false)
+    private String summary = "";
+
+    /** 它自己的看法：为什么值得记、跟自己有什么关系（一句话） */
+    @Column(name = "takeaway", length = 200, nullable = false)
+    private String takeaway = "";
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 }
