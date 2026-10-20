@@ -459,6 +459,8 @@ memory:
   self-quest-idle-hours: ${MEMORY_SELF_QUEST_IDLE_HOURS:10}
   # 「刷会儿 B 站」这个自主活动（2026-10-20）。只在谷时跑：北京时间 09–12、14–18 是 DeepSeek 峰时，
   # 刷视频不是急事，躲开它省钱；周末整天算谷时。评论的硬护栏另有 bilibili.comment.*。
+  # 研究（开方向/写笔记）单独开关：用户 2026-10-20 说"先把研究关了"，只留刷视频这类活动。
+  self-research-enabled: ${MEMORY_SELF_RESEARCH_ENABLED:true}
   self-bilibili-enabled: ${MEMORY_SELF_BILIBILI_ENABLED:true}
   self-bilibili-daily-limit: ${MEMORY_SELF_BILIBILI_DAILY_LIMIT:1}
   self-bilibili-interval-hours: ${MEMORY_SELF_BILIBILI_INTERVAL_HOURS:6}
@@ -598,3 +600,4 @@ management:
     allowed-ips: ${ADMIN_ALLOWED_IPS:127.0.0.1,::1}
   dashboard:
     metrics-sample-ms: ${ADMIN_METRICS_SAMPLE_MS:10000}
+

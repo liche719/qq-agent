@@ -112,6 +112,12 @@ public class AdminPanelController {
                         column("review", "复查（FSRS）", true),
                         column("status", "状态", false)), List.of()),
                 bars("每周教训事件数（看趋势，不看绝对值）", "/api/admin/self/lesson-bars?weeks=8", "次"),
+                table("自主活动（它自己的时间花在哪）", "/api/admin/self/activities", List.of(
+                        column("state", "状态", false),
+                        column("activity", "活动", true),
+                        column("today", "今天", false),
+                        column("lastAt", "上次", false),
+                        column("lastSummary", "上次干了什么", true)), List.of()),
                 table("它自己的方向（不是给你办事的）", "/api/admin/self/quests", List.of(
                         column("id", "#", false),
                         column("title", "题目", true),

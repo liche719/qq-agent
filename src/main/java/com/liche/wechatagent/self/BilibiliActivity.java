@@ -41,7 +41,7 @@ public class BilibiliActivity implements SelfActivity {
 
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> PROVIDERS = Set.of(
-            "BilibiliTool", "BiliCommentTool", "AgentSeedTool", "AgentSelfTool", "AgentQuestTool");
+            "BilibiliTool", "BiliCommentTool", "BiliDigTool", "AgentSeedTool", "AgentSelfTool", "AgentQuestTool");
     /**
      * 刷视频时**不许碰研究那套**（开方向、写笔记、改下一步）——那些会把"刷会儿"变成"干正事"，
      * 把 quest 的行和笔记弄脏。只留 {@code selfWantToSay}（它得能跟机主说一句）。
@@ -145,8 +145,9 @@ public class BilibiliActivity implements SelfActivity {
                 这一段是你自己的，不是他让你去办的事。想刷就刷，不想刷就干别的。
 
                 如果你这一轮想刷点视频，大致这么走：
-                1. 用 browseBilibili 拿一批候选（hot=全站热门 / following=他关注的人 / later=他的稍后再看），
-                   自己挑一个来源，别三个都拉一遍。
+                1. 有具体想问的（比如心里惦记着某个问题），用 digBilibili 带着关键词去定向找；
+                   只是想随便看看，就用 browseBilibili（hot=全站热门 / following=他关注的人 / later=他的稍后再看），
+                   自己挑一个来源，别全都拉一遍。
                 2. 挑 1~3 条看着有意思的，用 readBilibiliVideo 读它到底讲了什么（没字幕会自动抽帧）。
                 3. 判据只有一句：**值不值得占用他一次注意力**。
                    不是"这个视频不错"，而是"他看了会觉得没白费这几分钟"。
@@ -225,6 +226,7 @@ public class BilibiliActivity implements SelfActivity {
                 "间隔 ≥" + intervalHours + " 小时", offPeakOnly ? "只在谷时" : "不限时段");
     }
 }
+
 
 
 

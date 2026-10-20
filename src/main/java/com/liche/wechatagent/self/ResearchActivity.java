@@ -1,5 +1,6 @@
 package com.liche.wechatagent.self;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -16,9 +17,13 @@ import org.springframework.stereotype.Component;
 public class ResearchActivity implements SelfActivity {
 
     private final SelfQuestService questService;
+    /** 用户 2026-10-20 要求能给研究单独关掉（只留刷视频这类活动） */
+    private final boolean enabled;
 
-    public ResearchActivity(SelfQuestService questService) {
+    public ResearchActivity(SelfQuestService questService,
+                            @Value("${memory.self-research-enabled:true}") boolean enabled) {
         this.questService = questService;
+        this.enabled = enabled;
     }
 
     @Override
@@ -33,6 +38,9 @@ public class ResearchActivity implements SelfActivity {
 
     @Override
     public boolean due(ActivityContext context) {
+        if (!enabled) {
+            return false;
+        }
         // 委托给原来那套闸（预算 / 兴趣累积 / 搁太久 + open loop / 之间至少隔 N 分钟）
         return questService.wantsToWork();
     }
@@ -47,4 +55,5 @@ public class ResearchActivity implements SelfActivity {
                 outcome.completionTokens(), outcome.durationMs(), outcome.costYuan());
     }
 }
+
 
