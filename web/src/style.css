@@ -775,3 +775,29 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   .topbar .row { flex-wrap: wrap; gap: 8px; }
   .topbar .spread { align-items: flex-start; }
 }
+
+/* ── 安全区与顶栏压缩（2026-10-21）────────────────────────────────────
+   用户截图：手机上内容被状态栏压住、顶栏占了四行。
+   · 顶部留白用 env(safe-area-inset-top)：刘海屏/状态栏自动让位，桌面端退回 14px；
+   · 窄屏下把「应用/QQ」两个状态胶囊压成**两个小圆点**（颜色仍然表达状态，
+     文字移到 title 里），腾出整行给余额和内容。 */
+.page {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+}
+
+@media (max-width: 720px) {
+  /* 状态胶囊在窄屏只留小圆点 */
+  .topbar .row .pill {
+    padding: 6px 8px;
+    font-size: 0;
+    gap: 0;
+    min-width: 0;
+  }
+  .topbar .row .pill .dot { margin: 0; }
+  /* 顶栏内部再收一点 */
+  .topbar { padding: 10px 14px 12px; }
+  .topbar .spread { margin-top: 8px !important; }
+  /* 余额在窄屏上占主要位置 */
+  .balance-pill { padding: 6px 12px; }
+}
