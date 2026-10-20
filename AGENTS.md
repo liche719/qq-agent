@@ -224,17 +224,19 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:40f5d16a1969…`，`13 个类 / 54 个工具`、0 ERROR。
-  **这次是"零行为变化"的铺垫**：`memory.self-enabled` 仍是 `false`，所以 `AgentSeedTool` 按
-  `@ConditionalOnProperty` 不创建，工具数和聊天行为一个字没变，只是把表和代码先放上去。
-  - 新增「念头」`agent_seed`（**活动之间"相辅相成"的接头**）：用户要的是"刷到视频 → 有想法 →
-    研究 → 再定向找视频"；`agent_quest` 太重（要开题）、`agent_self_event` 只是流水账，中间缺一个轻量对象。
+- **最近一次部署**（2026-10-20）：`wechat-agent:a4fb4e677b93…`，`13 个类 / 54 个工具`、0 ERROR。
+  **自主模块抽出了「活动」这一层**（`SelfActivity` 接口 + `SelfActivityJob`，替换原来的 `SelfQuestJob`）：
+  现有研究逻辑**原样**包进 `ResearchActivity`（`@Order(0)` 排最前），行为零变化；
+  以后加"刷 B 站 / 刷小红书"这类能力 = **加一个 `@Component` 类 + 一段配置**，调度器不用改。
+  本地真跑通一轮验证：`活动=research 用时 24364ms 花 0.055 元 结论：开了自己的第一个方向…`。
+  ⚠️ 生产上 `memory.self-enabled` 仍是 `false`，所以 `SelfActivityJob` 根本不创建——这次同样**零行为变化**。
+  - 上一版（`40f5d16`）加的「念头」`agent_seed`：用户要的是"刷到视频 → 有想法 → 研究 → 再定向找视频"；
+    `agent_quest` 太重（要开题）、`agent_self_event` 只是流水账，中间缺一个轻量对象。
     工具 `selfSeedNote` / `selfSeedClose`（只在它自己的时间里下发）。
   - `SelfLoader` 加了两段注入：**最近干过的几件事**（`recentEvents`）+ **心里还惦记着的念头**（OPEN seeds）；
     配置 `memory.self-max-recent-events`（默认 3）、`memory.self-max-seeds-in-prompt`（5）。
-  - **本地行为级验证通过**：插一条 seed（`视频怎么做到不卡？有人说 60 帧是关键`）后问它"心里惦记着什么"，
-    它答「我还惦记着 #1：视频怎么才能不卡，有人说 60 帧是关键」→ seed 注入链路真通，
-    同时也说明 **OPEN 念头确实会被下一轮读到**（"相辅相成"的接头成立）。
+  - **seed 注入的行为级验证通过**：插一条 seed（`视频怎么做到不卡？有人说 60 帧是关键`）后问它"心里惦记着什么"，
+    它答「我还惦记着 #1：视频怎么才能不卡，有人说 60 帧是关键」→ **OPEN 念头确实会被下一轮读到**（"相辅相成"的接头成立）。
   - ⚠️ **本地验这一轮时先踩了个坑**：从**工作区根**（`wechat-agent/`）启动 jar，而 `.env` 在
     `wechat-agent-java/` 下，`spring.config.import: optional:file:.env` 是相对**当前目录**找的、
     `optional` 让它**静默跳过** → `LLM_API_KEY` 为空 → 上游 401「密钥被上游拒了」，
