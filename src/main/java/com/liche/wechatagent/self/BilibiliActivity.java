@@ -41,7 +41,8 @@ public class BilibiliActivity implements SelfActivity {
 
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> PROVIDERS = Set.of(
-            "BilibiliTool", "BiliCommentTool", "BiliDigTool", "AgentSeedTool", "AgentSelfTool", "AgentQuestTool");
+            "BilibiliTool", "BiliCommentTool", "BiliDigTool", "SelfWorkspaceTool",
+        "AgentSeedTool", "AgentSelfTool", "AgentQuestTool");
     /**
      * 刷视频时**不许碰研究那套**（开方向、写笔记、改下一步）——那些会把"刷会儿"变成"干正事"，
      * 把 quest 的行和笔记弄脏。只留 {@code selfWantToSay}（它得能跟机主说一句）。
