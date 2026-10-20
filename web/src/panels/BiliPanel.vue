@@ -67,11 +67,18 @@ async function startLogin() {
 
 async function poll() {
   if (!qr.value) return stopPolling()
-  if (Date.now() > expiresAt) {
+  // 本地计时**只用于提示，不用于停止**：B站返回 86038 才是"真过期"。
+  // 2026-10-20 踩过一次：手机在临界点确认、前端按本地 180 秒先停了，那次成功被丢掉，
+  // 表现成"手机说登录成功、面板说过期"。所以到点后继续问，只把提示改掉。
+  const late = Date.now() - expiresAt
+  if (late > 180_000) {
     stopPolling()
     pollState.value = 'expired'
-    pollText.value = '二维码过期了，重新点一次「生成二维码」'
+    pollText.value = '一直没等到确认，重新点一次「生成二维码」'
     return
+  }
+  if (late > 0) {
+    pollText.value = '这张码可能过期了，还在问 B 站…'
   }
   try {
     const result = await api('/bilibili/login/poll?key=' + encodeURIComponent(qr.value.key))

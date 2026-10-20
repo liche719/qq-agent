@@ -220,9 +220,12 @@ public class BiliQrLoginService {
 
     private String stateOf(int code) {
         return switch (code) {
+            // 2026-10-20 实测：**登录成功时 data.code 是 0**（不是 86100）。
+            // 按参考实现只认 86100 的话，成功那一帧会被当成 unknown 跳过，紧接着码被消费变成 86038，
+            // 表现就是"手机显示登录成功、面板却说过期了、凭据没存下来"。两个都认。
+            case 0, 86100 -> "confirmed";
             case 86101 -> "pending";
             case 86090 -> "scanned";
-            case 86100 -> "confirmed";
             case 86038 -> "expired";
             default -> "unknown";
         };
@@ -230,11 +233,11 @@ public class BiliQrLoginService {
 
     private String textOf(int code) {
         return switch (code) {
+            case 0, 86100 -> "登录成功，凭据已保存";
             case 86101 -> "等待扫码（用 B 站手机客户端扫）";
             case 86090 -> "已扫码，请在手机上点确认";
-            case 86100 -> "登录成功，凭据已保存";
             case 86038 -> "二维码过期了，重新点一次「生成二维码」";
-            default -> "状态未知";
+            default -> "状态未知（B站返回 " + code + "）";
         };
     }
 
