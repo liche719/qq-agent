@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **51 个 / 15 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-20）**：工具 **56 个 / 16 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨、加了工作区之后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -173,7 +173,17 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:b1890be`（+ 文档收尾），**`15 个类 / 51 个工具`**、0 ERROR。
+- **最近一次部署**（2026-10-20）：`wechat-agent:5823ed7`，**`16 个类 / 56 个工具`**、0 ERROR。
+  **它有了自己的工作区**（用户原话："给它分配一个工作区文件夹，它可以在里面做任何想做的事情，但是不能影响工作区外面"）：
+  - 宿主机 `self-workspace/` → 容器 `/app/self-workspace`（挂出来是为了**重建容器不丢**，那是它的记忆资产不是缓存）。
+  - 工具 5 个：`selfWorkList` / `selfWorkRead` / `selfWorkWrite`（append/覆盖）/ `selfWorkDelete` / `selfWorkMkdir`，
+    **只在它自己的时间里下发**（`BilibiliActivity` 白名单里已加）。
+  - **边界是可证明的**：每次路径 `normalize()` + `toRealPath()`（文件不存在就校验父目录）之后必须
+    `startsWith(root)`，所以 `../`、绝对路径、**符号链接**都出不去；只做文本读写、**不执行命令**；
+    单文件 ≤1 MB；删目录必须先清空（不递归）。实测 10 项边界全被拒（见坑 76 上面那段的输出）。
+  - **为什么不给 shell**：一旦能执行命令，"不能影响外面"就只剩容器边界，而容器里它还连着数据库和网络。
+    文件沙箱是可证明的边界，shell 不是。
+- **上一版**（2026-10-20）：`wechat-agent:b1890be`（+ 文档收尾），**`15 个类 / 51 个工具`**、0 ERROR。
   **这一轮做的是"减法"**（用户原话："把考研和墨墨背单词这两个相关的都删掉，不得影响其他功能"、
   "搜索全部换成 ds 的搜索 api，兜底才用 searxng，另外当天一个对话账号只能用 20 次"）：
   - **删掉两个模块**：`exam/`（22 个类，20 个工具）、`maimemo/`（6 个类，1 个工具），连**面板页签**
