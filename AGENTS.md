@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **54 个 / 13 个类**、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状（2026-10-20）**：工具 **72 个 / 17 个类**（自主模块开启时；关闭时 55 个 / 14 个）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -164,10 +164,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ## 5. 硬约定（违反就出线上事故）
 
-> **完整的 73 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
+> **完整的 74 条坑（含来龙去脉与实测证据）已搬到 `docs/pitfalls.md`** —— 2026-10-10 文档整理时搬的，
 > 因为本文件当时已 68 KB、超过 harness 的 64 KB 读取上限，**尾部（原 §6~§10）等于没写**。
 > 那份文档开头有**按主题的索引**；碰到不熟的模块，先去那里按主题查。
-> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 73）——坑号是全项目的引用契约，不要重排或插号。**
+> **踩到新坑请追加到那份的末尾，编号继续往下排（现在最后一条是 74）——坑号是全项目的引用契约，不要重排或插号。**
 >
 > 下面只留「违反了当场出事」的那些：
 
@@ -195,7 +195,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：73 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：74 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -224,7 +224,27 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:c23d10123159…`，`13 个类 / 54 个工具`、0 ERROR。
+- **最近一次部署**（2026-10-20）：`wechat-agent:1fb3c50a3700…`，**17 个类 / 72 个工具**、
+  **`MEMORY_SELF_ENABLED=true`（自主模块真的开起来了）**、`MEMORY_SELF_RESEARCH_ENABLED=false`（研究关）、0 ERROR。
+  **这一轮做的是"大改"**（用户原话："我觉得可以直接大改"，并且"之前自主模块产生的数据可以完全删掉"）：
+  - **「它自己的话」从两张表并成一张** `agent_self_note`：块（当前值）与事件（流水）本来是同一件事的两个投影，
+    合并后 `kind=BLOCK` + `slot` + `active`/`superseded_by` 表达块（历史自带），其它 kind 只追加。
+    `agent_self_block` / `agent_self_event` / `agent_commitment` **三张老表已 DROP**，
+    `agent_quest*` / `agent_lesson` / `agent_stance` / `agent_self_utterance` / `agent_reflection` **数据已清空**（表留着）。
+  - **工具 24 → 14**（自主模块自有）：删掉 `goalOpen/goalClose/commit/commitResolve`（**实测 0 次调用、0 行数据**，
+    语义被"开方向 + 下一步"覆盖）、`selfReplace/selfSummarize`（块只有 180 字，纯追加够用）、
+    `selfLessonEdit`、`selfQuestRest`；并把"我欠着"从 `SelfLoader`、面板、`selfRead` 里全部移除。
+  - **`AgentSelfBlock`/`AgentSelfEvent` 降级成 POJO**（不再是 `@Entity`）——8 个调用方一行逻辑都没改，
+    大改的风险全被关在 `SelfCoreService` 一个类里。这是这次能一次改完的关键。
+  - 新增 `BiliDigTool.digBilibili`：**带着关键词去 B 站定向找**（用 DeepSeek 搜索 + `site:bilibili.com`，
+    省掉 wbi 签名）。本地实测它自己就会用：热门榜 `-352` 风控 → 改走定向搜。
+  - 面板「它自己」加了一节**「自主活动」**（`/api/admin/self/activities`）：每个活动一行——开关状态、今天几次、上次结论。
+  - ⚠️ **这一天两次"改了等于没改"，一次把线上打挂 6 分钟**，全记在坑 **74**：
+    ① V24 补 `stance` 列的迁移**只写了没跑**就推代码 → `Schema-validation: missing column` → 崩溃循环；
+    ② 新加的 `MEMORY_SELF_*` 没在 compose 的 `environment:` 里透传 → `.env` 写了也不进容器（研究明明该关却"开着"）。
+    **`docker restart` 不会重读 .env，要 `--force-recreate`。**
+  - 「刷会儿 B 站」的细节（触发/判据/护栏/白名单）见下面这一段的原始记录。
+- **上一版**（2026-10-20）：`wechat-agent:c23d10123159…`，`13 个类 / 54 个工具`、0 ERROR。
   **「刷会儿 B 站」已经是它自己的一个自动活动**（`BilibiliActivity`，`@Order(10)` 排研究之后）：
   - 触发：每天 ≤1 轮、间隔 ≥6 小时、**只在谷时**（北京 09–12、14–18 是峰时，躲开省钱；周末全天算谷时）；
   - 一轮：`browseBilibili` 挑来源 → 挑 1~3 条 `readBilibiliVideo` → 判据一句话「值不值得占用他一次注意力」
@@ -297,6 +317,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+
 
 
 
