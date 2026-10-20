@@ -30,7 +30,7 @@ public class SelfToolVisibilityRule implements ToolVisibilityRule {
      * 它自己的时间里出现（否则它就一边陪你聊天一边写自己的日记）。实测漏过一次：
      * 只匹配 `selfQuest` 时它被留在机主对话的工具集里。
      */
-    private static final List<String> OWN_TIME_TOOL_PREFIXES = List.of("selfQuest", "selfWantToSay");
+    private static final List<String> OWN_TIME_TOOL_PREFIXES = List.of("selfQuest", "selfWantToSay", "selfSeed");
 
     @Override
     public String name() {

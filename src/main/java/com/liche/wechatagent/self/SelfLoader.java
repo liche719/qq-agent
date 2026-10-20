@@ -41,27 +41,36 @@ public class SelfLoader implements PromptSectionProvider {
     private final SelfStanceService selfStances;
     private final SelfLessonService selfLessons;
     private final SelfQuestStore selfQuests;
+    private final AgentSeedService selfSeeds;
     private final int maxChars;
     private final int maxCommitmentsInPrompt;
     private final int maxStancesInPrompt;
     private final int maxLessonsInPrompt;
+    private final int maxSeedsInPrompt;
+    private final int maxRecentEvents;
 
     public SelfLoader(SelfCoreService selfCore,
                       SelfStanceService selfStances,
                       SelfLessonService selfLessons,
                       SelfQuestStore selfQuests,
+                      AgentSeedService selfSeeds,
                       @Value("${memory.self-max-chars:800}") int maxChars,
                       @Value("${memory.self-max-commitments-in-prompt:5}") int maxCommitmentsInPrompt,
                       @Value("${memory.self-max-stances-in-prompt:5}") int maxStancesInPrompt,
-                      @Value("${memory.self-max-lessons-in-prompt:3}") int maxLessonsInPrompt) {
+                      @Value("${memory.self-max-lessons-in-prompt:3}") int maxLessonsInPrompt,
+                      @Value("${memory.self-max-seeds-in-prompt:5}") int maxSeedsInPrompt,
+                      @Value("${memory.self-max-recent-events:3}") int maxRecentEvents) {
         this.selfCore = selfCore;
         this.selfStances = selfStances;
         this.selfLessons = selfLessons;
         this.selfQuests = selfQuests;
+        this.selfSeeds = selfSeeds;
         this.maxChars = Math.max(120, maxChars);
         this.maxCommitmentsInPrompt = Math.max(1, maxCommitmentsInPrompt);
         this.maxStancesInPrompt = Math.max(1, maxStancesInPrompt);
         this.maxLessonsInPrompt = Math.max(1, maxLessonsInPrompt);
+        this.maxSeedsInPrompt = Math.max(1, maxSeedsInPrompt);
+        this.maxRecentEvents = Math.max(1, maxRecentEvents);
     }
 
     @Override
@@ -84,7 +93,12 @@ public class SelfLoader implements PromptSectionProvider {
         Optional<AgentQuest> quest = selfQuests.activeQuest();
         List<AgentLesson> lessons = userMessage == null || userMessage.isBlank()
                 ? java.util.List.of() : selfLessons.lessonsInPlay(userMessage, maxLessonsInPrompt);
-        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()) {
+        // 2026-10-20：加上"最近发生的事"和"还没消化的念头"——用户要的是活动之间相互知道
+        // （刷到视频 → 有想法 → 研究 → 再定向找），这两段是那个"知道"的落点。
+        List<AgentSeed> seeds = selfSeeds.openSeeds(maxSeedsInPrompt);
+        List<AgentSelfEvent> recent = selfCore.recentEvents(maxRecentEvents);
+        if (blocks.isEmpty() && open.isEmpty() && stances.isEmpty() && lessons.isEmpty() && quest.isEmpty()
+                && seeds.isEmpty() && recent.size() <= 1) {
             return null;
         }
         Map<String, AgentSelfBlock> byType = blocks.stream()
@@ -95,6 +109,8 @@ public class SelfLoader implements PromptSectionProvider {
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_TASK), "我现在在做");
         appendBlockLine(body, byType.get(AgentSelfBlock.TYPE_PROJECT), "我长期在做");
         appendQuest(body, quest.orElse(null));
+        appendRecentEvents(body, recent);
+        appendSeeds(body, seeds);
         appendStances(body, stances);
         appendLessons(body, lessons);
         appendCommitments(body, open);
@@ -126,6 +142,45 @@ public class SelfLoader implements PromptSectionProvider {
             body.append("（下一步：").append(SelfText.clipLine(quest.getNextStep(), 80)).append('）');
         }
         body.append('\n');
+    }
+
+    /**
+     * 我最近干过什么（2026-10-20 加）。
+     *
+     * <p>原来只给"上次停在这"一条，而用户要的是"刷完视频能接上后面的事"——只给一条接不上。
+     * 这里给最近几条，按时间正序（老的在前，读起来像一条时间线），一行一条、只给结论。
+     */
+    private void appendRecentEvents(StringBuilder body, List<AgentSelfEvent> recent) {
+        if (recent == null || recent.isEmpty()) {
+            return;
+        }
+        body.append("我最近干的：\n");
+        recent.stream()
+                .filter(event -> event.getContent() != null && !event.getContent().isBlank())
+                .forEach(event -> body.append("· ").append(SelfText.clipLine(event.getContent(), 60)).append('\n'));
+    }
+
+    /**
+     * 还没消化的念头（2026-10-20 加）——这是活动之间"相辅相成"的接头。
+     *
+     * <p>写成"惦记着"而不是"待办清单"：它不是一个必须清空的队列，而是"我脑子里还挂着的事"，
+     * 可以接着做、也可以就这么放着。
+     */
+    private void appendSeeds(StringBuilder body, List<AgentSeed> seeds) {
+        if (seeds == null || seeds.isEmpty()) {
+            return;
+        }
+        body.append("我心里还惦记着：\n");
+        seeds.forEach(seed -> {
+            if (seed.getContent() == null || seed.getContent().isBlank()) {
+                return;
+            }
+            body.append("· #").append(seed.getId()).append(' ').append(seed.getContent().trim());
+            if (seed.getSource() != null && !seed.getSource().isBlank()) {
+                body.append("（来自 ").append(seed.getSource()).append('）');
+            }
+            body.append('\n');
+        });
     }
 
     private void appendBlockLine(StringBuilder body, AgentSelfBlock block, String label) {
