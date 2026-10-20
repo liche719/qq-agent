@@ -82,68 +82,77 @@
 /* ============================================================
    黑色主题：同样的玻璃与网格，只是整体转为近黑
    ============================================================ */
+/* ============================================================
+   黑色主题（2026-10-21 重做，方案 A：极简深色）
+   原则：只有**一个**强调色（#3b82f6），其余全灰阶；
+        不要渐变、不要毛玻璃、不要外发光——全都"在发光"等于没有重点。
+        状态色只出现在圆点和关键数字上。
+   ============================================================ */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --ink: #f1f4fa;
-  --ink-2: #c2c9d6;
-  --muted: #8791a3;
-  --placeholder: #6b7484;
+  --ink: #e8e8ea;
+  --ink-2: #b6b6bd;
+  --muted: #7c7c86;
+  --placeholder: #5c5c66;
 
-  --line: rgba(190, 205, 235, .12);
-  --line-strong: rgba(190, 205, 235, .22);
-  --bg-layers:
-    radial-gradient(900px 520px at 14% -6%, rgba(74, 108, 190, .30), transparent 62%),
-    radial-gradient(760px 460px at 92% 2%, rgba(52, 74, 130, .26), transparent 58%),
-    radial-gradient(700px 420px at 50% 112%, rgba(40, 56, 96, .24), transparent 62%),
-    linear-gradient(180deg, #0c0f16 0%, #090b11 48%, #05060a 100%);
+  --line: #232327;
+  --line-strong: #2f2f35;
+  /* 纯色底，不再叠三层径向渐变 */
+  --bg-layers: #0a0a0b;
 
-  --glass: linear-gradient(180deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .035));
-  --glass-border: rgba(255, 255, 255, .10);
-  --glass-inset: rgba(255, 255, 255, .07);
-  --ring: 0 0 0 1px rgba(255, 255, 255, .045);
-  --shadow: 0 20px 48px rgba(0, 0, 0, .55);
+  --glass: #131316;
+  --glass-border: #26262a;
+  --glass-inset: transparent;
+  --ring: none;
+  --shadow: none;
 
-  --field-bg: rgba(255, 255, 255, .05);
-  --btn-bg: rgba(255, 255, 255, .06);
-  --btn-hover: rgba(255, 255, 255, .12);
-  --chip-bg: rgba(255, 255, 255, .07);
-  --surface-solid: rgba(255, 255, 255, .045);
-  --kv-bg: rgba(255, 255, 255, .045);
-  --detail-bg: rgba(255, 255, 255, .035);
-  --chat-bg: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, .022));
-  --bubble-bg: rgba(255, 255, 255, .07);
-  --system-bg: rgba(255, 255, 255, .04);
-  --th-bg: rgba(16, 20, 28, .92);
-  --row-hover: rgba(150, 180, 255, .10);
-  --track-bg: rgba(255, 255, 255, .08);
-  --code-ink: #aab6c9;
+  --field-bg: #17171a;
+  --btn-bg: #1a1a1e;
+  --btn-hover: #232328;
+  --chip-bg: #1a1a1e;
+  --surface-solid: #17171a;
+  --kv-bg: #17171a;
+  --detail-bg: #101013;
+  --chat-bg: #131316;
+  --bubble-bg: #1c1c21;
+  --system-bg: #17171a;
+  --th-bg: #17171a;
+  --row-hover: #1a1a1f;
+  --track-bg: #232327;
+  --code-ink: #b6b6bd;
 
-  --grid-dot: rgba(150, 180, 255, .14);
-  --grid-h: rgba(150, 180, 255, .04);
-  --grid-v: rgba(150, 180, 255, .075);
+  /* 背景网格线全部去掉：它们是纯视觉噪音，占用注意力 */
+  --grid-dot: transparent;
+  --grid-h: transparent;
+  --grid-v: transparent;
 
-  /* 强调色仍是「淡蓝 → 白」，在深色底上更亮，文字转深色 */
-  --accent-from: #9dbcff;
-  --accent-to: #ffffff;
-  --accent-line: rgba(190, 210, 255, .38);
-  --accent-ink: #0b0d12;
-  --brand: #8fb0ff;
-  --brand-soft: rgba(143, 176, 255, .22);
-  --tick-from: #6f8fd6;
-  --tick-to: #ffffff;
-  --bar-from: #4f6aa8;
-  --bar-to: #dce6ff;
-  --bar-line: rgba(190, 210, 255, .18);
+  /* 唯一强调色 */
+  --accent-from: #3b82f6;
+  --accent-to: #3b82f6;
+  --accent-line: #3b82f6;
+  --accent-ink: #ffffff;
+  --brand: #3b82f6;
+  --brand-soft: rgba(59, 130, 246, .14);
+  --tick-from: #3b82f6;
+  --tick-to: #3b82f6;
+  --bar-from: #3b82f6;
+  --bar-to: #3b82f6;
+  --bar-line: #26262a;
 
-  --ok: #46d69c;
-  --ok-soft: rgba(70, 214, 156, .14);
-  --ok-ink: #8ff0c8;
-  --warn: #efc05a;
-  --warn-soft: rgba(239, 192, 90, .14);
-  --warn-ink: #f6dda0;
-  --bad: #ff7288;
-  --bad-soft: rgba(255, 114, 136, .14);
-  --bad-ink: #ffbcc7;
+  --ok: #10b981;
+  --ok-soft: rgba(16, 185, 129, .12);
+  --ok-ink: #34d399;
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, .12);
+  --warn-ink: #fbbf24;
+  --bad: #ef4444;
+  --bad-soft: rgba(239, 68, 68, .12);
+  --bad-ink: #f87171;
+
+  /* 圆角收小：16/22 那种大圆角是"玩具感"的来源 */
+  --r: 10px;
+  --r-md: 8px;
+  --r-sm: 6px;
 }
 
 * { box-sizing: border-box; }
@@ -207,10 +216,10 @@ a { color: var(--brand); text-decoration: none; }
   background: var(--glass);
   border: 1px solid var(--glass-border);
   border-radius: var(--r);
-  /* 只写标准属性：手写 -webkit- 前缀会被构建工具合并掉标准属性，导致毛玻璃失效 */
-  backdrop-filter: blur(20px) saturate(150%);
-  box-shadow: var(--ring), var(--shadow), inset 0 1px 0 var(--glass-inset);
-  transition: background .25s, border-color .25s;
+  /* 2026-10-21 去掉毛玻璃与外发光：深色下 blur+saturate 会把底图搅成脏蓝，
+     而且每张卡片都在发光时，用户根本看不出哪个是重点。 */
+  box-shadow: none;
+  transition: background .18s, border-color .18s;
 }
 
 .panel { padding: 20px 22px; }
@@ -787,17 +796,57 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 }
 
 @media (max-width: 720px) {
-  /* 状态胶囊在窄屏只留小圆点 */
+  /* 状态胶囊在窄屏收成小号（2026-10-21 修正：原来 font-size:0 只留圆点，
+     结果两个点分不清谁是谁。现在保留文字、压字号到 11px，一行仍放得下）。 */
   .topbar .row .pill {
-    padding: 6px 8px;
-    font-size: 0;
-    gap: 0;
+    padding: 5px 9px;
+    font-size: 11px;
+    gap: 5px;
     min-width: 0;
+    white-space: nowrap;
   }
-  .topbar .row .pill .dot { margin: 0; }
+  .topbar .row .pill .dot { margin: 0; width: 6px; height: 6px; flex-basis: 6px; }
   /* 顶栏内部再收一点 */
   .topbar { padding: 10px 14px 12px; }
   .topbar .spread { margin-top: 8px !important; }
   /* 余额在窄屏上占主要位置 */
   .balance-pill { padding: 6px 12px; }
 }
+
+/* ============================================================
+   紧凑化（2026-10-21 重做，方案 A 的第二步）
+   指标卡原来 18px 内边距 + 26px 数字，手机上四张卡占掉整屏。
+   压到 12px / 22px，一屏能看到页签 + 内容开头。
+   顶栏那两行状态也收成一行。
+   ============================================================ */
+.stat { padding: 12px 14px; }
+.stat .k { font-size: 11.5px; }
+.stat .v { margin-top: 4px; font-size: 22px; font-weight: 600; letter-spacing: 0; }
+.stat .m { margin-top: 3px; font-size: 11.5px; line-height: 1.35; }
+.grid-4 { gap: 10px; }
+.grid-2 { gap: 10px; }
+
+/* 顶栏：一行装下 余额 + 两个状态点 + ⋯ */
+@media (max-width: 720px) {
+  .topbar .row { flex-wrap: nowrap; gap: 6px; }
+  .topbar .spread { margin-top: 0 !important; }
+  .topbar .brand-text h1 { font-size: 16px; letter-spacing: 0; }
+  .topbar { padding: 8px 12px 10px; }
+  .balance-pill { padding: 5px 10px; gap: 6px; }
+  .balance-pill .balance-value { font-size: 15px; }
+  .tabs { margin-top: 12px; }
+  .stat .v { font-size: 20px; }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* 页签吸顶：滚下去看内容时还能切页签 */
+.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(8px);
+}
+
+/* 卡片头字号收一点，和正文拉开层级靠字重不是靠字号 */
+.panel-head h2 { font-size: 15px; }
+.panel { padding: 16px 16px 18px; }
