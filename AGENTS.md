@@ -2,7 +2,7 @@
 
 > 本文件是给 AI 编码代理（Codex / DeepSeek harness / Claude Code 等）的项目记忆。
 > 换 harness 时，把本文件内容作为项目规则或系统提示加载，即可继承全部上下文。
-> 最后更新：2026-10-10（文档整理：§5 的 65 条坑搬到 `docs/pitfalls.md`、时校后补到 68 条，本文件从 68 KB 压到 33 KB）
+> 最后更新：2026-10-20
 > **本文件刻意保持在 64 KB 以下**——超过 harness 的读取上限就会被**静默截断尾部**，写在末尾的内容等于没写。
 > 所以：细节一律进 `docs/`（见 §6 文档索引），这里只留「每次都要用」的。
 
@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状（2026-10-20）**：工具 **57 个 / 16 个类**（自主模块开启时；2026-10-20 删掉考研与墨墨、加了工作区与评论草稿之后）、系统提示词 **26 条规则**。两者的真实调用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状**：工具 **57 个 / 16 个类**（自主模块开启时）、系统提示词 **24 条**。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -144,7 +144,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：74 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：76 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
@@ -153,7 +153,6 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/llm-call-modes.md` | LLM 调用档位、思考模式、缓存计价 |
 | `docs/self-layer-plan.md` | 自主模块「它自己」的设计与实测（**主文档**） |
 | `docs/self-layer-spec.md`、`docs/self-layer.md` | 同上，早期规格与说明（**存档**） |
-| `docs/exam-module.md` | **模块已删（2026-10-20）**，仅存档「怎么加下一个模块」的插件化契约 |
 | `docs/backup.md` | 备份改版与恢复步骤 |
 | `docs/media-memory.md` | 媒体记忆三件套 |
 | `docs/channel-robustness.md` | 通道健壮性（半开连接、重发、限流） |
@@ -163,152 +162,31 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/ICP备案指南.md` | 备案流程记录 |
 | `README.md` | 项目对外说明（快速开始、功能对照、目录结构） |
 
-## 7. 当前状态（2026-10-10）
+## 7. 当前状态
 
-> **这里不存会腐坏的数字快照。** 旧版曾经写过"某月某日各表多少行"，几天后就全错了，还会误导判断。
-> 要看实时数据：面板 `https://liche.cloud/`，或接口 `/api/admin/overview`。
+> **这里不存会腐坏的数字快照。** 要看实时数据：面板 `https://liche.cloud/` 或 `/api/admin/overview`。
 
-- **4 个容器 running**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
-  **这台机器现在只有这 4 个容器**：另一个项目「屋子」（`olr-app` + `olr-db`，占 8443、域名 `olr.liche.cloud`）
-  **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
-  DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
-- **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:4a9a424`，**`16 个类 / 57 个工具`**、0 ERROR。
-  **这一轮的三件事**（用户三条明确要求）：
-  - **自主模块整套只属于机主那一个号**（原话："只有我自己的主账号的那个 QQ 号对应的笨鱼才有自主模块，
-    其他别人的账号都没有"）：`SelfToolVisibilityRule` 里换成一条粗规则——**非机主时所有 `self*` 工具都不下发**
-    （连 schema 都不进上下文，不是"看得见但被拒"）。机主在普通对话里仍然只藏"它自己的时间"那组
-    （`selfQuest/selfWantToSay/selfSeed`），`selfRead/selfRecall/selfNote/selfWork*` 可用。
-  - **关思考只关"写那句评论"**（原话："关思考只是指生成评论内容的时候，噢，其他的时候按原来的不变"）：
-    新增场景 `SELF_COMMENT` + 新工具 `draftBilibiliComment`（只生成、不发送）。
-    做法是**把落笔拆成一次独立窄调用**，只有它用 `reasoning_effort=none`；
-    判断"值不值得看"、读视频、写总结仍走原来的 `dialog=low`。
-    实测：`none` 时上游 `reasoning_tokens=0`（不传是 27、low 是 40、minimal 反而 57）；
-    单次耗时从 ~19 秒降到 ~1 秒。
-    `BilibiliActivity` 的指令已写死"**必须先 draftBilibiliComment 再 commentBilibili**"，
-    并给了反 AI 腔的具体规则（10~25 字、只说一个具体点、禁"首先/总之/不得不说"、写完自问
-    "这句话换个人说也无所谓吗"）。
-  - **工作区已经在用了**：它自己写了 `notes/待改进清单.md`（记忆信任分级、定期反思、新旧事实冲突）
-    和 `notes/关于他的表达.md`（面试陪练怎么带、三个项目怎么讲、"他不太有朋友，别搞得像考核"）。
-- **上一版**（2026-10-20）：`wechat-agent:5823ed7`，**`16 个类 / 56 个工具`**、0 ERROR。
-  **它有了自己的工作区**（用户原话："给它分配一个工作区文件夹，它可以在里面做任何想做的事情，但是不能影响工作区外面"）：
-  - 宿主机 `self-workspace/` → 容器 `/app/self-workspace`（挂出来是为了**重建容器不丢**，那是它的记忆资产不是缓存）。
-  - 工具 5 个：`selfWorkList` / `selfWorkRead` / `selfWorkWrite`（append/覆盖）/ `selfWorkDelete` / `selfWorkMkdir`。
-  - **谁能用**：`SelfToolVisibilityRule` 里 `selfWork*` 前缀是 **OWNER_ONLY** —— 只有
-    `selfCore.isOwner(userId)`（机主 openid 或 `__self__` 作用域）才拿得到这组 schema；
-    **陌生人连工具描述都看不到**（不是"看到但拒绝调用"）。
-    用户原话："只有我的 QQ 主账号的笨鱼才有工作区，别的人都没有"。
-  - **在哪儿能用**：它自己的时间（`BilibiliActivity` 白名单已加）**和机主对话**（用户 2026-10-20 明确要）
-    —— 也就是"聊天时让它整理点东西"也能落盘。
-  - **空间**：单文件 ≤1 MB；**整个工作区 ≤1 GB**（`memory.self-workspace-max-total-bytes`，写前算总量，
-    满了就让它自己清理，不等服务器磁盘告急）。服务器 40 G / 已用 16 G，1 G 给它是安全的。
-  - **边界是可证明的**：每次路径 `normalize()` + `toRealPath()`（文件不存在就校验父目录）之后必须
-    `startsWith(root)`，所以 `../`、绝对路径、**符号链接**都出不去；只做文本读写、**不执行命令**；
-    删目录必须先清空（不递归）。实测 10 项边界全被拒（见坑 76 上面那段的输出）。
-  - **为什么不给 shell**：一旦能执行命令，"不能影响外面"就只剩容器边界，而容器里它还连着数据库和网络。
-    文件沙箱是可证明的边界，shell 不是。
-- **上一版**（2026-10-20）：`wechat-agent:b1890be`（+ 文档收尾），**`15 个类 / 51 个工具`**、0 ERROR。
-  **这一轮做的是"减法"**（用户原话："把考研和墨墨背单词这两个相关的都删掉，不得影响其他功能"、
-  "搜索全部换成 ds 的搜索 api，兜底才用 searxng，另外当天一个对话账号只能用 20 次"）：
-  - **删掉两个模块**：`exam/`（22 个类，20 个工具）、`maimemo/`（6 个类，1 个工具），连**面板页签**
-    （「背单词」核心页签 + 「考研」descriptor 页签）、**7 张表**（`exam_*` 六张 + `maimemo_setting`，
-    删前 dump 到服务器 `/root/wechat-agent-exam-maimemo-*.sql`）、**提示词第 20 条**、**help 清单 5 行**、
-    **工具显示名 22 行**、**compose 里 17 行死配置**一起清掉。
-  - 工具 72 → **51**；页签 9 → 8 个核心（+ 它自己/记忆两个 descriptor）。
-  - **搜索主路反转**：原来 SearXNG 优先、DS 兜底，现在 **DS 优先、SearXNG 兜底**，
-    并按"**账号 + 当天 20 次**"配额（`DeepSeekSearchQuota`，Redis 计数，key=`ds-search:<日期>:<userId>`，
-    重启不重置；Redis 挂了降级进程内计数）。超了自动改走 SearXNG，并在结果里如实说明。
-    顺带把旧的 `withFallback/fallbackReason/siteOperators/hostMatches` 四段兜底逻辑变成死代码。
-
-  - **DS 的第二个接口 `tools/fetch` 也接上了**（用户说"要接"）：它**渲染后取正文**，能救回**靠 JS 渲染**的站。
-    触发条件有两层：**① 模型自己判断**——`readWebPage(url, fullText=true)` 就直接抓全文（程序只提供开关，不替它决定该不该花钱）；**② 程序兜底**——正文少于 200 字或本地直接 4xx 时补一次。
-    **共用同一份每日配额**（一次 fetch 也算一次，配额默认 **30**/账号/天），拿不到就保持原结果。
-    本地实测：`readWebPage https://example.com`（本地只抓到空壳）→ `DeepSeek 抓取成功 chars=931`、配额 0→1。
-  - **代码托管站的网页视图会自动换成正文本地址**（2026-10-20，用户场景："去看我 GitHub 仓库的代码，一层层深入"）：
-    `github.com/o/r/blob/ref/path` → `raw.githubusercontent.com/o/r/ref/path`，**纯文本、免费、不花配额**。
-    实测日志：`代码页转纯文本：…/blob/master/README -> …/master/README`。
-    （这一步放在抓取之前做，所以看代码**优先走它**，只有它也不够时才动用收费的 fetch。）
-  - ⚠️ **删模块时唯一要小心的不是代码，是"注释里的举例"**：`MemoryExtractor`/`MemoryTextSimilarity`/
-    `CommandRegistry` 里都有「考研数学目标分是130」这类**历史实测案例**，它们描述的是当时的真实数据、改了反而失真。
-    所以保留了，只删真正指向已删代码的引用（见坑 75）。
-- **上一版**（2026-10-20）：`wechat-agent:2b44f01`，`17 个类 / 72 个工具`、0 ERROR。
-  **它做过什么，现在都能看到了**（用户要求："我不干扰它，但是我得知道它做了什么"）：
-  - 新表 `bili_view_log`：**它每读一个视频就落一条**（工具埋点，不靠模型自述）——
-    时间 / bvid / 标题 / 读到了什么（字幕 N 字 / 抽帧成功 / 读不到 + 原因）。
-  - 面板「它自己」页签加两节：**「它刷过的视频」**（带 B站 链接）与 **「它在 B 站说过的话」**
-    （评论原文 + 结果码 + 视频链接；数据本来就在 `bili_comment_log`，只是没接出来）。
-  - 接口：`/api/admin/self/bilibili-views`、`/api/admin/self/bilibili-comments`（都只读）。
-  - 三处合起来才完整：`agent_self_note`（它自己的总结）+ `bili_view_log`（看了什么）+
-    `bili_comment_log`（说了什么）。
-- **上一版**（2026-10-20）：`wechat-agent:1fb3c50a3700…`，**17 个类 / 72 个工具**、
-  **`MEMORY_SELF_ENABLED=true`（自主模块真的开起来了）**、`MEMORY_SELF_RESEARCH_ENABLED=false`（研究关）、0 ERROR。
-  **这一轮做的是"大改"**（用户原话："我觉得可以直接大改"，并且"之前自主模块产生的数据可以完全删掉"）：
-  - **「它自己的话」从两张表并成一张** `agent_self_note`：块（当前值）与事件（流水）本来是同一件事的两个投影，
-    合并后 `kind=BLOCK` + `slot` + `active`/`superseded_by` 表达块（历史自带），其它 kind 只追加。
-    `agent_self_block` / `agent_self_event` / `agent_commitment` **三张老表已 DROP**，
-    `agent_quest*` / `agent_lesson` / `agent_stance` / `agent_self_utterance` / `agent_reflection` **数据已清空**（表留着）。
-  - **工具 24 → 14**（自主模块自有）：删掉 `goalOpen/goalClose/commit/commitResolve`（**实测 0 次调用、0 行数据**，
-    语义被"开方向 + 下一步"覆盖）、`selfReplace/selfSummarize`（块只有 180 字，纯追加够用）、
-    `selfLessonEdit`、`selfQuestRest`；并把"我欠着"从 `SelfLoader`、面板、`selfRead` 里全部移除。
-  - **`AgentSelfBlock`/`AgentSelfEvent` 降级成 POJO**（不再是 `@Entity`）——8 个调用方一行逻辑都没改，
-    大改的风险全被关在 `SelfCoreService` 一个类里。这是这次能一次改完的关键。
-  - 新增 `BiliDigTool.digBilibili`：**带着关键词去 B 站定向找**（用 DeepSeek 搜索 + `site:bilibili.com`，
-    省掉 wbi 签名）。本地实测它自己就会用：热门榜 `-352` 风控 → 改走定向搜。
-  - 面板「它自己」加了一节**「自主活动」**（`/api/admin/self/activities`）：每个活动一行——开关状态、今天几次、上次结论。
-  - ⚠️ **这一天两次"改了等于没改"，一次把线上打挂 6 分钟**，全记在坑 **74**：
-    ① V24 补 `stance` 列的迁移**只写了没跑**就推代码 → `Schema-validation: missing column` → 崩溃循环；
-    ② 新加的 `MEMORY_SELF_*` 没在 compose 的 `environment:` 里透传 → `.env` 写了也不进容器（研究明明该关却"开着"）。
-    **`docker restart` 不会重读 .env，要 `--force-recreate`。**
-  - 「刷会儿 B 站」的细节（触发/判据/护栏/白名单）见下面这一段的原始记录。
-- **上一版**（2026-10-20）：`wechat-agent:c23d10123159…`，`13 个类 / 54 个工具`、0 ERROR。
-  **「刷会儿 B 站」已经是它自己的一个自动活动**（`BilibiliActivity`，`@Order(10)` 排研究之后）：
-  - 触发：每天 ≤1 轮、间隔 ≥6 小时、**只在谷时**（北京 09–12、14–18 是峰时，躲开省钱；周末全天算谷时）；
-  - 一轮：`browseBilibili` 挑来源 → 挑 1~3 条 `readBilibiliVideo` → 判据一句话「值不值得占用他一次注意力」
-    → 值得就 `commentBilibili` 说一句 + `selfWantToSay` 告诉他 → 只有雏形就用 `selfSeedNote` 留念头；
-  - 工具白名单 20 个，**把 `selfQuest*` 那一串用 `deniedTools` 挡掉了**（否则"刷会儿"会变成"开方向"），
-    但放进了 `AgentQuestTool`——因为 `selfWantToSay` 在它里面，不放开就没法说话；
-  - 本地真跑过两轮（`活动=bilibili 用时 ~55s 花 0.021 元`），事件确实落到 `agent_self_event`（`topic=bilibili`）。
-  - ⚠️ **这一轮差点一天烧 30 元**：记账走了 `appendEvent` 的证据校验（`run:bilibili` 不是合法 id）→ 抛异常被吞
-    → 事件没落库 → `due()` 查不到"刚跑过" → **每分钟重跑一轮**。修法=直接 `save` + **进程内 `lastRunAt` 兜底**，
-    教训写成坑 **73**（"记账是护栏的前置条件，记录失败必须让护栏降级"）。
-  - 本地环境差异：**容器里没 ffmpeg/ffprobe**，没字幕的视频抽帧失败（生产镜像有），不是代码问题。
-  - **活动这一层是本轮抽出来的**（`SelfActivity` 接口 + `SelfActivityJob` 替换 `SelfQuestJob`）：
-    现有研究逻辑**原样**包进 `ResearchActivity`（`@Order(0)` 排最前），本地真跑通一轮验证
-    （`活动=research 用时 24364ms 花 0.055 元 结论：开了自己的第一个方向…`），行为零变化。
-    **以后加"刷小红书"这类能力 = 加一个 `@Component` 类 + 一段配置，调度器不用改。**
-  - ⚠️ 生产上 `memory.self-enabled` 仍是 `false`，所以 `SelfActivityJob`/`BilibiliActivity` **根本不创建**
-    ——本轮的部署同样**零行为变化**，打开开关后才会真跑。
-  - 上一版（`40f5d16`）加的「念头」`agent_seed`：用户要的是"刷到视频 → 有想法 → 研究 → 再定向找视频"；
-    `agent_quest` 太重（要开题）、`agent_self_event` 只是流水账，中间缺一个轻量对象。
-    工具 `selfSeedNote` / `selfSeedClose`（只在它自己的时间里下发）。
-  - `SelfLoader` 加了两段注入：**最近干过的几件事**（`recentEvents`）+ **心里还惦记着的念头**（OPEN seeds）；
-    配置 `memory.self-max-recent-events`（默认 3）、`memory.self-max-seeds-in-prompt`（5）。
-  - **seed 注入的行为级验证通过**：插一条 seed（`视频怎么做到不卡？有人说 60 帧是关键`）后问它"心里惦记着什么"，
-    它答「我还惦记着 #1：视频怎么才能不卡，有人说 60 帧是关键」→ **OPEN 念头确实会被下一轮读到**（"相辅相成"的接头成立）。
-  - ⚠️ **本地验这一轮时先踩了个坑**：从**工作区根**（`wechat-agent/`）启动 jar，而 `.env` 在
-    `wechat-agent-java/` 下，`spring.config.import: optional:file:.env` 是相对**当前目录**找的、
-    `optional` 让它**静默跳过** → `LLM_API_KEY` 为空 → 上游 401「密钥被上游拒了」，
-    看着像 key 失效，其实是配置没加载。**必须在 `wechat-agent-java/` 目录里启动**。
-    （同一轮也顺手验了 key 本身：余额 22.34 元、最小 chat 请求 200，两边 `.env` 的 key 哈希一致。）
-- **上一版**（2026-10-20）：`wechat-agent:87eaafda1adc…`，**B站这条线通了：扫码登录 → 自己刷 → 自己发评论**。
-  凭据：`bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，面板显示 `扫码登录（库里）· 可写`；
-  **CSRF 已验证**（不存在的 oid 返回 `12002` 而不是 `-111`）。
-  - 读：`browseBilibili`（热门/关注动态/稍后再看，三个来源都**不需要 wbi 签名**）。
-  - 写：`commentBilibili`（新类 `BiliCommentTool`，54 个工具里的第 54 个），
-    注册为 `EXTERNAL_ACTION · sideEffect=true · retryable=false · risk=HIGH`；
-    **真发过一次并删掉**（`add → code:0 rpid=321293122192`、`del → code:0`），端到端验证过。
-  - 护栏在 `BiliCommentGuard`，**全部从台账 `bili_comment_log` 算、不靠模型自觉**：
-    每天 5 条 / 同视频只评一次 / 两条间隔 ≥10 分钟 / ≤200 字 / 不放链接 / 不含凭据与机器路径。
-    11 项边界都验过（`docs/pitfalls.md` 坑 72）。
-  - `findDownloadableLinks` 也修了（维基 `/File:xxx.jpg` 是描述页不是文件，现在解析出真实图片地址）。
-- **⚠️ B站评论是拿机主主号说话**：用户明确"不用草稿、直接发"，所以改护栏参数前先想清楚；
-  想关就直接把 `bilibili.comment.enabled` 设 false。
+- **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
+- **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
+- **规模**：工具 **57 个 / 16 个类**、系统提示词 **24 条**。取用记录见 `docs/tools-and-prompt-inventory.md`。
+- **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
+  - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
+    5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
+    它已经在里面写了 `notes/` 两份笔记（对自己的反思 + 面试陪练怎么带）。
+  - **它有自己的时间**：心跳 2 小时一次，**只在 DeepSeek 谷时**（工作日北京 09–12、14–18 是峰时）才动；
+    每轮只读 1 条 B 站视频，判据一句话「值不值得占用他一次注意力」，值得就写一句评论 + 跟他说一声。
+  - **评论只关思考那一次**：`draftBilibiliComment` 用 `reasoning_effort=none`（实测 thinking token=0），
+    判断/读视频/总结仍是 `dialog=low`。禁 AI 腔的规则写在指令里（10~25 字、只说一个具体点）。
+  - **它自己的话**在一张表 `agent_self_note`：`kind=BLOCK` + `slot` 表达"我对自己的描述"（改写=插新行+旧行标失效，
+    历史自带），其它 kind 只追加。
+  - 研究活动**当前关着**（`MEMORY_SELF_RESEARCH_ENABLED=false`），只留刷 B 站。
+- **搜索**：DeepSeek 优先（**每账号每天 30 次**，Redis 计数、重启不重置），超了自动落 SearXNG 兜底。
+  抓网页在 Jsoup 拿不到东西时才用 DS `fetch` 补一次，共用同一份配额；`github.com/.../blob/...` 自动转 raw 纯文本（免费）。
+- **⚠️ 真实用户数据，不许动**：`memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；
+  `conversation_memory` 存原文证据，**只能忘、不能替**。
+- **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`（`docs/backup.md`）。
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
-- **⚠️ 真实用户数据，不许动**：
-  - `memory` / `memory_fact` / `conversation_memory` 里的都是真记忆；`conversation_memory` 存的是原文证据，**只能忘、不能替**。
-- **备份**：宿主机 `backup/<yyyyMMdd>.zip` + 共享 `backup/media/<sha256>.bin`；`stored-media`/`logs` 同样已持久化（坑 38、`docs/backup.md`）。
-- **仍未做**（完整清单见 `docs/todo.md`）：LLM 余额**主动**预警（402 被动告警 2026-10-15 已做） · 公安联网备案 · 异地备份 ·
-  容器 `read_only` + 非 root 用户（坑 53 末）。
+- **仍未做**：LLM 余额主动预警 · 公安联网备案 · 异地备份 · 容器 `read_only` + 非 root（详见 `docs/todo.md`）。
 - 本机与远程**共用同一个 QQ AppID，不要同时启动**。
 
 ## 8. 凭据索引
