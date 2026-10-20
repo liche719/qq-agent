@@ -232,8 +232,14 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     工具 `selfSeedNote` / `selfSeedClose`（只在它自己的时间里下发）。
   - `SelfLoader` 加了两段注入：**最近干过的几件事**（`recentEvents`）+ **心里还惦记着的念头**（OPEN seeds）；
     配置 `memory.self-max-recent-events`（默认 3）、`memory.self-max-seeds-in-prompt`（5）。
-  - **本地行为级验证没做成**：本地 `.env` 的 LLM key 被上游拒了（`模型密钥被上游拒了`），
-    只验到"启动成功 + 开着 self 时 78 个工具"；注入效果要等 self 打开后在线上验。
+  - **本地行为级验证通过**：插一条 seed（`视频怎么做到不卡？有人说 60 帧是关键`）后问它"心里惦记着什么"，
+    它答「我还惦记着 #1：视频怎么才能不卡，有人说 60 帧是关键」→ seed 注入链路真通，
+    同时也说明 **OPEN 念头确实会被下一轮读到**（"相辅相成"的接头成立）。
+  - ⚠️ **本地验这一轮时先踩了个坑**：从**工作区根**（`wechat-agent/`）启动 jar，而 `.env` 在
+    `wechat-agent-java/` 下，`spring.config.import: optional:file:.env` 是相对**当前目录**找的、
+    `optional` 让它**静默跳过** → `LLM_API_KEY` 为空 → 上游 401「密钥被上游拒了」，
+    看着像 key 失效，其实是配置没加载。**必须在 `wechat-agent-java/` 目录里启动**。
+    （同一轮也顺手验了 key 本身：余额 22.34 元、最小 chat 请求 200，两边 `.env` 的 key 哈希一致。）
 - **上一版**（2026-10-20）：`wechat-agent:87eaafda1adc…`，**B站这条线通了：扫码登录 → 自己刷 → 自己发评论**。
   凭据：`bili_credential` 有 `SESSDATA`(222) + `bili_jct`(32) + mid + `雾看花_`，面板显示 `扫码登录（库里）· 可写`；
   **CSRF 已验证**（不存在的 oid 返回 `12002` 而不是 `-111`）。
@@ -277,6 +283,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+
 
 
 
