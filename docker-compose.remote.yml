@@ -136,6 +136,10 @@ services:
       # 自主模块（「它自己那一侧」）。**必须透传**：compose 只传列出的变量（坑 36）。
       # MEMORY_SELF_OWNER_OPENID 留空 = 模块不工作（fail-closed）；要启用得在服务器 .env 配机主 openid。
       MEMORY_SELF_ENABLED: ${MEMORY_SELF_ENABLED:-true}
+      # research activity switch (user 2026-10-20 asked to keep only bilibili).
+      # MUST live in this tracked file - editing the server copy gets overwritten by CI (pitfall 76).
+      MEMORY_SELF_RESEARCH_ENABLED: ${MEMORY_SELF_RESEARCH_ENABLED:-true}
+      DEEPSEEK_SEARCH_DAILY_LIMIT_PER_USER: ${DEEPSEEK_SEARCH_DAILY_LIMIT_PER_USER:-30}
       # 留空 = 工作区关闭。生产在 .env 里设 /app/self-workspace
       MEMORY_SELF_WORKSPACE_DIR: ${MEMORY_SELF_WORKSPACE_DIR:-}
       MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES: ${MEMORY_SELF_WORKSPACE_MAX_FILE_BYTES:-16777216}
