@@ -273,6 +273,12 @@
      都不需要 wbi 签名**——原来以为这几个都要签名，实测直接 GET 就行，白准备了一套签名实现。
    - 顺带：`/x/web-interface/nav` 可以当"登录态自检"，返回 `isLogin` 和 `uname`（当前 `雾看花_`）。
    - 具体实现见 `bilibili/BilibiliClient.feed()` 与 `BilibiliTool.browseBilibili`（hot/following/later）。
+   - **那 `bili_jct` 怎么拿**：面板「B站」页签做了扫码登录（2026-10-20，`BiliQrLoginService` + `BiliCredentialService` + 表 `bili_credential`）。
+     协议就两步：`passport.bilibili.com/x/passport-login/web/qrcode/generate` 拿 `qrcode_key`，
+     然后 `.../qrcode/poll?qrcode_key=` 轮询（`86101` 待扫 / `86090` 已扫待确认 / `86100` 成功 / `86038` 过期）；
+     **成功时的响应头 `Set-Cookie` 才同时带 `SESSDATA` 和 `bili_jct`**。二维码内容在服务端用 zxing 转成 PNG，
+     面板只显示一张图（为此加了 `com.google.zxing:core` + `javase` 两个依赖）。
+     凭据**库里优先、`.env` 兜底**；`.env` 那份只有 SESSDATA，所以「退出登录」后照样能读字幕。
 
 - PowerShell 不支持 heredoc（`<<'EOF'`），用 `@'...'@` here-string。
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
@@ -281,5 +287,6 @@
 - 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
+
 
 

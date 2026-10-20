@@ -40,7 +40,7 @@
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key`/`SAVED_Ali_Secret`） |
 | 墨墨 access token | 服务器 `.env` 的 `MAIMEMO_API_TOKEN`，或面板「背单词」页存进 `maimemo_setting`（后者优先）；**有效期约一天** |
 | 墨墨 OIDC 凭据（长期方案） | 服务器 `.env` 的 `MAIMEMO_OIDC_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`（600）；换来的 token 存 `maimemo_setting` 表 |
-| B站登录凭据（取字幕用） | 服务器 `.env` 的 **`BILI_SESSDATA`**（600）；整条 Cookie 串或只填 SESSDATA 的值都认。**2026-10-10 从用户本地「哔哩哔哩视频总结」的 `config.json` 搬过去**（那是他自己扫码登录存的）。过期后重新扫码、再搬一次即可；**取字幕必须要它**——不带登录时 `player/wbi/v2` 返回的字幕轨恒为 0 |
+| B站登录凭据（取字幕用） | **面板「B站」页签扫码登录**（2026-10-20 加）→ 存 `bili_credential` 表（**库里优先**，含 `bili_jct`，可发评论）；兜底是服务器 `.env` 的 **`BILI_SESSDATA`**（600，只有 SESSDATA、**不能写**）。整条 Cookie 串或只填 SESSDATA 的值都认。2026-10-10 那份是从用户本地「哔哩哔哩视频总结」的 `config.json` 搬过来的；过期就重新扫码，不用再手抄。**取字幕必须要它**——不带登录时 `player/wbi/v2` 返回的字幕轨恒为 0 |
 | 部署私钥 / 上传验签密钥 | GitHub Secrets `DEPLOY_SSH_KEY`、`DEPLOY_TAR_SECRET`（后者服务器副本 `/etc/wechat-deploy.secret` 600） |
 
 ## 2. 本地开发与运行
@@ -146,7 +146,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ### 运维面板前端（Vue 3 前后端分离，2026-09-12 重构）
 
 - 独立工程 `web/`（Vue 3.5 + Vite 8 + vue-router 5，hash 路由），构建产物写进 `src/main/resources/static/`（已 gitignore），**改完必须 `npm run build`**（或走 Dockerfile 的 node 阶段）才会进 jar。**改视觉只动 `web/src/style.css`**（两套主题的 token 都在 `:root` 与 `:root[data-theme="dark"]` 里，组件里不要写死颜色）。
-- **8 个核心页签**：总览 / QQ 通道 / 模型与搜索 / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志（兜底清单在 `web/src/panels/registry.js`）。**模块还能再挂自己的页签**——由后端 `GET /api/admin/panels` 声明，例如自主模块的「它自己」（`AdminPanelController` 里 `key=self`），所以实际页签数会多于 8。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
+- **9 个核心页签**：总览 / QQ 通道 / 模型与搜索 / **B站** / 背单词 / 任务 / 定时任务 / 用户与记忆 / 日志（兜底清单在 `web/src/panels/registry.js`）。**模块还能再挂自己的页签**——由后端 `GET /api/admin/panels` 声明，例如自主模块的「它自己」（`AdminPanelController` 里 `key=self`），所以实际页签数会多于 9。`labels.js` 是**唯一**的状态词典（界面不出现英文状态词，接口状态一律翻中文）；`MarkdownText.vue` 是**唯一**允许 `v-html` 的地方（marked + DOMPurify 白名单清洗，链接强制 `target=_blank rel=noopener`）。支持黑白主题（`localStorage['admin.theme']`，默认白；`index.html` 有一段内联脚本在首屏前定主题防闪白）。
 - **记忆分层 2026-09-18 已合并成 3 张表**：`memory`（一条记忆=一段话；`kind`=PROFILE/TASK/EXPERIENCE，`always_inject` 决定是否每轮无条件注入）+ `memory_fact`（有槽位的当前值）+ `conversation_memory`（原文证据）。**core/work/episode 三张表和那三个 Service 都不存在了**，统一走 `MemoryService`/`MemoryRepository`；`/memory` 的编号改成 `M<id>`。**老表 2026-09-19 已用 V17 删掉**（删前做过双向逐条比对；备份在服务器 `/root/wechat-agent-memory-legacy-backup-20260919.sql`，⚠️ 回退旧镜像前必须先从这个 dump 恢复）。来龙去脉见 `docs/memory-vector-plan.md` §20。
 - **数字口径**：总览「工作记忆」＝全部（`count`）——**归档机制 2026-09-18 已整块删除**（`memory_archive` 表、`user_work_memory.archived` 列、面板的「已归档」数字与筛选都没了，存量 34 行恢复成活跃；详见 `docs/memory-vector-plan.md` §17）；`/api/admin/users` 同时返回原始 `userId` 与打码 `displayUserId` —— **这是刻意的**，面板要用原始 id 去请求 `/users/{userId}` 打开详情，只留打码值会让详情点不开。
 - **自动刷新语义**：`DashboardView` 每 interval 拉 `/overview`，**成功后才 `tick++`**，页签 `watch(tick)` 重载自己的数据；tick 会连"当前打开用户的详情"一起重载（新消息追加到末尾、保留已翻出的更早消息、只在原本贴着底部时才自动滚到底）。趋势图只有总览页签请求（limit 60）。`/metrics/history` 是**进程内环形缓冲**（10 秒采样、保留 1 小时），**重启即清零**，频繁部署时柱子很少是正常的。
@@ -224,11 +224,11 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   **2026-10-17 已按用户要求整块删除** —— 容器、`/opt/olr` 目录（含 pgdata）、只它用的两个镜像、
   DNS 记录、acme 证书目录全清了（用户明确说不留备份）。8443 端口现已无人监听。
 - **面板入口**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问必然提示证书名不匹配，别用。
-- **最近一次部署**（2026-10-20）：`wechat-agent:262f0480f72d…`，`12 个类 / **53** 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
-  **能自己刷 B 站了**：新工具 `browseBilibili`（hot=全站热门 / following=他关注的 UP / later=他的稍后再看），
-  三个来源**都不需要 wbi 签名**（实测直连 `code:0`）；选中的视频再接 `readBilibiliVideo` 读字幕或抽帧。
-  自主模块的作业指令里也提示了这条。**写操作（发评论/回复）做不了**：服务器上只有 `SESSDATA`、
-  缺 `bili_jct`，实测 `reply/add` 返回 `-111 CSRF 校验失败`（坑 72）。
+- **最近一次部署**（2026-10-20）：`wechat-agent:4e6ac3cdc9a9…`，`12 个类 / 53 个工具`、0 ERROR、`BILI_SESSDATA` 就位。
+  **面板加了「B站」页签**：扫码登录 → 凭据存 `bili_credential` 表（含 `bili_jct`，**扫码后就能发评论**）、
+  状态页显示"能不能读 / 能不能发评论 / 账号名"。库里有就优先用，没有才回落服务器 `.env`（老那份只有 SESSDATA）。
+  上一版加了 `browseBilibili`（热门/关注动态/稍后再看，三个来源都**不需要 wbi 签名**）。
+  **写操作在扫码前做不了**：`.env` 那份缺 `bili_jct`，实测 `reply/add` 返回 `-111 CSRF 校验失败`（坑 72）。
   另有 `findDownloadableLinks` 的修复：维基的 `/File:xxx.jpg` 是描述页而不是文件，现在会解析出真实图片地址。
   （视频抽帧见坑 71，搜索兜底与 `@Autowired` 崩溃见坑 70，B站「只转发」见坑 68，模型重试见坑 69。）
 - **发布基线**：`v1.0.0`，自主模块 `v1.1.0` / `v1.2.0` / `v1.3.1`。
