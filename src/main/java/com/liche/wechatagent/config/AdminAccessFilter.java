@@ -32,7 +32,7 @@ public class AdminAccessFilter extends OncePerRequestFilter {
      * 不会像原来那样"不在三个前缀里就放行"。
      */
     private static final String[] PUBLIC_PATHS = {
-            "/api/site/info", "/api/health", "/api/maimemo/oauth/callback"
+            "/api/site/info", "/api/health"
     };
 
     @Override

@@ -30,6 +30,11 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
     private final SearxngClient searxngClient;
     /** SearXNG 搜不到 / 搜跑偏时的兜底（可空；按次收费，只在需要时才调） */
     private final DeepSeekSearchClient deepSeekSearchClient;
+    /**
+     * DS 搜索的每日配额（2026-10-20 加）。用户要求：搜索优先走 DS，但**当天一个账号最多 20 次**，
+     * 超了改用自托管 SearXNG 兜底。可空——老测试构造器走的就是「没有配额」这条路。
+     */
+    private DeepSeekSearchQuota quota;
     private final WebPageTool webPageTool;
     private final ToolStatusService statusService;
     private final int timeoutSeconds;
@@ -65,6 +70,11 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
         this.deepReadCount = Math.max(0, Math.min(5, deepReadCount));
         this.deepReadChars = Math.max(300, Math.min(6000, deepReadChars));
         this.timeZone = parseZone(timeZoneId);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setQuota(DeepSeekSearchQuota quota) {
+        this.quota = quota;
     }
 
     /** 不带兜底的构造器（历史测试用；等价于"只走 SearXNG"） */
@@ -113,22 +123,48 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
 
     private String search(String query, String timeRange, boolean latest, boolean verified) {
 
-        List<SearxngClient.SearchHit> searxHits;
-        boolean searxFailed = false;
-        try {
-            searxHits = searxngClient.search(query, timeoutSeconds, timeRange);
-        } catch (Exception e) {
-            log.warn("搜索失败 query={}", query, e);
-            searxFailed = true;
-            searxHits = List.of();
+        // 2026-10-20 起**主路是 DeepSeek 搜索**（用户要求），SearXNG 降为兜底。
+        // 理由：DS 的摘要更干净、认 site:/after:、还带 rerank 分；大陆 IP 下 SearXNG 只剩六个引擎、不认 site:。
+        // 代价是按次收费 —— 所以配额由 DeepSeekSearchQuota 按「账号 + 当天」卡在 20 次。
+        String userId = statusService.currentUserId();
+        List<SearxngClient.SearchHit> hits = List.of();
+        boolean dsTried = false;
+        String dsSkip = null;
+
+        if (deepSeekSearchClient != null && deepSeekSearchClient.enabled()) {
+            if (quota == null || quota.tryConsume(userId)) {
+                dsTried = true;
+                try {
+                    hits = dedupe(deepSeekSearchClient.search(query, publishedAfter(latest, timeRange)));
+                } catch (Exception e) {
+                    log.warn("DS 搜索失败，转 SearXNG 兜底 query={}", query, e);
+                }
+            } else {
+                dsSkip = "今天的 DS 搜索次数用完了（" + quota.dailyLimit() + " 次/天）";
+            }
         }
 
-        List<SearxngClient.SearchHit> deduped = dedupe(searxHits);
-        deduped = withFallback(deduped, query, timeRange, searxFailed);
+        boolean searxFailed = false;
+        if (hits.isEmpty()) {
+            try {
+                hits = dedupe(searxngClient.search(query, timeoutSeconds, timeRange));
+            } catch (Exception e) {
+                log.warn("兜底搜索也失败 query={}", query, e);
+                searxFailed = true;
+                hits = List.of();
+            }
+        }
+
+        List<SearxngClient.SearchHit> deduped = hits;
 
         if (deduped.isEmpty()) {
             if (searxFailed) {
-                throw new IllegalStateException("搜索服务暂时不可用，没能找到相关资料");
+                throw new IllegalStateException(dsTried
+                        ? "搜索服务暂时不可用（DS 和兜底都没成功），没能找到相关资料"
+                        : "搜索服务暂时不可用，没能找到相关资料");
+            }
+            if (dsSkip != null) {
+                return "没有搜到相关资料（" + dsSkip + "，已改用自建搜索但也没结果），换个说法试试？";
             }
             return "没有搜到相关资料，换个说法试试？";
         }
@@ -211,6 +247,17 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
      *
      * <p>兜底拿到的结果为空时，**保留 SearXNG 原来那批**（哪怕可疑也比没有强）；只有兜底真的拿到东西才替换。
      */
+    /**
+     * DS 搜索的发布日期下限（2026-10-20）：口径与原来那套兜底一致——
+     * `latest` 或 `timeRange=year` 都按"近一年"，其余不限。
+     */
+    private LocalDate publishedAfter(boolean latest, String timeRange) {
+        if (latest || "year".equals(timeRange)) {
+            return LocalDate.now(timeZone).minusYears(1);
+        }
+        return null;
+    }
+
     private List<SearxngClient.SearchHit> withFallback(List<SearxngClient.SearchHit> current,
                                                        String query, String timeRange, boolean searxFailed) {
         if (deepSeekSearchClient == null || !deepSeekSearchClient.enabled()) {

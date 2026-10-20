@@ -282,19 +282,6 @@ qq:
   # 主动消息每天最多发多少条（0 = 不限，只记账并在面板显示）；超限后放弃发送并记 WARN
   proactive-daily-limit: ${QQ_PROACTIVE_DAILY_LIMIT:0}
 
-exam:
-  # 考研规划模块：计划/每日任务/打卡/进度统计 + 三条定时推送
-  # 关掉推送（enabled=false）不影响聊天里的指令与工具，只是不再自动催
-  enabled: ${EXAM_ENABLED:true}
-  morning-time: ${EXAM_MORNING_TIME:07:30}
-  evening-time: ${EXAM_EVENING_TIME:22:00}
-  weekly-time: ${EXAM_WEEKLY_TIME:21:00}
-  weekly-day: ${EXAM_WEEKLY_DAY:SUNDAY}
-  # 昨天没做完的旧任务（7 天以内）自动顺延到今天
-  carry-over: ${EXAM_CARRY_OVER:true}
-  push-scan-interval-ms: ${EXAM_PUSH_SCAN_INTERVAL_MS:60000}
-  push-initial-delay-ms: ${EXAM_PUSH_INITIAL_DELAY_MS:60000}
-
 wechat:
   channel:
     mode: ${WECHAT_CHANNEL_MODE:disabled}   # QQ 项目默认不启动微信通道；本地调试可显式设 simulator
@@ -533,34 +520,6 @@ scheduled:
   enabled: ${SCHEDULED_ENABLED:true}
   max-per-user: ${SCHEDULED_MAX_PER_USER:10}
   result-max-chars: ${SCHEDULED_RESULT_MAX_CHARS:2000}
-
-# 墨墨背单词开放 API（个人 Token 在墨墨 App「开放 API」里生成，有效期很短；
-# 面板「背单词」页保存的 Token 会写进数据库并优先于这里的 MAIMEMO_API_TOKEN）
-maimemo:
-  enabled: ${MAIMEMO_ENABLED:true}
-  api-token: ${MAIMEMO_API_TOKEN:}
-  # 墨墨是单账号接口：只有这个用户（openid）能查它的数据；留空时回落到 alert.qq-openid
-  owner-user-id: ${MAIMEMO_OWNER_USER_ID:}
-  base-url: ${MAIMEMO_BASE_URL:https://open.maimemo.com/open/api/v1}
-  timeout-seconds: ${MAIMEMO_TIMEOUT_SECONDS:10}
-  connect-timeout-seconds: ${MAIMEMO_CONNECT_TIMEOUT_SECONDS:5}
-  cache-seconds: ${MAIMEMO_CACHE_SECONDS:30}
-  item-limit: ${MAIMEMO_ITEM_LIMIT:30}
-  # 顽固单词要在完整学习记录里筛（实测 833 条里才有 35 个 STICKING），所以单独拉一次大列表并单独缓存
-  record-fetch-limit: ${MAIMEMO_RECORD_FETCH_LIMIT:1000}
-  sticking-cache-seconds: ${MAIMEMO_STICKING_CACHE_SECONDS:600}
-  daily-push-enabled: ${MAIMEMO_DAILY_PUSH_ENABLED:true}
-  daily-push-time: ${MAIMEMO_DAILY_PUSH_TIME:21:30}
-  push-scan-interval-ms: ${MAIMEMO_PUSH_SCAN_INTERVAL_MS:60000}
-  push-initial-delay-ms: ${MAIMEMO_PUSH_INITIAL_DELAY_MS:60000}
-  # OIDC 长期授权（在 open.maimemo.com/app 创建"后端应用"后填这里；回调地址必须与平台登记的一致）
-  oidc:
-    client-id: ${MAIMEMO_OIDC_CLIENT_ID:}
-    client-secret: ${MAIMEMO_OIDC_CLIENT_SECRET:}
-    redirect-uri: ${MAIMEMO_OIDC_REDIRECT_URI:}
-    scopes: ${MAIMEMO_OIDC_SCOPES:openid offline_access open.memo.study}
-    authorization-endpoint: ${MAIMEMO_OIDC_AUTHORIZATION_ENDPOINT:https://accounts.maimemo.com/oidc/auth}
-    token-endpoint: ${MAIMEMO_OIDC_TOKEN_ENDPOINT:https://accounts.maimemo.com/oidc/token}
 
 logging:
   file:

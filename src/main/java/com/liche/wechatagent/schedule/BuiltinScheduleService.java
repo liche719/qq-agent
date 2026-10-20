@@ -1,7 +1,5 @@
 package com.liche.wechatagent.schedule;
 
-import com.liche.wechatagent.exam.ExamPushService;
-import com.liche.wechatagent.maimemo.MaimemoService;
 import com.liche.wechatagent.user.UserProfile;
 import com.liche.wechatagent.user.UserProfileRepository;
 import org.quartz.CronExpression;
@@ -42,8 +40,6 @@ public class BuiltinScheduleService {
     private static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final Scheduler scheduler;
-    private final MaimemoService maimemoService;
-    private final ExamPushService examPushService;
     private final UserProfileRepository profileRepository;
     private final ZoneId zone;
 
@@ -51,33 +47,26 @@ public class BuiltinScheduleService {
     private final String backupCron;
     private final long alertCheckMs;
     private final long careScanMs;
-    private final long maimemoPushScanMs;
     private final long reminderRecoveryMs;
     private final long memoryLifecycleMs;
     private final long dashboardSampleMs;
 
     public BuiltinScheduleService(Scheduler scheduler,
-                                  MaimemoService maimemoService,
-                                  ExamPushService examPushService,
                                   UserProfileRepository profileRepository,
                                   @Value("${care.delivery-time:20:30}") String careDeliveryTime,
                                   @Value("${backup.cron:0 0 3 * * ?}") String backupCron,
                                   @Value("${alert.check-interval-ms:60000}") long alertCheckMs,
                                   @Value("${care.scan-interval-ms:60000}") long careScanMs,
-                                  @Value("${maimemo.push-scan-interval-ms:60000}") long maimemoPushScanMs,
                                   @Value("${reminder.recovery-scan-interval-ms:300000}") long reminderRecoveryMs,
                                   @Value("${memory.lifecycle-scan-interval-ms:3600000}") long memoryLifecycleMs,
                                   @Value("${management.dashboard.metrics-sample-ms:10000}") long dashboardSampleMs,
                                   @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.scheduler = scheduler;
-        this.maimemoService = maimemoService;
-        this.examPushService = examPushService;
         this.profileRepository = profileRepository;
         this.careDeliveryTime = careDeliveryTime;
         this.backupCron = backupCron;
         this.alertCheckMs = alertCheckMs;
         this.careScanMs = careScanMs;
-        this.maimemoPushScanMs = maimemoPushScanMs;
         this.reminderRecoveryMs = reminderRecoveryMs;
         this.memoryLifecycleMs = memoryLifecycleMs;
         this.dashboardSampleMs = dashboardSampleMs;
@@ -87,8 +76,6 @@ public class BuiltinScheduleService {
     /** 内置任务清单 */
     public List<Map<String, Object>> list() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        rows.add(maimemoPush());
-        rows.add(examPush());
         rows.add(proactiveCare());
         rows.add(backup());
         rows.add(quartzGroup("提醒调度（Quartz）", "用户创建的定时提醒，到点推送一句话",
@@ -97,36 +84,11 @@ public class BuiltinScheduleService {
                 "scheduled-tasks", "面板下方「我创建的定时任务」"));
         rows.add(interval("运维告警检查", "QQ 网关、MySQL/Redis/Quartz、磁盘与内存异常时推送告警", alertCheckMs));
         rows.add(interval("主动关怀扫描", "到点给开启了关怀的用户发复盘邀请", careScanMs));
-        rows.add(interval("背单词推送扫描", "检查是否到点该发今日背单词进度", maimemoPushScanMs));
         rows.add(interval("提醒恢复扫描", "补齐丢失的提醒调度（重启后自愈）", reminderRecoveryMs));
         rows.add(interval("记忆生命周期扫描", "清理过期上下文与失效记忆", memoryLifecycleMs));
         rows.add(interval("面板指标采样", "给总览页的趋势图取样", dashboardSampleMs));
         rows.sort(Comparator.comparing(row -> String.valueOf(row.get("group"))));
         return rows;
-    }
-
-    private Map<String, Object> maimemoPush() {
-        Map<String, Object> push = maimemoService.pushState();
-        boolean enabled = Boolean.TRUE.equals(push.get("enabled"));
-        Map<String, Object> row = base("每日推送", "定时", "墨墨背单词今日进度推送到本人 QQ",
-                enabled ? "每天 " + push.get("time") : "已关闭", "面板「背单词」页可改时间/开关");
-        row.put("nextRunAt", enabled ? nextDaily(String.valueOf(push.get("time"))) : "—");
-        row.put("lastRunText", push.get("lastPushDate") == null || String.valueOf(push.get("lastPushDate")).isBlank()
-                ? "还没推过" : "上次推送日期 " + push.get("lastPushDate"));
-        row.put("enabled", enabled);
-        return row;
-    }
-
-    /** 考研模块的三条推送（早计划 / 晚收尾 / 周复盘），时间与开关来自 exam.* */
-    private Map<String, Object> examPush() {
-        Map<String, Object> push = examPushService.pushState();
-        boolean enabled = Boolean.TRUE.equals(push.get("enabled"));
-        Map<String, Object> row = base("考研推送", "定时", "今日计划（早）、完成情况（晚）、周复盘（周日）推送给备考用户",
-                enabled ? "早 " + push.get("morning") + " · 晚 " + push.get("evening") + " · 周 " + push.get("weekly")
-                        : "已关闭", "面板「考研」页可开关；exam_plan 上记「今天已推」标记");
-        row.put("nextRunAt", enabled ? nextDaily(String.valueOf(push.get("morning"))) : "—");
-        row.put("enabled", enabled);
-        return row;
     }
 
     private Map<String, Object> proactiveCare() {

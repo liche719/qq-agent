@@ -11,7 +11,6 @@ import OverviewPanel from './OverviewPanel.vue'
 import QqPanel from './QqPanel.vue'
 import LlmPanel from './LlmPanel.vue'
 import BiliPanel from './BiliPanel.vue'
-import MaimemoPanel from './MaimemoPanel.vue'
 import TasksPanel from './TasksPanel.vue'
 import ScheduledPanel from './ScheduledPanel.vue'
 import UsersPanel from './UsersPanel.vue'
@@ -22,7 +21,6 @@ export const CORE_PANELS = {
   qq: QqPanel,
   llm: LlmPanel,
   bili: BiliPanel,
-  maimemo: MaimemoPanel,
   tasks: TasksPanel,
   scheduled: ScheduledPanel,
   users: UsersPanel,
@@ -35,7 +33,6 @@ export const CORE_TAB_LABELS = {
   qq: 'QQ 通道',
   llm: '模型与搜索',
   bili: 'B站',
-  maimemo: '背单词',
   tasks: '任务',
   scheduled: '定时任务',
   users: '用户与记忆',

@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * DeepSeek 官方搜索接口（{@code POST /v1/tools/search}）——**只当 SearXNG 的兜底**，不是主路径。
+ * DeepSeek 官方搜索接口（{@code POST /v1/tools/search}）——**2026-10-20 起是搜索主路径**，SearXNG 降为兜底。
  *
  * <p><b>为什么需要它（2026-10-15）</b>：自建的 SearXNG 在大陆机房 IP 下只有六个引擎能用，而且
  * **完全不认 {@code site:} 之类的搜索语法**（坑 68 就是栽在这上面：搜 {@code site:bilibili.com} 返回一堆无关结果）。
@@ -113,7 +113,7 @@ public class DeepSeekSearchClient {
                 log.info("DeepSeek 搜索兜底：没有可用结果 query={} ms={}", effectiveQuery, millis);
             } else {
                 // 这条日志也是**花钱的账**：每次成功请求 0.005 元，按条数没法反推次数，所以按次记一行
-                log.info("DeepSeek 搜索兜底：命中 {} 条 query={} ms={}（计费 0.005 元）",
+                log.info("DeepSeek 搜索：命中 {} 条 query={} ms={}（计费 0.005 元）",
                         hits.size(), effectiveQuery, millis);
             }
             return hits;
