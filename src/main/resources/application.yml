@@ -197,7 +197,7 @@ deepseek:
     count: ${DEEPSEEK_SEARCH_COUNT:10}
   # 2026-10-20：DS 搜索改为主路后按「账号 + 当天」限量，超了自动改走自托管 SearXNG。
   # 设 0 = 完全不用 DS（等于回到「只用 SearXNG」）。
-  daily-limit-per-user: ${DEEPSEEK_SEARCH_DAILY_LIMIT_PER_USER:20}
+  daily-limit-per-user: ${DEEPSEEK_SEARCH_DAILY_LIMIT_PER_USER:30}
 
 # 视频抽帧（2026-10-17 加，见 VideoFrameService）：相册视频、B站没字幕时的兜底。
 # 参数是**自适应**的：帧数按视频时长算（4~10 帧），先按镜头变化抽、不够再均匀补齐；

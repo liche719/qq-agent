@@ -187,9 +187,13 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     顺带把旧的 `withFallback/fallbackReason/siteOperators/hostMatches` 四段兜底逻辑变成死代码。
 
   - **DS 的第二个接口 `tools/fetch` 也接上了**（用户说"要接"）：它**渲染后取正文**，能救回**靠 JS 渲染**的站。
-    触发条件是「正文少于 `web.deepseek-fetch-min-chars`（默认 300 字）」或者本地直接 4xx；
-    **共用同一份每日配额**（一次 fetch 也算一次），拿不到就保持原结果。
+    触发条件是「正文少于 `web.deepseek-fetch-min-chars`（**默认 1500 字**）」或者本地直接 4xx；
+    **共用同一份每日配额**（一次 fetch 也算一次，配额默认 **30**/账号/天），拿不到就保持原结果。
     本地实测：`readWebPage https://example.com`（本地只抓到空壳）→ `DeepSeek 抓取成功 chars=931`、配额 0→1。
+  - **代码托管站的网页视图会自动换成正文本地址**（2026-10-20，用户场景："去看我 GitHub 仓库的代码，一层层深入"）：
+    `github.com/o/r/blob/ref/path` → `raw.githubusercontent.com/o/r/ref/path`，**纯文本、免费、不花配额**。
+    实测日志：`代码页转纯文本：…/blob/master/README -> …/master/README`。
+    （这一步放在抓取之前做，所以看代码**优先走它**，只有它也不够时才动用收费的 fetch。）
   - ⚠️ **删模块时唯一要小心的不是代码，是"注释里的举例"**：`MemoryExtractor`/`MemoryTextSimilarity`/
     `CommandRegistry` 里都有「考研数学目标分是130」这类**历史实测案例**，它们描述的是当时的真实数据、改了反而失真。
     所以保留了，只删真正指向已删代码的引用（见坑 75）。

@@ -40,8 +40,13 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
      */
     private DeepSeekSearchClient deepSeekSearchClient;
     private DeepSeekSearchQuota quota;
-    /** 正文少于这么多字就认为"没抓到内容"（导航栏/空壳页面通常不足 300 字） */
-    private int deepSeekFetchMinChars = 300;
+    /**
+     * 正文少于这么多字就认为"没抓到可读内容"。
+     *
+     * <p>2026-10-20 从 300 提到 **1500**：用户的场景是"让我去看它的 GitHub 仓库、一层层读代码"，
+     * 300 只覆盖"完全空白"，而"抓到一堆导航栏 + 几条链接"也读不出东西。1500 更贴近"真的能读"。
+     */
+    private int deepSeekFetchMinChars = 1500;
 
     /**
      * 确定性不可读：链接非法、HTTP 4xx、不是网页文本、跳转异常……同一个链接再试多少次都一样。
@@ -82,8 +87,34 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
         }
     }
 
-    private String openAndExtract(String url) throws IOException {
-        URI current = urlValidator.validate(url);
+    /**
+     * 把「代码托管站的网页视图」换成正文本地址（2026-10-20 加）。
+     *
+     * <p>为什么值得单独做：用户的场景是"去看我 GitHub 仓库里的代码，一层层深入"。
+     * `github.com/o/r/blob/ref/path` 返回的是**带整页导航的 HTML**，Jsoup 抓下来又脏又费 token；
+     * 而 `raw.githubusercontent.com/o/r/ref/path` 就是**纯文本**，干净、免费、还支持任意文件。
+     * 所以这一步在抓取之前做，省掉一次 DS fetch 的钱。
+     */
+    private String normalizeForRawText(String url) {
+        if (url == null) {
+            return url;
+        }
+        String trimmed = url.trim();
+        java.util.regex.Matcher github = java.util.regex.Pattern
+                .compile("^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
+                .matcher(trimmed);
+        if (github.matches()) {
+            String raw = "https://raw.githubusercontent.com/" + github.group(1) + "/" + github.group(2)
+                    + "/" + github.group(3) + "/" + github.group(4);
+            org.slf4j.LoggerFactory.getLogger(WebPageTool.class)
+                    .info("代码页转纯文本：{} -> {}", trimmed, raw);
+            return raw;
+        }
+        return trimmed;
+    }
+
+    private String openAndExtract(String rawUrl) throws IOException {
+        URI current = urlValidator.validate(normalizeForRawText(rawUrl));
         for (int redirects = 0; redirects <= maxRedirects; redirects++) {
             Request request = new Request.Builder()
                     .url(current.toString())
