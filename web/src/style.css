@@ -850,3 +850,14 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 /* 卡片头字号收一点，和正文拉开层级靠字重不是靠字号 */
 .panel-head h2 { font-size: 15px; }
 .panel { padding: 16px 16px 18px; }
+
+/* 可操作的告警条（2026-10-21）：左边说问题，右边给动作。
+   原来只有一条纯文字红框，用户只能干看着。 */
+.alert-actionable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.alert-actionable .alert-text { flex: 1 1 auto; min-width: 0; }
+.alert-actionable .btn-sm { flex: 0 0 auto; }

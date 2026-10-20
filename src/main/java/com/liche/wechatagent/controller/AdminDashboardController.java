@@ -115,7 +115,13 @@ public class AdminDashboardController {
         out.put("moduleErrors", moduleErrors);
         List<String> alerts = new ArrayList<>();
         if ("DOWN".equals(out.get("qq"))) alerts.add("QQ 网关已离线");
-        if (!tasks.findByStatus("UNKNOWN_RESULT").isEmpty()) alerts.add("存在 UNKNOWN_RESULT 任务");
+        var unknownTaskIds = tasks.findByStatus("UNKNOWN_RESULT");
+        if (!unknownTaskIds.isEmpty()) {
+            // 说清"这是什么、要不要管"（2026-10-21）：原来只有一句「存在 UNKNOWN_RESULT 任务」，
+            // 用户既不知道降级了什么、也点不掉。这类任务是"发消息后没收到平台确认"，
+            // 绝大多数早就正常发到了，留着只会让面板一直红。
+            alerts.add(unknownTaskIds.size() + " 个任务没等到平台确认（不影响使用，可点「清掉」移除）");
+        }
         dependencies.forEach((name, state) -> {
             if (!"UP".equals(state)) alerts.add(name + " 状态异常：" + state);
         });
@@ -307,4 +313,25 @@ public class AdminDashboardController {
         }
         return List.copyOf(lines);
     }
+
+    /**
+     * 清掉所有"结果未知"的任务状态（2026-10-21 加，**写操作**）。
+     *
+     * <p>只在用户明确点「清掉」时执行——它不动对话内容，只是把 Redis 里那些
+     * 永远等不到确认的任务记录删掉，让面板回到 `UP`。
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/actions/dismiss-unknown-tasks")
+    public Map<String, Object> dismissUnknownTasks() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        int cleared = 0;
+        for (String taskId : tasks.findByStatus("UNKNOWN_RESULT")) {
+            if (tasks.clear(taskId)) {
+                cleared++;
+            }
+        }
+        result.put("accepted", true);
+        result.put("message", cleared == 0 ? "没有需要清理的任务。" : "已清掉 " + cleared + " 个未确认的任务状态。");
+        return result;
+    }
+
 }

@@ -26,6 +26,26 @@ const tabs = ref(CORE_TABS)
  */
 /** 顶栏的「更多」开关：小屏默认收起刷新频率/主题/退出，先把地方让给内容 */
 const moreOpen = ref(false)
+
+/**
+ * 清掉"结果未知"的任务状态（2026-10-21 加）。
+ * 这类任务是发消息后没等到平台确认留下的，永远卡着会让面板一直显示"降级"。
+ * 点一下就好——只删状态记录，不动对话内容。
+ */
+const dismissBusy = ref(false)
+const dismissNotice = ref('')
+async function dismissUnknownTasks() {
+  dismissBusy.value = true
+  dismissNotice.value = ''
+  try {
+    dismissNotice.value = (await api('/actions/dismiss-unknown-tasks', { method: 'POST' }))?.message || '已清理'
+    await refresh(true)
+  } catch (error) {
+    dismissNotice.value = '清理失败：' + (error?.message || error)
+  } finally {
+    dismissBusy.value = false
+  }
+}
 const balance = ref(null)
 const balanceError = ref('')
 
@@ -290,8 +310,16 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="overview?.alerts?.length" class="stack" style="margin-top: 16px">
-      <div v-for="alert in overview.alerts" :key="alert" class="alert">{{ alert }}</div>
+      <div v-for="alert in overview.alerts" :key="alert" class="alert alert-actionable">
+        <span class="alert-text">{{ alert }}</span>
+        <button v-if="String(alert).includes('没等到平台确认')" class="btn btn-sm"
+                :disabled="dismissBusy" @click="dismissUnknownTasks">
+          {{ dismissBusy ? '清理中…' : '清掉' }}
+        </button>
+      </div>
     </div>
+
+    <p v-if="dismissNotice" class="hint" style="margin-top: 10px">{{ dismissNotice }}</p>
 
     <div class="grid-4" style="margin-top: 16px">
       <StatCard label="应用状态" :value="zh('app', status)"

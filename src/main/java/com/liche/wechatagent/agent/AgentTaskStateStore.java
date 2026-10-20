@@ -109,6 +109,21 @@ public class AgentTaskStateStore {
         }
     }
 
+    /**
+     * 清掉一个任务的状态（2026-10-21 加）。
+     *
+     * <p>为什么需要：`UNKNOWN_RESULT` 的任务**没有自动过期**——它们是"发消息后没收到平台确认"
+     * 留下的，永远卡在 Redis 里。于是面板的 `status` 永远是 `DEGRADED`、顶上一直挂一条红字，
+     * 用户看到的却是"系统其实好好的"。给一个明确的清入口，比让它一直红着有用。
+     */
+    public boolean clear(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return false;
+        }
+        Boolean removed = redis.delete("agent:task:" + taskId);
+        return Boolean.TRUE.equals(removed);
+    }
+
     public Map<Object, Object> find(String taskId) {
         if (taskId == null || taskId.isBlank()) return Map.of();
         try {
