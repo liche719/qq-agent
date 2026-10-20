@@ -392,10 +392,25 @@ public class AgentOrchestrator {
                     batch.quotedImages(), batch.quotedAttachments(), quotedDocuments);
             String reply;
             StreamReplySink sink = createSinkFor(batch);
+            // 2026-10-20：长任务途中可以先说一句（sayToUser）再继续干。
+            // 通道就是这个会话本身，且受 QQ「同一条消息最多被动回 5 次」约束——
+            // TurnProgress 里已经卡在 3 次，最终回复还要占一次。
+            WeChatChannel resolvedChannel = channelFor(batch.channel());
+            if (resolvedChannel == null) {
+                resolvedChannel = channels.stream()
+                        .filter(c -> !"simulator".equals(c.channel()))
+                        .findFirst().orElse(null);
+            }
+            final WeChatChannel progressChannel = resolvedChannel;
+            if (progressChannel != null) {
+                TurnProgress.install(text -> progressChannel.sendTextReplyFrom(
+                        batch.botId(), batch.userId(), batch.replyToMsgId(), text));
+            }
             try {
                 reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink,
                         extracted.failures(), extracted.videoFrameImages(), extracted.videoNotes());
             } finally {
+                TurnProgress.clear();
                 mediaToolContextService.unbind();
             }
             persistConversation(batch, taskId, userId, profile, reply);

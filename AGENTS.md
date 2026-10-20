@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状**：工具 **57 个 / 16 个类**（自主模块开启时）、系统提示词 **24 条**。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状**：工具 **61 个 / 17 个类**（自主模块开启时）、系统提示词 **25 条**。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -168,7 +168,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **57 个 / 16 个类**、系统提示词 **24 条**。取用记录见 `docs/tools-and-prompt-inventory.md`。
+- **规模**：工具 **61 个 / 17 个类**、系统提示词 **25 条**。取用记录见 `docs/tools-and-prompt-inventory.md`。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
@@ -180,6 +180,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - **它自己的话**在一张表 `agent_self_note`：`kind=BLOCK` + `slot` 表达"我对自己的描述"（改写=插新行+旧行标失效，
     历史自带），其它 kind 只追加。
   - 研究活动**当前关着**（`MEMORY_SELF_RESEARCH_ENABLED=false`），只留刷 B 站。
+- **长活儿可以先说一句**（`sayToUser`，2026-10-20 加）：要调好几个工具的活儿，它能在途中先发一条
+  （「行，我去翻翻」）再继续干，不用等最后一次性回。**上限每轮 3 次**——QQ 对同一条用户消息
+  只允许被动回复 5 次（`msg_seq` 1~5，见 `QqChannel#buildMessageBody`），最终回复还要占一次。
+  播报**不进对话记忆**（`conversation_memory` 只有最终答复），它是过程噪音。
 - **对话的思考档位按跳分**：第一跳 `dialog_first=high`（读懂意图、决定动不动手），之后 `dialog=low`（填参数、看结果、收尾）。实测同题 high/low 的思考量只差 100~200 token（约 0.0008 元），而少一跳能省 0.007 元。
 - **搜索**：DeepSeek 优先（**每账号每天 30 次**，Redis 计数、重启不重置），超了自动落 SearXNG 兜底。
   抓网页在 Jsoup 拿不到东西时才用 DS `fetch` 补一次，共用同一份配额；`github.com/.../blob/...` 自动转 raw 纯文本（免费）。
