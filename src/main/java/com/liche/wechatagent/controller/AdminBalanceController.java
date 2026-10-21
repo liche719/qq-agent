@@ -94,6 +94,35 @@ public class AdminBalanceController {
         out.put("todayYuan", today.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
         out.put("note", "今天花掉的钱（对话/提取/视频/生图合计）");
 
+        // 分类明细：按场景把今天的花费摊开，钱花在哪一眼能看出来。
+        // 生图那类是"没 token 按张折的"，所以 yuan 要按张数重算一遍，不能直接用表里的值（那是 0）。
+        try {
+            java.util.List<Map<String, Object>> rows = audit.byScenario(1);
+            java.util.List<Map<String, Object>> breakdown = new java.util.ArrayList<>();
+            for (Map<String, Object> row : rows) {
+                String scenario = String.valueOf(row.get("scenario"));
+                double yuan = row.get("yuan") instanceof Number n ? n.doubleValue() : 0d;
+                long calls = row.get("calls") instanceof Number n ? n.longValue() : 0L;
+                if ("image".equals(scenario)) {
+                    yuan = calls * 0.2;
+                }
+                if (yuan <= 0 && calls <= 0) {
+                    continue;
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("scenario", scenario);
+                item.put("calls", calls);
+                item.put("yuan", String.format(java.util.Locale.ROOT, "%.2f", yuan));
+                breakdown.add(item);
+            }
+            breakdown.sort((a, b) -> Double.compare(
+                    Double.parseDouble(String.valueOf(b.get("yuan"))),
+                    Double.parseDouble(String.valueOf(a.get("yuan")))));
+            out.put("breakdown", breakdown);
+        } catch (RuntimeException exception) {
+            log.warn("统计分类花费失败（已忽略）：{}", exception.toString());
+        }
+
         // 顺带看一眼 DS 官方余额（搜索还在用那个账号，余额见底会先影响搜索）
         if (!searchApiKey.isBlank()) {
             Map<String, Object> ds = queryDeepSeekBalance();

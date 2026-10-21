@@ -81,6 +81,24 @@ const balanceTone = computed(() => {
   if (n >= 3) return 'warn'
   return 'ok'
 })
+/** 顶栏那个数字的 tooltip：总计 + 按场景的分类（钱花在哪） */
+const balanceTooltip = computed(() => {
+  if (balanceError.value) return balanceError.value
+  const lines = [balance.value?.note || '今天花掉的钱']
+  const rows = balance.value?.breakdown
+  if (Array.isArray(rows) && rows.length) {
+    for (const row of rows) {
+      lines.push(`${SCENARIO_LABEL[row.scenario] || row.scenario}：${row.calls} 次，¥${row.yuan}`)
+    }
+  }
+  const ds = balance.value?.searchBalance
+  if (ds?.total) {
+    lines.push(`DeepSeek 官方余额（搜索用）：¥${ds.total}`)
+  }
+  lines.push('点一下重新查')
+  return lines.join('\n')
+})
+
 const panelsError = ref('')
 const interval = ref(readInterval())
 const overview = ref(null)
@@ -276,7 +294,7 @@ onBeforeUnmount(() => {
       <div class="spread">
         <div class="row">
           <!-- 余额放最显眼的位置：一眼看到还有多少 -->
-          <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceError || (balance?.note || '今天花掉的钱（对话/提取/视频/生图合计）') + '，点一下重新查'"
+          <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceTooltip"
                   @click="loadBalance">
             <span class="balance-label">今天</span>
             <span class="balance-value">{{ balanceText }}</span>
