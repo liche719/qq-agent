@@ -114,6 +114,17 @@ public class ToolStatusService {
                 context.replyToMsgId, media);
     }
 
+    /** 发语音：参数是音频地址（QQ 自己去下载），通道不支持时返回 false */
+    public boolean sendVoice(String audioUrl) {
+        StatusContext context = current.get();
+        if (context == null || audioUrl == null || audioUrl.isBlank()) {
+            return false;
+        }
+        WeChatChannel channel = channelFor(context.channel);
+        return channel != null && channel.sendVoiceReplyFrom(context.botId, context.userId,
+                context.replyToMsgId, audioUrl);
+    }
+
     private WeChatChannel channelFor(String channelName) {
         if (channelName == null || channelName.isBlank()) {
             return null;

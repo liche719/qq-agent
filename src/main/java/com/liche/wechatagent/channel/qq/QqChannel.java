@@ -1144,6 +1144,65 @@ public class QqChannel implements WeChatChannel {
         }
     }
 
+    /**
+     * 发语音（2026-10-21）：QQ 的语音是「先上传拿 file_info，再发 msg_type=7」两步。
+     *
+     * <p>上传用 {@code file_type=3 + url}，让平台自己去拉音频（TTS 给的 OSS 地址，24 小时有效），
+     * 所以这里**不下载、不转码、不落临时文件**，也不碰 silk。
+     *
+     * <p>{@code srv_send_msg=false} 是故意的：那份带 true 的写法会占**主动消息**频次；
+     * 这里之后单独发 message（带 msg_id/msg_seq）走**被动回复**，额度宽裕得多。
+     *
+     * <p>任何一步失败都返回 false，由调用方退回文字——语音是锦上添花，不能因为它整轮不回。
+     */
+    @Override
+    public boolean sendVoiceReplyFrom(String botId, String userId, String replyToMsgId, String audioUrl) {
+        if (isGroupConversation(userId) || userId == null || userId.isBlank()
+                || audioUrl == null || audioUrl.isBlank()) {
+            return false;
+        }
+        try {
+            ensureToken();
+            RestClient client = buildRestClient(apiBase);
+            ObjectNode upload = objectMapper.createObjectNode();
+            upload.put("file_type", 3);
+            upload.put("url", audioUrl);
+            upload.put("srv_send_msg", false);
+            String uploadBody = client.post().uri("/v2/users/{openid}/files", targetOpenid(userId))
+                    .header("Authorization", "QQBot " + accessToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(upload.toString())
+                    .retrieve().body(String.class);
+            String fileInfo = objectMapper.readTree(uploadBody == null || uploadBody.isBlank() ? "{}" : uploadBody)
+                    .path("file_info").asText("");
+            if (fileInfo.isBlank()) {
+                log.warn("[qq] voice upload returned no file_info user={} body={}", userId,
+                        uploadBody == null ? "" : uploadBody.substring(0, Math.min(200, uploadBody.length())));
+                return false;
+            }
+
+            ObjectNode body = objectMapper.createObjectNode();
+            body.put("msg_type", 7);
+            body.putObject("media").put("file_info", fileInfo);
+            if (replyToMsgId != null && !replyToMsgId.isBlank()) {
+                body.put("msg_id", replyToMsgId);
+                body.put("msg_seq", messageSequence.next());
+            }
+            client.post().uri(messagePath(userId), targetOpenid(userId))
+                    .header("Authorization", "QQBot " + accessToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body.toString())
+                    .retrieve().body(String.class);
+            log.info("[qq] voice sent user={} replyTo={}", userId, replyToMsgId);
+            return true;
+        } catch (Exception exception) {
+            apiErrorCount.incrementAndGet();
+            recordApiError(exception);
+            log.warn("[qq] voice send failed user={}: {}", userId, exception.getMessage());
+            return false;
+        }
+    }
+
     @Override
     public boolean deleteMessage(String botId, String userId, String messageId) {
         if (isGroupConversation(userId) || userId == null || userId.isBlank()
@@ -1179,7 +1238,7 @@ public class QqChannel implements WeChatChannel {
         String normalized = contentType == null ? "" : contentType.toLowerCase();
         if (normalized.startsWith("image/png") || normalized.startsWith("image/jpeg")) return 1;
         if (normalized.startsWith("video/mp4")) return 2;
-        if (normalized.contains("silk")) return 3;
+        if (normalized.startsWith("audio/") || normalized.contains("silk")) return 3;
         return 4;
     }
 

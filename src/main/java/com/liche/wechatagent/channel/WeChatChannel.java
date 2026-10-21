@@ -50,6 +50,14 @@ public interface WeChatChannel {
         return false;
     }
 
+    /**
+     * 发一条语音（2026-10-21）。参数是**音频的公网地址**，不是文件：QQ 的语音接口支持
+     * {@code file_type=3} + {@code url}，由平台自己下载转码。不支持的通道返回 false，调用方退回文字。
+     */
+    default boolean sendVoiceReplyFrom(String botId, String userId, String replyToMsgId, String audioUrl) {
+        return false;
+    }
+
     /** Best-effort removal of a bot message previously sent in this conversation. */
     default boolean deleteMessage(String botId, String userId, String messageId) {
         return false;

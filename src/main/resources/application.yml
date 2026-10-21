@@ -132,6 +132,26 @@ llm:
   audit:
     enabled: ${LLM_AUDIT_ENABLED:true}
 
+# 语音合成（2026-10-21）：把一句话念成 QQ 语音条发出去。
+# 实测（DashScope 北京）：qwen3-tts-flash 返回带签名的 wav URL（24h 有效），
+# QQ 的语音接口支持 file_type=3 + url，由平台自己下载 —— 所以这里不落文件、不转码、不碰 silk。
+# 计费按字符（响应里的 usage.characters）；音色见阿里云 Qwen-TTS 音色列表。
+voice:
+  tts:
+    enabled: ${VOICE_TTS_ENABLED:true}
+    base-url: ${VOICE_TTS_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
+    # 没单独配就复用 embedding 的 DashScope key（同一个账号就能用）
+    api-key: ${VOICE_TTS_API_KEY:${EMBEDDING_API_KEY:}}
+    model: ${VOICE_TTS_MODEL:qwen3-tts-flash}
+    # 2026-10-21 用户挑的音色：默认 Bella（小萝莉），备选 Momo（撒娇搞怪）
+    voice: ${VOICE_TTS_VOICE:Bella}
+    language-type: ${VOICE_TTS_LANGUAGE:Chinese}
+    # 单条上限（字）。超了直接拒，让它挑一两句念
+    max-chars: ${VOICE_TTS_MAX_CHARS:120}
+    timeout-seconds: ${VOICE_TTS_TIMEOUT_SECONDS:30}
+    # 它自己主动发语音的每日上限；用户明确要听的不占额度
+    self-daily-limit: ${VOICE_TTS_SELF_DAILY_LIMIT:10}
+
 agent:
   # 长任务后台执行（2026-10-21）
   background:
