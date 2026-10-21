@@ -94,7 +94,9 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
           # 显式要求严格校验主机指纹：默认的 ask 在非交互 shell 里会变成"提示并卡住"，
           # yes 则是"不匹配就直接失败"—— 这正是我们要的（宁可部署红，也不要静默连到伪造主机）。
-          printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n' > ~/.ssh/config
+          # ServerAlive* 是必须的（2026-10-21 踩到）：没有它，连接一旦半开，
+          # ssh 会**一直**等下去——那次 `pull-deploy` 卡了 8.5 小时，后面所有部署都排队。
+          printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n  ConnectTimeout 20\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
       # 服务器上那把部署私钥带 restrict + command="/usr/local/bin/wechat-deploy"：
@@ -202,6 +204,7 @@ jobs:
 
       - name: Pull image from ghcr and update only Java service（registry 模式）
         if: env.DEPLOY_MODE == 'registry'
+        timeout-minutes: 8
         run: |
           # 和上面那个 tar 步骤做的事完全一样，区别只是镜像从 registry 来
           # （服务器只拉缺的层，base + apt 那 600MB 不用重传）。
@@ -210,6 +213,7 @@ jobs:
 
       # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
       - name: Smoke check deployed panel
+        timeout-minutes: 8
         run: |
           HOST="${{ secrets.DEPLOY_HOST }}"
           NAME="liche.cloud"

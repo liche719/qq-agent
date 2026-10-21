@@ -64,6 +64,12 @@ services:
       MEDIA_CONTEXT_EXCERPT_MAX_CHARS: ${MEDIA_CONTEXT_EXCERPT_MAX_CHARS:-4000}
       MEDIA_STORAGE_MAX_FILE_BYTES: ${MEDIA_STORAGE_MAX_FILE_BYTES:-20971520}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      # 2026-10-21：对话换成基元律动后，**搜索必须留在 DeepSeek 官方**（基元没有搜索接口）。
+      # 原来 search 的 key 是"留空就回退到 llm.api-key"，换 API 之后那个回退会把
+      # 基元律动的 key 发去 api.deepseek.com，搜索直接 401。所以这两个键要显式透传。
+      DEEPSEEK_SEARCH_API_KEY: ${DEEPSEEK_SEARCH_API_KEY:-}
+      DEEPSEEK_SEARCH_BASE_URL: ${DEEPSEEK_SEARCH_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_SEARCH_ENABLED: ${DEEPSEEK_SEARCH_ENABLED:-true}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
       # 漏一个就"改了 .env 不生效且不报错"（坑 36）：温度/超时以前根本没透传，改了也没用
