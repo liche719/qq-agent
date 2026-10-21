@@ -110,42 +110,16 @@ async function loadEfforts() {
   }
 }
 
-function onSlide(row, position) {
-  row.effective = EFFORT_STEPS[Number(position)] || ''
-}
-
 /**
- * 手势守卫（2026-09-29 踩到之后加的）。
+ * 加减一档（2026-10-21）。
  *
- * `touch-action: pan-y` **不够**：range 控件在手指按下（touchstart）那一刻就已经把值跳到手指位置了，
- * 等浏览器判定"这是竖向滚动"时值已经变了，松手照样触发 change。实测：在手机上竖向滑动滚页面，
- * 一次误写了 5 行覆盖值。
- *
- * 所以自己判定：按下时记下坐标与**原值**，松手时看这一次划动是横还是竖——
- * 竖着的（|dy| > |dx|）一律当"用户在滚页面"，把滑块拨回原值，不写库。
+ * 只按一下不会跨档，也不会误触把「跟随配置」变成「面板设定」——
+ * 滑动条的 @input 在拖动过程中会一直触发，手指抖一下就写完库了。
  */
-let gesture = null
-
-function onSliderDown(row, event) {
-  gesture = { x: event.clientX, y: event.clientY, before: row.override || '' }
-}
-
-function onSliderUp(row, event) {
-  const started = gesture
-  gesture = null
-  if (!started) {
-    return
-  }
-  const dx = Math.abs(event.clientX - started.x)
-  const dy = Math.abs(event.clientY - started.y)
-  if (dy > dx) {
-    row.effective = started.before
-    if (event.target) {
-      event.target.value = String(positionOf(started.before))
-    }
-    return
-  }
-  saveEffort(row, event.target ? event.target.value : String(positionOf(row.effective)))
+function stepEffort(row, delta) {
+  const next = positionOf(row.effective) + delta
+  if (next < 0 || next >= EFFORT_STEPS.length) return
+  saveEffort(row, String(next))
 }
 
 async function saveEffort(row, position) {
@@ -196,28 +170,24 @@ onMounted(() => {
     <section class="glass panel">
       <div class="panel-head">
         <h2>思考强度</h2>
-        <span class="hint">每个场景单独设置：越靠右想得越多、越慢也越贵；「默认」= 不传这个参数、用上游默认档</span>
+        <span class="hint">每个场景单独设置：点「＋」想得多一点、点「−」想得少一点，越往上越慢也越贵；「默认」= 不传这个参数、用上游默认档</span>
       </div>
       <div v-for="row in effortRows" :key="row.scenario" class="effort-row">
         <div class="effort-name">
           {{ zh('scenario', row.scenario) }}
           <small>{{ row.fromPanel ? '面板设定' : '跟随配置' }} · 配置默认 {{ effortText(row.configured) }}</small>
         </div>
-        <input
-          class="effort-slider"
-          type="range"
-          min="0"
-          max="3"
-          step="1"
-          :value="positionOf(row.effective)"
-          :disabled="effortBusy === row.scenario"
-          @input="onSlide(row, $event.target.value)"
-          @pointerdown="onSliderDown(row, $event)"
-          @pointerup="onSliderUp(row, $event)"
-          @pointercancel="onSliderUp(row, $event)"
-          @change="saveEffort(row, $event.target.value)"
-        />
-        <div class="effort-value">{{ effortText(row.effective) }}</div>
+        <!-- 2026-10-21：滑动条改成加减。原来用 <input type=range>，两个毛病：
+             ① 手机上极容易误触（手指一划就跨两档，还会把「跟随配置」悄悄变成「面板设定」）；
+             ② max="3" 是硬编码的 4 档，上游其实有 8 档，扩完就滑不到后面几档。 -->
+        <div class="effort-stepper">
+          <button class="btn btn-sm" :disabled="effortBusy === row.scenario || positionOf(row.effective) <= 0"
+                  title="想得少一点" @click="stepEffort(row, -1)">−</button>
+          <span class="effort-value">{{ effortText(row.effective) }}</span>
+          <button class="btn btn-sm"
+                  :disabled="effortBusy === row.scenario || positionOf(row.effective) >= EFFORT_STEPS.length - 1"
+                  title="想得多一点" @click="stepEffort(row, 1)">＋</button>
+        </div>
       </div>
       <p v-if="effortMessage" class="hint" style="margin-top: 10px">{{ effortMessage }}</p>
       <p class="hint" style="margin-top: 10px">
@@ -229,7 +199,7 @@ onMounted(() => {
     <section class="glass panel">
       <div class="panel-head">
         <h2>按场景</h2>
-        <span class="hint">进程内累计，重启归零；「其中思考」是输出 token 里花在思考上的部分（受上面的滑块影响）</span>
+        <span class="hint">进程内累计，重启归零；「其中思考」是输出 token 里花在思考上的部分（受上面的档位影响）</span>
       </div>
       <DataTable :columns="scenarioColumns" :rows="scenarioRows" empty="还没有调用记录（重启后归零）"></DataTable>
     </section>

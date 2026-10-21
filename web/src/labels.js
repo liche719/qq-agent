@@ -32,6 +32,9 @@ const DICTIONARY = {
   // LLM 调用场景（面板「模型与搜索」的按场景表格、思考强度滑块）
   scenario: {
     dialog: '对话（默认档）',
+    // 2026-10-21 补：这两个场景是后加的，面板上一直显示英文 key
+    dialog_first: '对话第一跳（读意图）',
+    self_comment: '写 B 站评论',
     extract: '记忆提取',
     reflect: '自主反思',
     reminder_parse: '提醒解析',

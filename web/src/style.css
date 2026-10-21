@@ -861,3 +861,31 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 }
 .alert-actionable .alert-text { flex: 1 1 auto; min-width: 0; }
 .alert-actionable .btn-sm { flex: 0 0 auto; }
+
+/* ── 思考档位的加减控件（2026-10-21）─────────────────────────────────
+   替掉原来的 <input type=range>：滑动条在手机上手指一划就跨两档，
+   而且拖动过程会连续触发 @input，很容易把「跟随配置」误写成「面板设定」。 */
+.effort-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+}
+.effort-stepper .btn-sm {
+  min-width: 34px;
+  height: 32px;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 8px;
+}
+.effort-stepper .effort-value {
+  min-width: 3.6em;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 560px) {
+  .effort-stepper { justify-self: stretch; justify-content: flex-end; }
+  .effort-stepper .btn-sm { min-width: 40px; height: 36px; }
+}
