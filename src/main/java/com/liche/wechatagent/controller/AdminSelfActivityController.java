@@ -231,8 +231,21 @@ public class AdminSelfActivityController {
                     row.put("content", comment.getMessage());
                     row.put("result", comment.succeeded() ? "已发出" : ("被拒 " + comment.getResultCode()
                             + "：" + comment.getResultMessage()));
-                    row.put("link", comment.getBvid().isBlank() ? ""
-                            : "https://www.bilibili.com/video/" + comment.getBvid());
+                    // 2026-10-21：链接要**直达评论**，别让人在视频页里翻几百条。
+                    // H5 的评论页认 oid(+root)，比网页版 #reply<rpid> 锚点可靠。
+                    if (comment.getBvid().isBlank()) {
+                        row.put("link", "");
+                    } else if (comment.getRootRpid() > 0) {
+                        // 楼中楼：落到那一楼的回复列表
+                        row.put("link", "https://www.bilibili.com/h5/comment/sub?oid=" + comment.getAid()
+                                + "&root=" + comment.getRootRpid());
+                    } else {
+                        // 顶级评论：同样进评论页，不用在视频页里翻
+                        row.put("link", "https://www.bilibili.com/h5/comment/sub?oid=" + comment.getAid());
+                    }
+                    // 评论号单独一列：万一没跳准，可以按它搜
+                    row.put("rpid", String.valueOf(comment.getRootRpid() > 0
+                            ? comment.getRootRpid() : comment.getParentRpid()));
                     return row;
                 }).toList();
         return Map.of("rows", rows);

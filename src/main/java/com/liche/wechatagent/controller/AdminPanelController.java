@@ -119,6 +119,7 @@ public class AdminPanelController {
                         column("video", "视频", true),
                         column("content", "评论原文", true),
                         column("result", "结果", false),
+                        column("rpid", "评论号", false),
                         linkedColumn("link", "去看")), List.of()),
                 table("自主活动（它自己的时间花在哪）", "/api/admin/self/activities", List.of(
                         column("state", "状态", false),
