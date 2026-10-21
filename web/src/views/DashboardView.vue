@@ -45,6 +45,19 @@ async function dismissUnknownTasks() {
     dismissBusy.value = false
   }
 }
+/** 花费分类里的场景名（2026-10-21）：顶栏那个 tooltip 要用 */
+const SCENARIO_LABEL = {
+  dialog: '对话',
+  dialog_first: '对话第一跳',
+  extract: '记忆提取',
+  reflect: '自主反思',
+  self_comment: '写B站评论',
+  reminder_parse: '提醒解析',
+  schedule_parse: '定时任务解析',
+  video: '看视频',
+  image: '画图',
+}
+
 const balance = ref(null)
 const balanceError = ref('')
 
