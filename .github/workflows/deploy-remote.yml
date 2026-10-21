@@ -13,6 +13,14 @@ on:
       # 都会白跑一次。注意副作用——改了这个文件要生效，得手动 workflow_dispatch 一次。
       - '.github/workflows/**'
   workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: '部署方式：tar = 传镜像包（旧，兼容）；registry = 从 ghcr.io 拉（新，快）'
+        type: choice
+        options:
+          - tar
+          - registry
+        default: tar
 
 concurrency:
   group: remote-agent-deploy
@@ -25,6 +33,11 @@ jobs:
     # 显式收到只读，万一某个 step 被注入也拿不到仓库写权限。
     permissions:
       contents: read
+      # 推到 ghcr 需要写 packages（registry 模式才用；tar 模式用不到）
+      packages: write
+    env:
+      # push 触发时没有 inputs，默认走 tar（不变）；手动触发可以选 registry
+      DEPLOY_MODE: ${{ inputs.deploy_mode || 'tar' }}
     steps:
       # 三个 action 全部钉到 commit SHA（注释里保留人类可读的版本号）：
       # 浮动 tag 被上游移动/接管时，会在**持有服务器部署私钥的 runner** 上执行任意代码 ——
@@ -46,7 +59,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Export image
+      # registry 模式：推到 GitHub 的镜像仓库，服务器只拉缺的层。
+      # 用仓库自带的 GITHUB_TOKEN 就够（packages: write），不用另配 secret。
+      - name: Push to ghcr（registry 模式）
+        if: env.DEPLOY_MODE == 'registry'
+        run: |
+          set -eu
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "wechat-agent:${GITHUB_SHA}" "${IMAGE}:${GITHUB_SHA}"
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          echo "已推送 ${IMAGE}:${GITHUB_SHA}"
+
+      - name: Export image（tar 模式）
+        if: env.DEPLOY_MODE == 'tar'
         run: docker save wechat-agent:${GITHUB_SHA} | gzip > wechat-agent-${GITHUB_SHA}.tar.gz
 
       - name: Install SSH key
@@ -73,7 +99,8 @@ jobs:
       # 它只能跑那个脚本、拿不到 shell，所以 scp 用不了 —— 三个文件改成「走 stdin 交给 wechat-deploy 的子命令」。
       # 每次上传都要带 HMAC-SHA256（密钥是本仓库的 DEPLOY_TAR_SECRET，服务端在 /etc/wechat-deploy.secret），
       # 服务端验签通过才落盘：**光拿到部署私钥推不进任何内容**。详见 `deploy/server/wechat-deploy` 顶部说明。
-      - name: Upload image and deployment files
+      - name: Upload image and deployment files（tar 模式）
+        if: env.DEPLOY_MODE == 'tar'
         env:
           DEPLOY_TAR_SECRET: ${{ secrets.DEPLOY_TAR_SECRET }}
         run: |
@@ -142,6 +169,15 @@ jobs:
           fi
           echo "分片上传完成：$(( $(date +%s) - started )) 秒"
 
+      # compose 与 searxng 配置两种模式都要更新（registry 模式只换了镜像来源，配置文件照样得传）
+      - name: Upload compose and settings
+        run: |
+          set -eu
+          HOST="${{ secrets.DEPLOY_HOST }}"
+          DUSER="${{ secrets.DEPLOY_USER }}"
+          SECRET=$(printf '%s' "$DEPLOY_TAR_SECRET" | tr -d '\r\n')
+          mac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
+
           compose_sha=$(sha256sum docker-compose.remote.yml | cut -d' ' -f1)
           ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
             "wechat-deploy upload-compose ${compose_sha} $(mac "$compose_sha")" < docker-compose.remote.yml
@@ -150,7 +186,8 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DUSER@$HOST" \
             "wechat-deploy upload-settings ${settings_sha} $(mac "$settings_sha")" < docker/searxng/settings.yml
 
-      - name: Load image and update only Java service
+      - name: Load image and update only Java service（tar 模式）
+        if: env.DEPLOY_MODE == 'tar'
         run: |
           # 远端动作全部收敛到服务器上的 /usr/local/bin/wechat-deploy：load 镜像、只重建 agent、
           # 重启 searxng（settings.yml 是挂载进去的、不热加载）、按 image id 保留两代镜像 tag、删掉镜像包、
@@ -158,6 +195,14 @@ jobs:
           # 不要再往 CI 里塞 shell —— 这里的私钥已经没有执行任意命令的权限了。
           ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "wechat-deploy deploy ${GITHUB_SHA}"
+
+      - name: Pull image from ghcr and update only Java service（registry 模式）
+        if: env.DEPLOY_MODE == 'registry'
+        run: |
+          # 和上面那个 tar 步骤做的事完全一样，区别只是镜像从 registry 来
+          # （服务器只拉缺的层，base + apt 那 600MB 不用重传）。
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "wechat-deploy pull-deploy ${GITHUB_SHA}"
 
       # 部署后自检：面板能打开、鉴权生效、登录接口正常；失败会推一条 QQ 告警并让流水线红掉
       - name: Smoke check deployed panel

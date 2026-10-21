@@ -26,6 +26,10 @@ LOG=/var/log/wechat-deploy.log
 DOCKER=/usr/bin/docker
 OPENSSL=/usr/bin/openssl
 ADMIN_USER=${WECHAT_DEPLOY_ADMIN_USER:-rootlcw}
+# 2026-10-21：镜像改从 GitHub 的镜像仓库拉（只拉变化的层，比每次传 956MB tar 快得多）。
+# token 只要 read:packages 一个权限，泄露的后果是"能拉私有镜像"，不能推。
+GHCR_IMAGE=ghcr.io/liche719/wechat-qq-agent
+GHCR_TOKEN_FILE=/etc/wechat-deploy/ghcr-token
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOG" 2>/dev/null || true; }
 die() { log "REJECT: $* | orig=${SSH_ORIGINAL_COMMAND:-<none>}"; printf 'wechat-deploy: %s\n' "$*" >&2; exit 1; }
@@ -38,7 +42,8 @@ wechat-deploy: 只接受以下子命令（其它命令一律拒绝，不提供 s
   wechat-deploy join-image <git-sha> <分片数> <整包 sha256> <hmac>
   wechat-deploy upload-compose <sha256> <hmac>
   wechat-deploy upload-settings <sha256> <hmac>
-  wechat-deploy deploy <git-sha>
+  wechat-deploy deploy <git-sha>            (从本地 tar 装，旧路径)
+  wechat-deploy pull-deploy <git-sha>       (从 ghcr.io 拉，新路径)
   wechat-deploy smoke-admin      (stdin: KEY=... [USER=...])
   wechat-deploy alert-notify     (stdin: KEY=... / MSG=...)
 EOF
@@ -177,6 +182,35 @@ cmd_deploy() { # $1=git-sha
   log "deploy ok sha=$1"
 }
 
+# 从 ghcr.io 拉镜像并部署（2026-10-21）。
+#
+# 和 cmd_deploy 的唯一区别是**镜像从哪来**：那边是 CI 传上来的 tar，这边是 registry。
+# 好处是 docker 只拉缺的层——基础镜像 + apt 那 600MB 不用每次重传。
+cmd_pull_deploy() { # $1=git-sha
+  is_git_sha "$1" || die "git sha 格式不对"
+  local image="$GHCR_IMAGE:$1"
+  [ -s "$GHCR_TOKEN_FILE" ] || die "缺 ghcr token：$GHCR_TOKEN_FILE（read:packages 权限即可）"
+  tr -d '\r\n' <"$GHCR_TOKEN_FILE" | "$DOCKER" login ghcr.io -u liche719 --password-stdin >/dev/null \
+    || die "ghcr 登录失败（token 过期/权限不对）"
+  "$DOCKER" pull "$image" >/dev/null || die "拉镜像失败：$image"
+  cd "$COMPOSE_DIR"
+  AGENT_IMAGE="$image" "$DOCKER" compose -f "$COMPOSE_FILE" up -d --no-build agent
+  # searxng 的 settings.yml 是挂载进去的，不热加载
+  "$DOCKER" restart wechat-agent-searxng >/dev/null
+  "$DOCKER" image prune -f >/dev/null
+  # 只保留「当前 + 次新」两代（按 image id 数，不按 tag 行数）
+  local cur prev
+  cur=$("$DOCKER" inspect wechat-agent-java -f '{{.Image}}' 2>/dev/null || true)
+  prev=$("$DOCKER" images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter "reference=$GHCR_IMAGE:*" \
+    | awk -F'|' -v cur="$cur" '$1!=cur' | sort -r -t'|' -k2 | head -1 | cut -d'|' -f1 || true)
+  "$DOCKER" images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter "reference=$GHCR_IMAGE:*" \
+    | awk -F'|' -v cur="$cur" -v prev="$prev" '$1!=cur && $1!=prev {print $2}' \
+    | xargs -r "$DOCKER" rmi -f >/dev/null 2>&1 || true
+  "$DOCKER" compose -f "$COMPOSE_FILE" ps agent
+  "$DOCKER" images --format '{{.Repository}}:{{.Tag}}' --filter "reference=$GHCR_IMAGE:*"
+  log "pull-deploy ok sha=$1"
+}
+
 read_stdin_vars() { # 从 stdin 读 KEY= / MSG= / USER= 这类行，不打印
   while IFS= read -r line; do
     case "$line" in
@@ -228,6 +262,7 @@ case "$sub" in
   upload-compose)  [ "$#" = 2 ] || usage; cmd_upload_compose "$1" "$2" ;;
   upload-settings) [ "$#" = 2 ] || usage; cmd_upload_settings "$1" "$2" ;;
   deploy)          [ "$#" = 1 ] || usage; cmd_deploy "$1" ;;
+  pull-deploy) [ "$#" = 1 ] || usage; cmd_pull_deploy "$1" ;;
   smoke-admin)     [ "$#" = 0 ] || usage; cmd_smoke_admin ;;
   alert-notify)    [ "$#" = 0 ] || usage; cmd_alert_notify ;;
   *) usage ;;
