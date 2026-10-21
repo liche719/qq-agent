@@ -209,10 +209,16 @@ cmd_pull_deploy() { # $1=git-sha
     | awk -F'|' -v cur="$cur" -v prev="$prev" '$1!=cur && $1!=prev {print $2}' \
     | xargs -r "$DOCKER" rmi -f >/dev/null 2>&1 || true
   # 2026-10-21：同一个 image 会被打上多个 sha 标签（代码没变时 Docker 复用同一层，
-  # 三个 tag 指向同一个 image id）。image 只占一份空间，但标签会一直堆，
-  # 所以这里按创建时间只留最近 2 个标签，其余只删 tag（不删 image）。
+  # 多个 tag 指向同一个 image id）。image 只占一份空间，但标签会一直堆。
+  #
+  # ⚠️ **必须先排除"当前容器正在用的那个标签"**。踩过的坑：本想按 CreatedAt 留最近两个，
+  # 但 CI 复用构建缓存时几个镜像的 CreatedAt 完全一样，排序不稳定，结果把**刚拉下来的
+  # 那个**当成旧的删了标签——容器还在用（image 没删），但 `docker images` 里看不到它。
+  local cur_tag
+  cur_tag=$("$DOCKER" inspect wechat-agent-java -f '{{.Config.Image}}' 2>/dev/null || true)
   "$DOCKER" images --format '{{.Repository}}:{{.Tag}}|{{.CreatedAt}}' --filter "reference=$GHCR_IMAGE:*" \
-    | sort -r -t'|' -k2 | tail -n +3 | cut -d'|' -f1 \
+    | grep -v -F "${cur_tag}|" \
+    | sort -r -t'|' -k2 | tail -n +2 | cut -d'|' -f1 \
     | xargs -r "$DOCKER" rmi >/dev/null 2>&1 || true
   "$DOCKER" compose -f "$COMPOSE_FILE" ps agent
   "$DOCKER" images --format '{{.Repository}}:{{.Tag}}' --filter "reference=$GHCR_IMAGE:*"
