@@ -62,6 +62,13 @@ public class BackgroundTaskTool implements AgentToolProvider {
     private final org.springframework.beans.factory.ObjectProvider<AgentLoop> agentLoopProvider;
     /** 后台任务花的钱也要记账（原来完全没进今日花费） */
     private final com.liche.wechatagent.config.LlmSpendMeter spendMeter;
+    /**
+     * 汇报要写回对话记忆（2026-10-21 修）：不写的话，用户追问「查完了吗」时
+     * 它看不到自己已经汇报过，会答「还没弄好」——因为它真的不记得。
+     */
+    private final org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.memory.ConversationMemoryService> memoryProvider;
+    /** 任务落库（2026-10-21）：进程重启不能把用户等的汇报弄丢 */
+    private final BackgroundTaskRepository tasks;
     private final ToolStatusService statusService;
     private final UserService userService;
     private final List<WeChatChannel> channels;
@@ -81,6 +88,8 @@ public class BackgroundTaskTool implements AgentToolProvider {
 
     public BackgroundTaskTool(org.springframework.beans.factory.ObjectProvider<AgentLoop> agentLoopProvider,
                               com.liche.wechatagent.config.LlmSpendMeter spendMeter,
+                              org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.memory.ConversationMemoryService> memoryProvider,
+                              BackgroundTaskRepository tasks,
                               ToolStatusService statusService,
                               UserService userService,
                               List<WeChatChannel> channels,
@@ -89,6 +98,8 @@ public class BackgroundTaskTool implements AgentToolProvider {
                               @Value("${agent.background.budget-yuan:0.8}") double budgetYuan) {
         this.agentLoopProvider = agentLoopProvider;
         this.spendMeter = spendMeter;
+        this.memoryProvider = memoryProvider;
+        this.tasks = tasks;
         this.statusService = statusService;
         this.userService = userService;
         this.channels = channels;
@@ -121,8 +132,23 @@ public class BackgroundTaskTool implements AgentToolProvider {
         }
 
         final String goal = task.trim();
+        // 先落库再排队：万一进程在这之后立刻重启，启动时还能捞回来
+        Long taskId = null;
+        try {
+            BackgroundTask row = new BackgroundTask();
+            row.setUserId(userId);
+            row.setGoal(goal);
+            row.setStatus(BackgroundTask.STATUS_QUEUED);
+            row.setCreatedAt(java.time.LocalDateTime.now());
+            taskId = tasks.save(row).getId();
+        } catch (RuntimeException exception) {
+            log.warn("后台任务落库失败（继续跑，但重启会丢）：{}", exception.getMessage());
+        }
+        final Long savedId = taskId;
+
         pending.incrementAndGet();
         runner.submit(() -> {
+            markRunning(savedId);
             double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
             long started = System.nanoTime();
             try {
@@ -130,10 +156,12 @@ public class BackgroundTaskTool implements AgentToolProvider {
                 double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
                 long ms = Math.max(0, (System.nanoTime() - started) / 1_000_000L);
                 log.info("后台任务完成 user={} 用时={}ms 花费={}元", userId, ms, String.format("%.3f", yuan));
+                markDone(savedId, reply);
                 deliver(userId, "（刚才那件事做完了）" + (reply == null ? "" : reply.trim()));
             } catch (Throwable error) {
                 log.warn("后台任务失败 user={} goal={} err={}", userId,
                         goal.length() > 60 ? goal.substring(0, 60) + "…" : goal, error.toString());
+                markFailed(savedId, shortReason(error));
                 deliver(userId, "刚才那件事没做成（" + shortReason(error) + "）。要不再试一次？");
             } finally {
                 pending.decrementAndGet();
@@ -169,6 +197,15 @@ public class BackgroundTaskTool implements AgentToolProvider {
         try {
             UserProfile profile = userService.get(userId);
             boolean sent = ProactiveDelivery.send(channels, profile, userId, text);
+            // 发出去之后写进对话记忆：这样用户追问时它能看到"我已经汇报过了"
+            try {
+                var memory = memoryProvider == null ? null : memoryProvider.getIfAvailable();
+                if (memory != null) {
+                    memory.record(userId, "assistant", null, text, java.util.List.of(), (java.time.LocalDateTime) null);
+                }
+            } catch (RuntimeException ignored) {
+                // 写记忆失败不能影响已经发出去的汇报
+            }
             if (!sent) {
                 log.warn("后台任务汇报没发出去 user={}", userId);
             }
@@ -183,5 +220,96 @@ public class BackgroundTaskTool implements AgentToolProvider {
             return error.getClass().getSimpleName();
         }
         return message.length() > 60 ? message.substring(0, 60) + "…" : message;
+    }
+    private void markRunning(Long id) {
+        updateStatus(id, BackgroundTask.STATUS_RUNNING, row -> row.setStartedAt(java.time.LocalDateTime.now()));
+    }
+
+    private void markDone(Long id, String result) {
+        updateStatus(id, BackgroundTask.STATUS_DONE, row -> {
+            row.setFinishedAt(java.time.LocalDateTime.now());
+            row.setResult(clip(result, 4000));
+        });
+    }
+
+    private void markFailed(Long id, String error) {
+        updateStatus(id, BackgroundTask.STATUS_FAILED, row -> {
+            row.setFinishedAt(java.time.LocalDateTime.now());
+            row.setError(clip(error, 480));
+        });
+    }
+
+    private void updateStatus(Long id, String status, java.util.function.Consumer<BackgroundTask> extra) {
+        if (id == null) {
+            return;
+        }
+        try {
+            tasks.findById(id).ifPresent(row -> {
+                row.setStatus(status);
+                if (extra != null) {
+                    extra.accept(row);
+                }
+                tasks.save(row);
+            });
+        } catch (RuntimeException exception) {
+            log.warn("更新后台任务状态失败 id={} status={} err={}", id, status, exception.getMessage());
+        }
+    }
+
+    private static String clip(String value, int max) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= max ? value : value.substring(0, max) + "\u2026";
+    }
+
+    /**
+     * 启动时把上次残留的任务捞回来（2026-10-21）。
+     *
+     * <p>两条路：
+     * <ul>
+     *   <li><b>RUNNING</b>：进程在它跑着的时候挂了，活断在半路——标 FAILED 并主动告诉他，
+     *       不能让它静默消失；</li>
+     *   <li><b>QUEUED</b>：只是还没排到，重新扔进池子接着跑。</li>
+     * </ul>
+     */
+    @org.springframework.context.event.EventListener(
+            org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void resumeAfterRestart() {
+        try {
+            List<BackgroundTask> leftovers = tasks.findByStatusInOrderByCreatedAtAsc(
+                    List.of(BackgroundTask.STATUS_QUEUED, BackgroundTask.STATUS_RUNNING));
+            if (leftovers.isEmpty()) {
+                return;
+            }
+            log.info("启动时发现 {} 条没跑完的后台任务", leftovers.size());
+            for (BackgroundTask row : leftovers) {
+                if (BackgroundTask.STATUS_RUNNING.equals(row.getStatus())) {
+                    markFailed(row.getId(), "服务重启，这条没跑完");
+                    deliver(row.getUserId(), "刚才那件事（" + clip(row.getGoal(), 40)
+                            + "）因为服务重启没做完。要我再试一次吗？");
+                    continue;
+                }
+                final String goal = row.getGoal();
+                final Long id = row.getId();
+                final String owner = row.getUserId();
+                pending.incrementAndGet();
+                runner.submit(() -> {
+                    markRunning(id);
+                    try {
+                        String reply = runInBackground(owner, goal);
+                        markDone(id, reply);
+                        deliver(owner, "（刚才那件事做完了）" + (reply == null ? "" : reply.trim()));
+                    } catch (Throwable error) {
+                        markFailed(id, shortReason(error));
+                        deliver(owner, "刚才那件事没做成（" + shortReason(error) + "）。要不再试一次？");
+                    } finally {
+                        pending.decrementAndGet();
+                    }
+                });
+            }
+        } catch (RuntimeException exception) {
+            log.warn("恢复后台任务失败（不影响启动）：{}", exception.getMessage());
+        }
     }
 }
