@@ -100,9 +100,20 @@ public class LlmScenarioEffortService {
         return snapshot;
     }
 
+    /**
+     * 规范化档位。
+     *
+     * <p>**【2026-10-21 修】** 原来 `none` 也被转成空串——空串的意思是"不传 reasoning_effort 字段"，
+     * 而上游模型**不传时默认深度思考**（实测 3000+ token），根本不是"不思考"。
+     * 于是"设 none 想关思考"的实际效果变成了**让它想得更多**，完全反了。
+     *
+     * <p>现在只有 {@code default} 转空（表示"回落到 yml 配置"），`none` 原样保留——
+     * 它会被原封不动写进请求体 `reasoning_effort: "none"`，那是实测能真关思考的唯一写法
+     * （`LlmScenarioSettings#parseReasoningEffort` 的白名单里也有它）。
+     */
     private static String normalize(String effort) {
         String value = effort == null ? "" : effort.trim().toLowerCase();
-        return "default".equals(value) || "none".equals(value) ? "" : value;
+        return "default".equals(value) ? "" : value;
     }
 
     /** 严格解析场景名：认不出就返回 null（**不要**退回 DIALOG，那会悄悄改掉对话的档位） */
