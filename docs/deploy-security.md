@@ -200,4 +200,52 @@ AGENT_IMAGE="wechat-agent:manual-<短sha>" docker compose -f docker-compose.remo
 另注意 **`FROM <当前镜像> + COPY jar` 会让镜像一层层变胖**（实测 524 → 625 → 725 → 826 MB），
 用得多了要记得清理那些 `manual-*` tag。
 
+---
 
+## 2026-10-21：部署改成从 ghcr 拉镜像（tar 保留作兜底）
+
+### 为什么改
+
+原来每次部署都 `docker save` 整个镜像（956MB）→ `scp` 传到服务器 → `docker load`。
+实测耗时分解：**导出 44s + 上传 65s + 加载 39s = 148s**，占了整条流水线的一半。
+
+但镜像其实只有一层会变：
+
+```
+基础镜像 + apt(ffmpeg/pg_dump/mysql-client)  ~600MB   从没变
+Maven / 前端构建中间层                                  已缓存
+COPY app.jar                                  ~80MB   每次变
+```
+
+`docker save` 不认分层，所以每次重传全量。改成推 ghcr 后，`docker pull` **只拉缺的层**——
+首次全量 956MB 实测 **3 秒**（服务器已有大部分层），之后每次几秒。
+
+### 实测对比
+
+| | tar 模式 | registry 模式 |
+|---|---|---|
+| 构建 | 77s | 18s |
+| 传/推镜像 | 109s | 23s |
+| 部署（load/pull） | 39s | 49s |
+| **总耗时** | **~6 分钟** | **2.8 分钟** |
+
+### 怎么切
+
+`workflow_dispatch` 有个 `deploy_mode` 输入，默认已经是 `registry`。
+要回退：手动触发时选 `tar`，那条路径一点没动。
+
+### 需要的东西
+
+- **CI 推送**：仓库自带的 `GITHUB_TOKEN` + job 的 `packages: write` 权限，不用另配 secret。
+- **服务器拉取**：`/etc/wechat-deploy/ghcr-token`（600），一个 **classic PAT 的 `read:packages`**。
+  用 **classic** 而不是 fine-grained：fine-grained 的 Packages 权限在很多账号下根本不显示。
+  泄露的后果只是"能拉私有镜像"，不能推、不能改代码。
+
+### 两个坑（都踩了）
+
+1. **镜像名不能跟着仓库重定向**。仓库真名是 `liche719/qq-agent`，旧名 `wechat-qq-agent` 只是
+   GitHub 网页层的 302。**ghcr 的包名不会重定向**，写旧名就是 `manifest unknown`。
+2. **`wechat-deploy` 脚本不会随 CI 更新**——它是服务器侧手工管理的文件。
+   改了仓库里的 `deploy/server/wechat-deploy` **必须手动同步到 `/usr/local/bin/`**，
+   否则 CI 调的还是旧逻辑（这次就卡在"服务器还在拉旧镜像名"）。
+   同步前先 `cp -a` 备份，再用 `bash -n` 验语法，最后 `install -m 755`。

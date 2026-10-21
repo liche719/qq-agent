@@ -20,7 +20,7 @@ on:
         options:
           - tar
           - registry
-        default: tar
+        default: registry
 
 concurrency:
   group: remote-agent-deploy
@@ -37,7 +37,9 @@ jobs:
       packages: write
     env:
       # push 触发时没有 inputs，默认走 tar（不变）；手动触发可以选 registry
-      DEPLOY_MODE: ${{ inputs.deploy_mode || 'tar' }}
+      # 2026-10-21：默认走 registry（镜像从 ghcr 拉，只传变化的层）。
+      # 实测 6 分钟 → 2.8 分钟。tar 那条路保留着，需要时手动 workflow_dispatch 选 tar 兜底。
+      DEPLOY_MODE: ${{ inputs.deploy_mode || 'registry' }}
     steps:
       # 三个 action 全部钉到 commit SHA（注释里保留人类可读的版本号）：
       # 浮动 tag 被上游移动/接管时，会在**持有服务器部署私钥的 runner** 上执行任意代码 ——

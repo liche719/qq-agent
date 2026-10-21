@@ -110,6 +110,10 @@ curl -s https://127.0.0.1/index.html -o /dev/null -w '%{http_code}\n'           
 curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview             # 面板接口（IP 访问证书不匹配，用 -k）
 ```
 
+- **部署默认走 ghcr**（2026-10-21 起）：CI 推镜像到 `ghcr.io/liche719/qq-agent:<sha>`，
+  服务器 `docker pull` 只拉变化的层（~2.8 分钟，原来传 tar 要 ~6 分钟）。
+  要回退：手动触发 workflow 时选 `deploy_mode=tar`。
+  **改了 `deploy/server/wechat-deploy` 必须手动同步到服务器 `/usr/local/bin/`**（CI 不传它）。
 - 只重启 agent：`cd /opt/wechat-agent-infra && AGENT_IMAGE=wechat-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
 
 ### 运维面板访问方式（应用自带 HTTPS，2026-09-12 定型）
