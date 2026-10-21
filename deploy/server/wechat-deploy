@@ -28,7 +28,9 @@ OPENSSL=/usr/bin/openssl
 ADMIN_USER=${WECHAT_DEPLOY_ADMIN_USER:-rootlcw}
 # 2026-10-21：镜像改从 GitHub 的镜像仓库拉（只拉变化的层，比每次传 956MB tar 快得多）。
 # token 只要 read:packages 一个权限，泄露的后果是"能拉私有镜像"，不能推。
-GHCR_IMAGE=ghcr.io/liche719/wechat-qq-agent
+# 仓库的真实名字是 liche719/qq-agent（老名字 wechat-qq-agent 只是 GitHub 上的重定向，
+# 但 **ghcr 的镜像名不会跟着重定向**——写错就是 Package not found）。
+GHCR_IMAGE=ghcr.io/liche719/qq-agent
 GHCR_TOKEN_FILE=/etc/wechat-deploy/ghcr-token
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOG" 2>/dev/null || true; }

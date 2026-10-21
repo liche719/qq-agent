@@ -21,7 +21,7 @@
 - 技术栈：Spring Boot 3.5 / Java 21 / Maven；**PostgreSQL 16 + pgvector** + Spring Data JPA（2026-09-18 从 MySQL 8 整库迁来，见 `docs/pg-migration.md`）；Redis；Quartz(JDBC 持久化)；LangChain4j + 自研 OpenAI 兼容 ChatModel；SearX-NG 自托管搜索；QQ 官方机器人 WebSocket（默认通道）；**微信 iLink 通道 2026-09-12 已移除**。
 - 核心优先级：用户长期记忆不丢失 > 系统稳定运行 > 交互体验友好。
 - 代码目录：`C:\Users\33721\Desktop\wechat-agent\wechat-agent-java`
-- 仓库：https://github.com/liche719/wechat-qq-agent （private，账号 liche719，主分支 main）
+- 仓库：https://github.com/liche719/qq-agent （private，账号 liche719，主分支 main；**旧名 wechat-qq-agent 只是重定向**，ghcr 镜像名用的是真名 qq-agent）
 - 入口类：`com.liche.wechatagent.WechatAgentApplication`
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
