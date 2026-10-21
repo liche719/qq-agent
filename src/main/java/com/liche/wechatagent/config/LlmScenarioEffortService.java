@@ -29,7 +29,18 @@ public class LlmScenarioEffortService {
 
     /** 允许的档位；空字符串表示"不传这个字段、用上游默认" */
     public static final String DEFAULT = "";
-    public static final List<String> EFFORTS = List.of("none", "low", "medium", "high");
+    /**
+     * 上游**完整**的档位白名单（2026-10-21 实测拿到）。
+     *
+     * <p>之前这里只有 {@code none/low/medium/high} 四档，是凭印象写的；拿一个非法值去撞，
+     * API 的 422 报文里直接给出了全表：
+     * {@code expected one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra`, `max`}。
+     *
+     * <p>实测同一道概率题的思考 token：none=0 / low=74 / medium=81 / high=83 / max=171。
+     * 所以 {@code minimal} 比 low 更省、{@code xhigh/ultra/max} 才能真的比 high 想得更多。
+     */
+    public static final List<String> EFFORTS = List.of(
+            "none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max");
 
     private final LlmScenarioSettingRepository repository;
     private final ZoneId zone;

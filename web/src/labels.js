@@ -38,7 +38,9 @@ const DICTIONARY = {
     schedule_parse: '定时任务解析'
   },
   // 思考强度（reasoning_effort）；空值表示不传这个字段、用上游默认
-  effort: { low: '低', medium: '中', high: '高' }
+  // 2026-10-21：补全上游的 8 档。none 是真不思考（实测 reasoning_tokens=0），
+  // minimal 比 low 更省；xhigh/ultra/max 才真的比 high 想得多（实测 max 思考翻倍）。
+  effort: { none: '不思考', minimal: '极少', low: '低', medium: '中', high: '高', xhigh: '很高', ultra: '极高', max: '最高' }
 }
 
 export function zh(group, value) {

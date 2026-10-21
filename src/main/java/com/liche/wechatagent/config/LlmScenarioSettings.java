@@ -98,10 +98,10 @@ public class LlmScenarioSettings {
                 continue;
             }
             String effort = item.substring(eq + 1).trim().toLowerCase();
-            // none = 完全不思考。2026-10-20 实测：传 none 时上游 reasoning_tokens=0，
-            // 不传是 27、low 是 40、minimal 反而 57 —— 只有 none 是真关。
-            if (!"none".equals(effort) && !"low".equals(effort)
-                    && !"medium".equals(effort) && !"high".equals(effort)) {
+            // 档位白名单统一从 LlmScenarioEffortService 拿（2026-10-21）：
+            // 原来这里手写了四个 if，和那边各写一份，加档位时两边都要改、极易漏。
+            // 现在唯一真源是 EFFORTS（实测拿到 8 档：none/minimal/low/medium/high/xhigh/ultra/max）。
+            if (!com.liche.wechatagent.config.LlmScenarioEffortService.EFFORTS.contains(effort)) {
                 continue;
             }
             parsed.put(LlmScenario.of(item.substring(0, eq).trim()), effort);

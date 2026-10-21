@@ -185,6 +185,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   只允许被动回复 5 次（`msg_seq` 1~5，见 `QqChannel#buildMessageBody`），最终回复还要占一次。
   播报**不进对话记忆**（`conversation_memory` 只有最终答复），它是过程噪音。
 - **对话的思考档位按跳分**：第一跳 `dialog_first=high`（读懂意图、决定动不动手），之后 `dialog=low`（填参数、看结果、收尾）。实测同题 high/low 的思考量只差 100~200 token（约 0.0008 元），而少一跳能省 0.007 元。
+- **改思考档位不生效？先查表**：`llm_scenario_setting` 里的面板覆盖值**优先于** yml 和 compose。
+  排查顺序：表 → 容器环境变量（`docker exec wechat-agent-java env | grep REASONING`）→ yml。
+  档位共 **8 档**：`none/minimal/low/medium/high/xhigh/ultra/max`（`none` 才是真关思考；
+  `low/medium/high` 日常几乎没差别，要更聪明得用 `max`）。实测表见 `docs/llm-call-modes.md` 末节。
 - **事实层的两条硬规矩**（2026-10-21 加）：① object 是「没有/不上/没课」这类**空信息**不入库
   （原来 38 条有 8 条是这种，问「周三什么课」命中的就是「没有Java课」）；
   ② 检索除了向量相似度，还会**按时间词重排**（查询里的「周X/明天/后天」与 subject 对上就排前面），

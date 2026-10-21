@@ -558,5 +558,52 @@ select scenario, count(*), round(sum(cost_yuan)::numeric,4) yuan,
 要等一次真实调用才能看到——接口层已经证明 `effective` 是对的，剩下的是既有代码，
 用户下次发消息时看一眼日志即可确认。
 
+---
 
+## 2026-10-21：`reasoning_effort` 的真实白名单是 **8 档**，不是 4 档
 
+原来代码里写的是 `none / low / medium / high` —— 凭印象写的。用户提了一句
+"ds 的 api 不是只有 none、low、high、max"，于是拿一个**非法值**去撞 API，
+422 报文里直接把全表打出来了：
+
+```
+reasoning_effort: unknown variant `definitely-not-a-real-value`,
+expected one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `ultra`, `max`
+```
+
+### 实测各档的思考量（同一道概率题，`max_tokens=4000`）
+
+| 档位 | 思考 token | completion | 耗时 |
+|---|---|---|---|
+| 不传 | 81 | 239 | 1.5s |
+| **none** | **不返回该字段（=0）** | 418 | 2.5s |
+| minimal | 57（另一次实测） | — | — |
+| low | 74 | 306 | 1.7s |
+| medium | 81 | 282 | 1.9s |
+| high | 83 | 220 | 1.6s |
+| **max** | **171** | 442 | 2.5s |
+
+两个结论：
+
+1. **`none` 是唯一能真关思考的写法**。不传 ≠ 关：不传会走模型默认（日常问 80 上下、
+   难题能到 3000+）。`minimal` 也不是关，只是比 low 略少。
+2. **`low` / `medium` / `high` 在日常问题上几乎没差别**（74 / 81 / 83）。
+   真要"想得更多"，得用 `xhigh` / `ultra` / `max`（`max` 实测翻倍到 171）。
+
+### 之前踩的两个坑
+
+- `LlmScenarioEffortService.normalize()` 里把 `none` 也转成了空串，而空串 = "不传字段" =
+  **用模型默认 = 深度思考**。于是"设 none 想关思考"的实际效果是**让它想得更多**，完全反了。
+  已改成只有 `default` 转空、`none` 原样保留。
+- 档位白名单散在**三个地方**（`LlmScenarioEffortService.EFFORTS`、
+  `LlmScenarioSettings.parseReasoningEffort` 的手写 if、前端 `LlmPanel.vue` 的
+  `EFFORT_STEPS` 与 `labels.js`）。加档位要改四遍，必漏。现在后端统一指向 `EFFORTS`
+  这一份，前端跟着它列。
+
+### 顺带
+
+- 面板的**覆盖值存在 `llm_scenario_setting` 表**里，优先级**高于** yml 配置和 compose 环境变量：
+  `LlmScenarioSettings.reasoningEffortFor()` 先查覆盖表、没有再读配置。
+  改 yml 里的档位不生效时，先去看这张表（`SELECT * FROM llm_scenario_setting;`）。
+- 表里残留过两个废弃场景（`dialog_deep`、`self`），每次启动都会打两条
+  `思考强度覆盖值里有认不出的场景，已忽略` 的 WARN —— 已删。

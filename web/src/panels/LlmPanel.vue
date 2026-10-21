@@ -14,7 +14,10 @@ const data = ref(null)
 const error = ref('')
 
 // 思考强度滑块（每个场景一个）。档位顺序就是滑块的 4 个位置：0=默认（不传上游默认档）
-const EFFORT_STEPS = ['', 'low', 'medium', 'high']
+// 2026-10-21：上游实际有 8 档（拿非法值撞 422 报文拿到的完整表：
+// none/minimal/low/medium/high/xhigh/ultra/max），原来只写了 4 档。
+// 第一个空串 = '不覆盖，用配置默认'。
+const EFFORT_STEPS = ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max']
 const efforts = ref(null)
 const effortMessage = ref('')
 const effortBusy = ref('')
