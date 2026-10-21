@@ -84,6 +84,8 @@ llm:
   # **她自己主动画**的每日额度（0 = 不限）。2026-10-21 用户定：5 张/天，约 1 元。
   # **用户让她画的不占这个额度**——区分靠 SelfTurnMark（自主轮在跑时为 true）。
   image-self-daily-limit: ${LLM_IMAGE_SELF_DAILY_LIMIT:5}
+  # 一张图的单价（元）——审计表里生图没有 token，按张数折算钱
+  image-price-yuan: ${LLM_IMAGE_PRICE_YUAN:0.2}
   # 花销单价（元/百万 token）——**按 cache 命中分开**：官方 Flash 的命中价是未命中的 1/50，
   # 而我们的作业每轮都带同样的系统提示词，命中率很高，只按未命中算会把成本高估好几倍。
   # 峰谷：官方峰时价是谷时 2 倍（UTC 01–04、06–10，周一至周五；北京时间 09–12、14–18）。
@@ -131,6 +133,20 @@ llm:
     enabled: ${LLM_AUDIT_ENABLED:true}
 
 agent:
+  # 长任务后台执行（2026-10-21）
+  background:
+    # 排队 + 在跑的总数上限，超了直接拒绝（不然它会一口气扔十个进来）
+    max-queue: ${AGENT_BACKGROUND_MAX_QUEUE:3}
+    # 单轮的工具轮数上限（实测 8 轮时"读完网页没时间总结"）
+    max-rounds: ${AGENT_BACKGROUND_MAX_ROUNDS:12}
+    # 单轮钱预算（元）
+    budget-yuan: ${AGENT_BACKGROUND_BUDGET_YUAN:0.8}
+    # 单个任务的硬超时（分钟）——卡死的任务会把单线程池焊死
+    task-timeout-minutes: ${AGENT_BACKGROUND_TASK_TIMEOUT_MINUTES:8}
+    # 记录保留几天（过期且已结束的每天 03:30 清掉）
+    keep-days: ${AGENT_BACKGROUND_KEEP_DAYS:30}
+    # 清理的 cron
+    clean-cron: ${AGENT_BACKGROUND_CLEAN_CRON:0 30 3 * * ?}
   message-batch-thread-name-prefix: ${AGENT_MESSAGE_BATCH_THREAD_NAME_PREFIX:message-batch-}
   workers: ${AGENT_WORKERS:8}
   queue-capacity: ${AGENT_QUEUE_CAPACITY:200}

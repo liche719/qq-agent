@@ -161,6 +161,13 @@ public class BackgroundTaskTool implements AgentToolProvider {
         final Long savedId = taskId;
 
         pending.incrementAndGet();
+        // 谁先结束谁负责收尾（2026-10-21 修竞态）：
+        // 看门狗 cancel(true) 之后，任务线程会收到中断 → 走进 catch → 又标失败 + 又汇报一次，
+        // 用户会收到两条互相矛盾的消息（"跑了 8 分钟没完" + "没做成"）。
+        // 用这个原子标记让两边只有一边能收尾。
+        final java.util.concurrent.atomic.AtomicBoolean settled =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
         java.util.concurrent.Future<?> future = runner.submit(() -> {
             markRunning(savedId);
             double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
@@ -170,13 +177,17 @@ public class BackgroundTaskTool implements AgentToolProvider {
                 double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
                 long ms = Math.max(0, (System.nanoTime() - started) / 1_000_000L);
                 log.info("后台任务完成 user={} 用时={}ms 花费={}元", userId, ms, String.format("%.3f", yuan));
-                markDone(savedId, reply);
-                deliver(userId, "（刚才那件事做完了）" + (reply == null ? "" : reply.trim()));
+                if (settled.compareAndSet(false, true)) {
+                    markDone(savedId, reply);
+                    deliver(userId, "（刚才那件事做完了）" + (reply == null ? "" : reply.trim()));
+                }
             } catch (Throwable error) {
                 log.warn("后台任务失败 user={} goal={} err={}", userId,
                         goal.length() > 60 ? goal.substring(0, 60) + "…" : goal, error.toString());
-                markFailed(savedId, shortReason(error));
-                deliver(userId, "刚才那件事没做成（" + shortReason(error) + "）。要不再试一次？");
+                if (settled.compareAndSet(false, true)) {
+                    markFailed(savedId, shortReason(error));
+                    deliver(userId, "刚才那件事没做成（" + shortReason(error) + "）。要不再试一次？");
+                }
             } finally {
                 pending.decrementAndGet();
             }
@@ -188,11 +199,14 @@ public class BackgroundTaskTool implements AgentToolProvider {
                 future.get(taskTimeoutMinutes, java.util.concurrent.TimeUnit.MINUTES);
             } catch (java.util.concurrent.TimeoutException timeout) {
                 future.cancel(true);
-                log.warn("后台任务超时 {} 分钟，已中断 user={} goal={}", taskTimeoutMinutes, userId,
-                        goal.length() > 40 ? goal.substring(0, 40) + "…" : goal);
-                markFailed(savedId, "超时 " + taskTimeoutMinutes + " 分钟被中断");
-                deliver(userId, "刚才那件事跑了 " + taskTimeoutMinutes
-                        + " 分钟还没完，我先停下了。要是还想要，跟我说一声再试。");
+                // 只有"还没人收尾"时才算超时，避免和任务的收尾打架
+                if (settled.compareAndSet(false, true)) {
+                    log.warn("后台任务超时 {} 分钟，已中断 user={} goal={}", taskTimeoutMinutes, userId,
+                            goal.length() > 40 ? goal.substring(0, 40) + "…" : goal);
+                    markFailed(savedId, "超时 " + taskTimeoutMinutes + " 分钟被中断");
+                    deliver(userId, "刚才那件事跑了 " + taskTimeoutMinutes
+                            + " 分钟还没完，我先停下了。要是还想要，跟我说一声再试。");
+                }
             } catch (Exception ignored) {
                 // 任务正常结束 / 被取消，都不用管
             }

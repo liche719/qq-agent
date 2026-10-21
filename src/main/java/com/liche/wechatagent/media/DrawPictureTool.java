@@ -36,7 +36,6 @@ public class DrawPictureTool implements AgentToolProvider {
 
     private final ImageGenClient imageClient;
     private final ToolStatusService statusService;
-    private final MediaToolContextService mediaContext;
     /**
      * **自主画**的每日额度（2026-10-21 定）：
      * 她自己主动画一天最多 5 张；**用户让她画的不算**。
@@ -53,12 +52,10 @@ public class DrawPictureTool implements AgentToolProvider {
 
     public DrawPictureTool(ImageGenClient imageClient,
                            ToolStatusService statusService,
-                           MediaToolContextService mediaContext,
                            @Value("${llm.image-self-daily-limit:5}") int selfDailyLimit,
                            org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.config.LlmCallSink> auditSink) {
         this.imageClient = imageClient;
         this.statusService = statusService;
-        this.mediaContext = mediaContext;
         this.selfDailyLimit = Math.max(0, selfDailyLimit);
         this.auditSink = auditSink.getIfAvailable();
         this.downloader = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
