@@ -20,7 +20,7 @@ on:
         options:
           - tar
           - registry
-        default: registry
+        default: tar
 
 concurrency:
   group: remote-agent-deploy
@@ -37,9 +37,17 @@ jobs:
       packages: write
     env:
       # push 触发时没有 inputs，默认走 tar（不变）；手动触发可以选 registry
-      # 2026-10-21：默认走 registry（镜像从 ghcr 拉，只传变化的层）。
-      # 实测 6 分钟 → 2.8 分钟。tar 那条路保留着，需要时手动 workflow_dispatch 选 tar 兜底。
-      DEPLOY_MODE: ${{ inputs.deploy_mode || 'registry' }}
+      # 2026-10-21 回归 tar（当天的事了）：
+      # 一开始图快切成 registry（成功时 2.8 分钟 vs tar 的 6 分钟），但**当天失败了 3 次**——
+      # 一次卡 8.5 小时、一次 8 分钟超时、一次手动补。
+      #
+      # 根因：registry 模式下**服务器要从 ghcr.io 跨国下载**，而这台到 GitHub 的链路质量差；
+      # 更糟的是 docker pull 是黑盒，卡在哪个层根本看不出来，也没有分片重试。
+      # tar 模式的分片上传虽然慢，但**可控**：16 片并发、每片重试 3 次、进度看得见。
+      #
+      # 成功时快不等于整体快：2.8×80% + 8×20%（超时）≈ 3.8 分钟，比 6 分钟×100% 还差。
+      # 要再试 registry 就手动触发时选它。
+      DEPLOY_MODE: ${{ inputs.deploy_mode || 'tar' }}
     steps:
       # 三个 action 全部钉到 commit SHA（注释里保留人类可读的版本号）：
       # 浮动 tag 被上游移动/接管时，会在**持有服务器部署私钥的 runner** 上执行任意代码 ——
