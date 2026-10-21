@@ -24,6 +24,8 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
 
     private final BilibiliClient client;
     private final BiliCommentGuard guard;
+    /** 评论配图用（2026-10-21）：B 站评论支持带图，图要先传到它的图床 */
+    private final com.liche.wechatagent.media.ImageGenClient imageClient;
     /**
      * 只用来「写那一句评论」的一次窄调用（2026-10-20）。
      *
@@ -37,16 +39,19 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
 
     @org.springframework.beans.factory.annotation.Autowired
     public BiliCommentTool(BilibiliClient client, BiliCommentGuard guard, BiliCommentLogRepository comments,
+                           com.liche.wechatagent.media.ImageGenClient imageClient,
                            org.springframework.beans.factory.ObjectProvider<dev.langchain4j.model.chat.ChatModel> chatModels) {
-        this(client, guard, comments, chatModels == null ? null : chatModels.getIfAvailable());
+        this(client, guard, comments, chatModels == null ? null : chatModels.getIfAvailable(), imageClient);
     }
 
     private BiliCommentTool(BilibiliClient client, BiliCommentGuard guard, BiliCommentLogRepository comments,
-                            dev.langchain4j.model.chat.ChatModel chatModel) {
+                            dev.langchain4j.model.chat.ChatModel chatModel,
+                            com.liche.wechatagent.media.ImageGenClient imageClient) {
         this.comments = comments;
         this.chatModel = chatModel;
         this.client = client;
         this.guard = guard;
+        this.imageClient = imageClient;
     }
 
     /**
@@ -176,7 +181,8 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
             riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @com.liche.wechatagent.tool.NonIdempotentTool
-    public ToolBusinessResult commentBilibili(String bvid, String message, Long rootRpid, Long parentRpid) {
+    public ToolBusinessResult commentBilibili(String bvid, String message, Long rootRpid, Long parentRpid,
+                                              String picturePrompt) {
         String videoId = bvid == null ? "" : bvid.trim();
         if (videoId.isEmpty()) {
             return ToolBusinessResult.failure("没给 bvid，不知道该在哪个视频下评论。");
@@ -200,13 +206,32 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
             return ToolBusinessResult.failure("先查这个视频的信息失败了：" + exception.getMessage() + "，这次没发。");
         }
 
+        // 2026-10-21：给了 picturePrompt 就先画一张、传到 B 站图床，再带图发。
+        // 画图/上传任何一步失败都**不阻断文字评论**——图是锦上添花，不能因为它把话憋回去。
+        java.util.List<BilibiliClient.UploadedImage> pictures = null;
+        String pictureNote = "";
+        if (picturePrompt != null && !picturePrompt.isBlank()) {
+            try {
+                pictures = drawAndUpload(picturePrompt.trim());
+                if (pictures == null || pictures.isEmpty()) {
+                    pictureNote = "（图没画成，这条是纯文字）";
+                }
+            } catch (Exception exception) {
+                logIfPossible(exception);
+                pictureNote = "（图没上传成功，这条是纯文字：" + shortReason(exception) + "）";
+            }
+        }
+
         try {
-            BilibiliClient.CommentResult result = client.comment(aid, message.trim(), rootRpid, parentRpid);
+            BilibiliClient.CommentResult result = pictures == null || pictures.isEmpty()
+                    ? client.comment(aid, message.trim(), rootRpid, parentRpid)
+                    : client.commentWithPictures(aid, message.trim(), pictures, rootRpid, parentRpid);
             guard.record(videoId, aid, title, message.trim(), rootRpid, parentRpid, result);
             if (!result.ok()) {
                 return ToolBusinessResult.failure("B 站没让发（" + result.code() + "：" + result.message() + "），如实跟他说。");
             }
-            return ToolBusinessResult.success("已经发出去了。rpid=" + result.rpid()
+            return ToolBusinessResult.success("已经发出去了" + (pictures != null && !pictures.isEmpty() ? "（带图）" : "")
+                    + "。" + pictureNote + "rpid=" + result.rpid()
                     + "；视频《" + title + "》；今天第 " + guard.todayCount() + " 条。"
                     + "（B 站回了成功不等于立刻公开可见，可能还在审核，不用因此重发。）");
         } catch (BilibiliClient.BilibiliException exception) {
@@ -215,5 +240,54 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
             guard.record(videoId, aid, title, message, rootRpid, parentRpid, null);
             throw new IllegalStateException("发评论失败：" + exception.getMessage(), exception);
         }
+    }
+    /** 画一张图并传到 B 站图床；失败返回 null（评论照发，只是没图） */
+    private java.util.List<BilibiliClient.UploadedImage> drawAndUpload(String prompt) throws Exception {
+        if (imageClient == null || !imageClient.enabled()) {
+            return null;
+        }
+        com.liche.wechatagent.media.ImageGenClient.Result generated = imageClient.generate(prompt);
+        if (!generated.ok()) {
+            return null;
+        }
+        java.nio.file.Path file = null;
+        try {
+            file = java.nio.file.Files.createTempFile("va-bili-pic-", ".png");
+            java.net.http.HttpClient downloader = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(15)).build();
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(
+                            java.net.URI.create(generated.url()))
+                    .timeout(java.time.Duration.ofSeconds(60))
+                    .GET()
+                    .build();
+            java.net.http.HttpResponse<byte[]> response =
+                    downloader.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() != 200 || response.body() == null || response.body().length < 1024) {
+                return null;
+            }
+            java.nio.file.Files.write(file, response.body());
+            return java.util.List.of(client.uploadImage(file));
+        } finally {
+            if (file != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(file);
+                } catch (Exception ignored) {
+                    // 临时文件删不掉不影响结果
+                }
+            }
+        }
+    }
+
+    private static void logIfPossible(Exception exception) {
+        org.slf4j.LoggerFactory.getLogger(BiliCommentTool.class)
+                .warn("评论配图没成：{}", exception.toString());
+    }
+
+    private static String shortReason(Exception exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            return exception.getClass().getSimpleName();
+        }
+        return message.length() > 60 ? message.substring(0, 60) + "…" : message;
     }
 }

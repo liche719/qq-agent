@@ -581,7 +581,106 @@ public class BilibiliClient {
      *   <li>**接口回 0 不等于公开可见**（可能进审核），插件作者也把这列为待验证项。</li>
      * </ul>
      */
+    /**
+     * 把一张图上传到 B 站的图片服务（2026-10-21）。
+     *
+     * <p>参数是**从前端 JS 里抠出来的**（`bili-comments.*.js` 里那个 uploader 的定义）：
+     * <pre>url: /x/dynamic/feed/draw/upload_bfs
+     * body: file_up=&lt;文件&gt; biz=new_dyn category=daily</pre>
+     * 字段名是 {@code file_up} 而**不是** {@code file}——我一开始按 {@code file} 传，
+     * 一直返回 {@code 4100001 参数错误}，猜了五种组合都不对，最后在 JS 里找到真正的名字。
+     *
+     * <p>返回的 {@code image_url} 是有时效的（签名 CDN），要立刻用。
+     */
+    public UploadedImage uploadImage(Path file) throws IOException {
+        BiliCredential credential = credentialService == null ? null : credentialService.current();
+        if (credential == null || credential.getBiliJct() == null || credential.getBiliJct().isBlank()) {
+            throw new BilibiliException("上传图片需要 bili_jct，现在没有——去面板「B站」页签扫一次码。");
+        }
+        if (file == null || !java.nio.file.Files.isRegularFile(file)) {
+            throw new BilibiliException("要上传的图片不存在。");
+        }
+        String contentType = detectImageType(file);
+        okhttp3.MultipartBody body = new okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart("file_up", file.getFileName().toString(),
+                        okhttp3.RequestBody.create(file.toFile(),
+                                okhttp3.MediaType.parse(contentType)))
+                .addFormDataPart("biz", "new_dyn")
+                .addFormDataPart("category", "daily")
+                .addFormDataPart("csrf", credential.getBiliJct())
+                .build();
+        Request request = new Request.Builder()
+                .url(API + "/x/dynamic/feed/draw/upload_bfs")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/")
+                .header("Origin", "https://www.bilibili.com")
+                .header("Cookie", cookieHeader())
+                .post(body)
+                .build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站图片上传 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            if (code != 0) {
+                throw new BilibiliException("上传图片失败（" + code + "：" + json.path("message").asText("") + "）");
+            }
+            JsonNode data = json.path("data");
+            String url = data.path("image_url").asText("");
+            if (url.isBlank()) {
+                throw new BilibiliException("上传接口没返回图片地址。");
+            }
+            return new UploadedImage(url, data.path("image_width").asInt(0), data.path("image_height").asInt(0));
+        }
+    }
+
+    private static String detectImageType(Path file) {
+        String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".png")) {
+            return "image/png";
+        }
+        if (name.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (name.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "image/jpeg";
+    }
+
+    /** 上传到 B 站图床后拿到的图片信息（发评论时要用） */
+    public record UploadedImage(String url, int width, int height) {
+    }
+
+    /** 发一条**带图**的评论（2026-10-21）。pictures 用 B 站评论接口认的那种结构 */
+    public CommentResult commentWithPictures(long aid, String message, java.util.List<UploadedImage> pictures,
+                                             Long root, Long parent) throws IOException {
+        if (pictures == null || pictures.isEmpty()) {
+            return comment(aid, message, root, parent);
+        }
+        StringBuilder json = new StringBuilder("[");
+        for (int i = 0; i < pictures.size(); i++) {
+            UploadedImage img = pictures.get(i);
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append("{\"img_src\":\"").append(img.url())
+                    .append("\",\"img_width\":").append(img.width())
+                    .append(",\"img_height\":").append(img.height()).append('}');
+        }
+        json.append(']');
+        return commentInternal(aid, message, root, parent, json.toString());
+    }
+
     public CommentResult comment(long aid, String message, Long root, Long parent) throws IOException {
+        return commentInternal(aid, message, root, parent, null);
+    }
+
+    /** 真正干活的那个；picturesJson 为空就是纯文字评论 */
+    private CommentResult commentInternal(long aid, String message, Long root, Long parent,
+                                          String picturesJson) throws IOException {
         BiliCredential credential = credentialService == null ? null : credentialService.current();
         if (credential == null || credential.getBiliJct() == null || credential.getBiliJct().isBlank()) {
             throw new BilibiliException("发评论需要 bili_jct，现在没有——去面板「B站」页签扫一次码。");
@@ -593,6 +692,9 @@ public class BilibiliClient {
                 .add("message", message)
                 .add("csrf", credential.getBiliJct())
                 .add("plat", "1");
+        if (picturesJson != null && !picturesJson.isBlank()) {
+            form.add("pictures", picturesJson);
+        }
         if (root != null && root > 0) {
             form.add("root", String.valueOf(root));
             form.add("parent", String.valueOf(parent == null || parent <= 1 ? root : parent));
