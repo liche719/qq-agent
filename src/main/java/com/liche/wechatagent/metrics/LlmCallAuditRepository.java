@@ -33,6 +33,10 @@ public interface LlmCallAuditRepository extends JpaRepository<LlmCallAudit, Long
             """, nativeQuery = true)
     List<Object[]> summaryByScenario(@Param("since") LocalDateTime since);
 
+    /** 某个场景在某时刻之后调了几次——生图是按张计价的，没有 token，只能数次数 */
+    @Query("select count(a) from LlmCallAudit a where a.scenario = :scenario and a.createdAt >= :since")
+    long countByScenarioSince(@Param("scenario") String scenario, @Param("since") LocalDateTime since);
+
     /** 按天聚合 */
     @Query(value = """
             select created_at::date                                  as day,

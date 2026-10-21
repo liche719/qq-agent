@@ -41,15 +41,19 @@ public class DrawPictureTool implements AgentToolProvider {
     private final java.util.concurrent.atomic.AtomicInteger todayUsed = new java.util.concurrent.atomic.AtomicInteger();
     private volatile java.time.LocalDate usedDate = java.time.LocalDate.now();
     private final HttpClient downloader;
+    /** 审计出口：生图没有 token，但也要留一条记录，面板才能数出今天画了几张 */
+    private final com.liche.wechatagent.config.LlmCallSink auditSink;
 
     public DrawPictureTool(ImageGenClient imageClient,
                            ToolStatusService statusService,
                            MediaToolContextService mediaContext,
-                           @Value("${llm.image-daily-limit:8}") int dailyLimit) {
+                           @Value("${llm.image-daily-limit:8}") int dailyLimit,
+                           org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.config.LlmCallSink> auditSink) {
         this.imageClient = imageClient;
         this.statusService = statusService;
         this.mediaContext = mediaContext;
         this.dailyLimit = Math.max(0, dailyLimit);
+        this.auditSink = auditSink.getIfAvailable();
         this.downloader = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     }
 
@@ -106,6 +110,15 @@ public class DrawPictureTool implements AgentToolProvider {
             String fileName = "画的图-" + System.currentTimeMillis() + ".png";
             boolean sent = statusService.sendMedia(new OutboundMedia(file, fileName, "image/png"));
             todayUsed.incrementAndGet();
+            if (auditSink != null) {
+                try {
+                    auditSink.acceptCall(new com.liche.wechatagent.config.LlmCallEvent(
+                            "image", false, true, result.costMs(),
+                            com.liche.wechatagent.config.LlmUsage.EMPTY, null));
+                } catch (RuntimeException ignored) {
+                    // 记账失败不影响画图
+                }
+            }
             log.info("画图完成 发送={} 大小={}KB 提示词={}", sent, size / 1024, prompt.substring(0, Math.min(40, prompt.length())));
 
             if (sent) {

@@ -45,18 +45,22 @@ public class VideoUnderstandService {
     private final long maxBase64Bytes;
     private final int maxOutputTokens;
     private final HttpClient http;
+    /** 审计出口（2026-10-21）：视频调用以前完全不入账，面板上看不到这笔钱 */
+    private final com.liche.wechatagent.config.LlmCallSink auditSink;
 
     public VideoUnderstandService(
             @Value("${llm.base-url:}") String baseUrl,
             @Value("${llm.api-key:}") String apiKey,
             @Value("${llm.video-model:}") String model,
             @Value("${llm.video-max-base64-bytes:16777216}") long maxBase64Bytes,
-            @Value("${llm.video-max-output-tokens:1200}") int maxOutputTokens) {
+            @Value("${llm.video-max-output-tokens:4000}") int maxOutputTokens,
+            org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.config.LlmCallSink> auditSink) {
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.model = model == null ? "" : model.trim();
         this.maxBase64Bytes = maxBase64Bytes;
         this.maxOutputTokens = maxOutputTokens;
+        this.auditSink = auditSink.getIfAvailable();
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
@@ -136,12 +140,23 @@ public class VideoUnderstandService {
                 return Result.failed("视频模型没说话（返回是空的）。");
             }
             JsonNode usage = root.path("usage");
+            int promptTokens = usage.path("prompt_tokens").asInt();
+            int completionTokens = usage.path("completion_tokens").asInt();
+            int reasoningTokens = usage.path("completion_tokens_details").path("reasoning_tokens").asInt();
+            int cachedTokens = usage.path("prompt_tokens_details").path("cached_tokens").asInt();
             log.info("视频理解完成 model={} 用时={}ms 输入={} 输出={} 思考={}",
-                    model, costMs,
-                    usage.path("prompt_tokens").asInt(),
-                    usage.path("completion_tokens").asInt(),
-                    usage.path("completion_tokens_details").path("reasoning_tokens").asInt());
-            return new Result(true, text, usage.path("prompt_tokens").asInt(), costMs);
+                    model, costMs, promptTokens, completionTokens, reasoningTokens);
+            if (auditSink != null) {
+                try {
+                    auditSink.acceptCall(new com.liche.wechatagent.config.LlmCallEvent(
+                            "video", false, true, costMs,
+                            new com.liche.wechatagent.config.LlmUsage(
+                                    promptTokens, completionTokens, reasoningTokens, cachedTokens), null));
+                } catch (RuntimeException ignored) {
+                    // 记账失败不能影响看视频
+                }
+            }
+            return new Result(true, text, promptTokens, costMs);
         } catch (Exception e) {
             log.warn("视频理解出错：{}", e.toString());
             return Result.failed("视频模型调用失败（" + clip(e.getMessage(), 100) + "）");

@@ -57,19 +57,28 @@ async function loadBalance() {
   }
 }
 
-/** 余额显示文案：< 5 元标红提醒 */
+/**
+ * 顶栏那个数字（2026-10-21 改）。
+ *
+ * 原来显示 DeepSeek 账户余额，但对话迁到基元律动后那个接口恒 404
+ * （基元律动没有余额 API）。现在显示**今天花掉的钱**——数据来自本地落库，
+ * 涵盖对话、提取、视频理解、生图，比一个查不到的余额有用得多。
+ *
+ * 阈值按"一天花多少算多"来定：原来 <3 元标红、<8 黄，是按余额算的；
+ * 花费的标尺不一样——一天 5 块以上就该看一眼了。
+ */
 const balanceText = computed(() => {
-  const raw = balance.value?.balance
+  const raw = balance.value?.todayYuan
   if (raw === undefined || raw === null || raw === '') return '—'
   const n = Number(raw)
   return Number.isFinite(n) ? '¥' + n.toFixed(2) : String(raw)
 })
 const balanceTone = computed(() => {
-  if (balanceError.value || balance.value?.error) return 'idle'
-  const n = Number(balance.value?.balance)
+  if (balanceError.value) return 'idle'
+  const n = Number(balance.value?.todayYuan)
   if (!Number.isFinite(n)) return 'idle'
-  if (n < 3) return 'bad'
-  if (n < 8) return 'warn'
+  if (n >= 8) return 'bad'
+  if (n >= 3) return 'warn'
   return 'ok'
 })
 const panelsError = ref('')
@@ -267,9 +276,9 @@ onBeforeUnmount(() => {
       <div class="spread">
         <div class="row">
           <!-- 余额放最显眼的位置：一眼看到还有多少 -->
-          <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceError || '点一下重新查'"
+          <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceError || (balance?.note || '今天花掉的钱（对话/提取/视频/生图合计）') + '，点一下重新查'"
                   @click="loadBalance">
-            <span class="balance-label">余额</span>
+            <span class="balance-label">今天</span>
             <span class="balance-value">{{ balanceText }}</span>
           </button>
           <StatusPill :label="'应用 ' + zh('app', status)" :tone="toneOf(status)"></StatusPill>

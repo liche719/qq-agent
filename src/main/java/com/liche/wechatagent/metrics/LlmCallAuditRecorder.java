@@ -35,6 +35,10 @@ import java.util.Map;
 @Component
 public class LlmCallAuditRecorder implements LlmCallSink {
 
+    /** 一张图的单价（元）——基元律动的 qwen-image-2.0 / wan2.7-image 都是 0.2 */
+    @org.springframework.beans.factory.annotation.Value("${llm.image-price-yuan:0.2}")
+    private java.math.BigDecimal imagePriceYuan = java.math.BigDecimal.valueOf(0.2);
+
     private static final Logger log = LoggerFactory.getLogger(LlmCallAuditRecorder.class);
 
     /** 错误信息列宽（{@code error_message varchar(200)}）；截断要给省略号留一位，否则撞列长整条写入失败 */
@@ -96,7 +100,27 @@ public class LlmCallAuditRecorder implements LlmCallSink {
 
     /** 今天（本地时区自然日）已经花了多少元 */
     public BigDecimal todayYuan() {
-        return repository.sumCostSince(LocalDate.now(zone).atStartOfDay());
+        BigDecimal llm = repository.sumCostSince(LocalDate.now(zone).atStartOfDay());
+        return (llm == null ? BigDecimal.ZERO : llm).add(todayImageYuan());
+    }
+
+    /**
+     * 今天画图花的钱（2026-10-21）。
+     *
+     * <p>生图**没有 token**，只有一个固定单价（0.2 元/张），所以没法走通用的
+     * 「token × 单价」那条路——审计行里 cost 会是 0。这里按记录的张数单独折算。
+     */
+    private BigDecimal todayImageYuan() {
+        try {
+            long count = repository.countByScenarioSince("image", LocalDate.now(zone).atStartOfDay());
+            if (count <= 0) {
+                return BigDecimal.ZERO;
+            }
+            return BigDecimal.valueOf(count).multiply(imagePriceYuan);
+        } catch (RuntimeException exception) {
+            log.warn("统计今日生图花费失败（已忽略）：{}", exception.getMessage());
+            return BigDecimal.ZERO;
+        }
     }
 
     /** 最近 {@code days} 天：按天的汇总（面板用） */
