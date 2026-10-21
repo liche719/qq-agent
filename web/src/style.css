@@ -207,7 +207,6 @@ a { color: var(--brand); text-decoration: none; }
 .stack { display: grid; gap: 14px; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .spread { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.grid-4 { display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .grid-2 { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* ---------- 玻璃面板 ---------- */
@@ -314,14 +313,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tag.bad { border-color: color-mix(in srgb, var(--bad) 34%, transparent); background: var(--bad-soft); color: var(--bad-ink); }
 
 /* ---------- 指标卡 ---------- */
-.stat { padding: 18px 20px; min-width: 0; }
-.stat .k { font-size: 12.5px; color: var(--muted); }
-.stat .v {
-  margin-top: 7px; font-size: 26px; font-weight: 650; letter-spacing: .3px; line-height: 1.15;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.stat .m { margin-top: 5px; font-size: 12.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat .v.ok { color: var(--ok); }
 .stat .v.warn { color: var(--warn); }
 .stat .v.bad { color: var(--bad); }
@@ -560,11 +551,7 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
 
 @media (max-width: 720px) {
   .page { padding: 16px 14px calc(44px + env(safe-area-inset-bottom)); }
-  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stat { padding: 14px 15px; }
-  .stat .v { font-size: 22px; }
-  .stat .m { display: none; }
-  .panel { padding: 16px 15px; }
+          .panel { padding: 16px 15px; }
   .topbar { top: 8px; padding: 12px 14px 10px; border-radius: 18px; }
   .brand-text h1 { font-size: 17px; }
   .tools { width: 100%; margin-left: 0; }
@@ -819,11 +806,6 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
    压到 12px / 22px，一屏能看到页签 + 内容开头。
    顶栏那两行状态也收成一行。
    ============================================================ */
-.stat { padding: 12px 14px; }
-.stat .k { font-size: 11.5px; }
-.stat .v { margin-top: 4px; font-size: 22px; font-weight: 600; letter-spacing: 0; }
-.stat .m { margin-top: 3px; font-size: 11.5px; line-height: 1.35; }
-.grid-4 { gap: 10px; }
 .grid-2 { gap: 10px; }
 
 /* 顶栏：一行装下 余额 + 两个状态点 + ⋯ */
@@ -835,9 +817,7 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   .balance-pill { padding: 5px 10px; gap: 6px; }
   .balance-pill .balance-value { font-size: 15px; }
   .tabs { margin-top: 12px; }
-  .stat .v { font-size: 20px; }
-  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+    }
 
 /* 页签吸顶：滚下去看内容时还能切页签 */
 .tabs {
@@ -889,3 +869,37 @@ details.item pre.json { max-height: 340px; font-size: 11.5px; }
   .effort-stepper { justify-self: stretch; justify-content: flex-end; }
   .effort-stepper .btn-sm { min-width: 40px; height: 36px; }
 }
+
+/* ── 页内区块导航（2026-10-21）───────────────────────────────────────
+   「它自己」有 19 个区块、要找一个得从头滑到尾。这排小标签吸在页签下面，
+   随时点一下直接跳到那个区块；手机上横向滑，不占竖向空间。 */
+.section-nav {
+  position: sticky;
+  top: 52px;                 /* 让开页签那条（.tabs 的 sticky top:0） */
+  z-index: 30;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 2px;
+  margin: -4px 0 4px;
+  scrollbar-width: none;
+  background: linear-gradient(to bottom, var(--bg, #0a0a0b) 62%, transparent);
+}
+.section-nav::-webkit-scrollbar { display: none; }
+.section-chip {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--chip-bg, #1a1a1e);
+  color: var(--ink-2, #b6b6bd);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.section-chip:hover { color: var(--ink, #e8e8ea); border-color: var(--line-strong, #2f2f35); }
+.section-chip:active { background: var(--btn-hover, #232328); }
+
+/* 跳过去之后别被吸顶的导航挡住 */
+.glass.panel { scroll-margin-top: 104px; }

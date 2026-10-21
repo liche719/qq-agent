@@ -395,6 +395,14 @@ function onRowAction(view, payload) {
   return runRow(view, action, payload.row, payload.index, payload.actionIndex)
 }
 
+/** 跳到指定区块（滚动到顶部留出吸顶导航的高度） */
+function jumpTo(key) {
+  const target = document.getElementById('sec-' + key)
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
 function detailOf(index) {
   return details.value[index] || null
 }
@@ -480,12 +488,20 @@ onMounted(() => load())
 
 <template>
   <div class="stack">
+    <!-- 区块导航（2026-10-21 加）：这页动辄十几个区块，用户抱怨"要看后面的得
+         一路滑到底、想找的还得滑回去"。这里把标题列成一排小标签，点一下直接跳。
+         只在区块 ≥4 时才出现，少的时候反而碍事。 -->
+    <nav v-if="views.length >= 4" class="section-nav" aria-label="本页区块">
+      <button v-for="item in views" :key="'nav-' + item.key" class="section-chip"
+              @click="jumpTo(item.key)">{{ item.title }}</button>
+    </nav>
+
     <section v-if="!views.length" class="glass panel">
       <div class="panel-head"><h2>{{ tab.label || tab.key }}</h2><span class="hint">后端没有给出可渲染的区块</span></div>
       <div class="empty">这个页签暂时没有内容</div>
     </section>
 
-    <section v-for="view in views" :key="view.key" class="glass panel">
+    <section v-for="view in views" :key="view.key" :id="'sec-' + view.key" class="glass panel">
       <div class="panel-head">
         <h2>{{ view.title }}</h2>
         <span v-if="view.hint" class="hint">{{ view.hint }}</span>

@@ -5,7 +5,6 @@ import { api } from '../api'
 import { clearAuth } from '../auth'
 import { fmtNum, toneOf, zh } from '../labels'
 import { theme, themeLabel, toggleTheme } from '../theme'
-import StatCard from '../components/StatCard.vue'
 import StatusPill from '../components/StatusPill.vue'
 import DescriptorPanel from '../components/DescriptorPanel.vue'
 import { CORE_PANELS, CORE_TABS, CORE_TAB_LABELS } from '../panels/registry'
@@ -266,13 +265,6 @@ onBeforeUnmount(() => {
   <div class="page">
     <header class="glass topbar">
       <div class="spread">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true"></div>
-          <div class="brand-text">
-            <h1>运维监控</h1>
-            <div class="sub">QQ 陪伴机器人后台</div>
-          </div>
-        </div>
         <div class="row">
           <!-- 余额放最显眼的位置：一眼看到还有多少 -->
           <button class="balance-pill" :class="'tone-' + balanceTone" :title="balanceError || '点一下重新查'"
@@ -321,20 +313,7 @@ onBeforeUnmount(() => {
 
     <p v-if="dismissNotice" class="hint" style="margin-top: 10px">{{ dismissNotice }}</p>
 
-    <div class="grid-4" style="margin-top: 16px">
-      <StatCard label="应用状态" :value="zh('app', status)"
-                :meta="'启动于 ' + (overview?.startedAt || '—')" :tone="toneOf(status)"></StatCard>
-      <StatCard label="QQ 通道" :value="zh('qq', qqStatus)"
-                :meta="'发送成功 ' + fmtNum(overview?.qqMetrics?.textSendSuccess) + ' · 失败 ' + fmtNum(overview?.qqMetrics?.textSendFailure)"
-                :tone="toneOf(qqStatus)"></StatCard>
-      <StatCard label="用户数" :value="fmtNum(overview?.users)"
-                :meta="'对话 ' + fmtNum(overview?.conversations) + ' · 记忆 ' + fmtNum(memoryCount)"></StatCard>
-      <StatCard label="异常任务" :value="fmtNum(unknownTasks)"
-                :meta="'运行中 ' + fmtNum(overview?.tasks?.RUNNING) + ' · 失败 ' + fmtNum(overview?.tasks?.FAILED)"
-                :tone="unknownTasks > 0 ? 'bad' : 'ok'"></StatCard>
-    </div>
-
-    <nav class="glass tabs" role="tablist">
+<nav class="glass tabs" role="tablist">
       <button v-for="item in tabs" :key="item.key" class="tab" :class="{ active: tab === item.key }"
               role="tab" @click="tab = item.key">{{ item.label }}</button>
     </nav>
