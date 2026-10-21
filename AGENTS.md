@@ -14,6 +14,10 @@
 - 用户会在对话里直接给服务器密码等凭据，凭据绝不写进仓库文件。
 - 汇报用结论式中文，避免长篇过程描述。
 - **先定方案再动手（2026-09-14 用户明确要求）**：动手前先把方案写出来、想清"最终效果会变成什么样、哪里会崩"再开工，不要边想边做；涉及存量数据/线上行为的改动先给方案等确认。
+- **等部署/等长任务用轮询，不许"睡一个猜的时长"（2026-10-21 用户明确要求）**：CI 部署实测 7~9 分钟且波动大，睡 9 分钟既可能在白等、也可能没等够。正确做法：轮询真实信号——
+  `docker inspect -f '{{.Config.Image}}' wechat-agent-java` 看镜像 tag 是否变成目标 sha，
+  应用起来后再轮询 `curl -sk https://127.0.0.1/api/site/info` 到 200，
+  最后用接口/日志验证功能。中间每次间隔 5~30 秒即可，不要固定 sleep。
 
 ## 1. 项目
 
@@ -26,7 +30,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状**：工具 **62 个 / 19 个类**（自主模块开启时，以 2026-10-21 生产启动日志 `工具注册完成：19 个类 / 62 个工具` 为准；此前这里记的 63 是旧数）、系统提示词 **28 条**（编号 1–28，20 空号）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
+- **规模现状**：工具 **63 个 / 20 个类**（自主模块开启时，2026-10-21 23:19 生产启动日志 `20 个类 / 63 个工具`，含新加的 `SendVoiceTool`）、系统提示词 **29 条**（编号 1–29，20 空号）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -175,7 +179,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **62 个 / 19 个类**、系统提示词 **28 条**（2026-10-21 生产启动日志与实际代码为准）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
+- **规模**：工具 **63 个 / 20 个类**、系统提示词 **29 条**（2026-10-21 23:19 生产启动日志与实际代码为准）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
@@ -211,9 +215,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   跑完用 `ProactiveDelivery` **主动汇报**。实测：7 秒返回、150 秒后汇报到。
   落库 `background_task` 表——**重启后**：QUEUED 的重新排队，RUNNING 的标失败并告诉他
   "因为重启没做完"。队列上限 3、每轮禁递归、12 轮 / 0.8 元预算。
-- **花费按场景分类显示**（2026-10-21）：顶栏显示**今日花费**（不是余额——基元律动没有余额接口），
-  悬停能看到 dialog/extract/video/image 各花了多少。视频和生图也进审计
-  （生图没 token，按张数 × 0.2 折算）。
+- **花费按场景分类显示**（2026-10-21）：顶栏显示**今日花费**（不是余额——基元律动没有余额接口），悬停能看到各场景合计；
+  **面板新增「花费」页签**（`/api/admin/usage?days=1|7|30`）：每个场景的调用数 / 输入输出 token / 缓存命中 / 金额，加按天汇总。
+  视频、生图、语音都进审计：生图没 token 按张数 × 0.2 折，**语音没 token 按字符 × 0.8 元/万字符折**（`voice.tts.price-yuan-per-10k-chars`）。
 - **峰谷计价已关**（`LLM_PRICE_PEAK_MULTIPLIER=1.0`）：基元律动不区分峰谷。
   自主模块的谷时限制也关了（`MEMORY_SELF_OFFPEAK_ONLY=false`），随时能跑。代码都留着。
 - **事实层的两条硬规矩**（2026-10-21 加）：① object 是「没有/不上/没课」这类**空信息**不入库
