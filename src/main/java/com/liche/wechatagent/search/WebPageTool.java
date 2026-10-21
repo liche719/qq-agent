@@ -176,11 +176,30 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
                 .compile("^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$")
                 .matcher(trimmed);
         if (github.matches()) {
-            String raw = "https://raw.githubusercontent.com/" + github.group(1) + "/" + github.group(2)
-                    + "/" + github.group(3) + "/" + github.group(4);
+            String owner = github.group(1);
+            String repo = github.group(2);
+            String ref = github.group(3);
+            String path = github.group(4);
+            // 2026-10-21：**直接走 jsdelivr**，不先试 raw.githubusercontent。
+            // 实测这台机器的 hosts 把 github.com / raw.githubusercontent.com 都指到了
+            // 127.0.0.1（GFW 污染），于是 PublicUrlValidator 判定"私有地址"直接拒绝——
+            // 拦得没错，但用户想读的是自己的代码。jsdelivr 解析正常（151.101.x.x），
+            // 同样的路径换个域名就能拿到，而且是给 GitHub 做镜像的正规 CDN。
+            String mirror = "https://cdn.jsdelivr.net/gh/" + owner + "/" + repo + "@" + ref + "/" + path;
             org.slf4j.LoggerFactory.getLogger(WebPageTool.class)
-                    .info("代码页转纯文本：{} -> {}", trimmed, raw);
-            return raw;
+                    .info("代码页转 jsdelivr：{} -> {}", trimmed, mirror);
+            return mirror;
+        }
+        // 已经是 raw 地址的，也换成 jsdelivr（raw 的域名在国内解析不了）
+        java.util.regex.Matcher rawMatch = java.util.regex.Pattern
+                .compile("^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$")
+                .matcher(trimmed);
+        if (rawMatch.matches()) {
+            String mirror = "https://cdn.jsdelivr.net/gh/" + rawMatch.group(1) + "/" + rawMatch.group(2)
+                    + "@" + rawMatch.group(3) + "/" + rawMatch.group(4);
+            org.slf4j.LoggerFactory.getLogger(WebPageTool.class)
+                    .info("raw 地址转 jsdelivr：{} -> {}", trimmed, mirror);
+            return mirror;
         }
         return trimmed;
     }
