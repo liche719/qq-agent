@@ -36,6 +36,9 @@ import java.util.Map;
 @RequestMapping("/api/admin/self")
 public class AdminSelfActivityController {
 
+    /** 后台长任务（2026-10-21）：让用户看得到它到底在忙什么 */
+    private final com.liche.wechatagent.agent.BackgroundTaskRepository backgroundTasks;
+
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final String BILIBILI_TOPIC = "bilibili";
 
@@ -55,6 +58,7 @@ public class AdminSelfActivityController {
                                        AgentSeedRepository seeds,
                                        BiliCommentLogRepository comments,
                                        BiliViewLogRepository views,
+                                       com.liche.wechatagent.agent.BackgroundTaskRepository backgroundTasks,
                                        @Value("${memory.self-enabled:false}") boolean selfEnabled,
                                        @Value("${memory.self-research-enabled:true}") boolean researchEnabled,
                                        @Value("${memory.self-bilibili-enabled:true}") boolean bilibiliEnabled,
@@ -63,6 +67,7 @@ public class AdminSelfActivityController {
         this.seeds = seeds;
         this.comments = comments;
         this.views = views;
+        this.backgroundTasks = backgroundTasks;
         this.selfEnabled = selfEnabled;
         this.researchEnabled = researchEnabled;
         this.bilibiliEnabled = bilibiliEnabled;
@@ -219,6 +224,63 @@ public class AdminSelfActivityController {
      * <p>数据一直在 {@code bili_comment_log} 里，只是没接到面板上；用户要"知道它做了什么"，
      * 这是最该摊开看的一样——用的是他的账号在说话。
      */
+    /**
+     * 最近的后台长任务（2026-10-21）。
+     *
+     * <p>为什么要有这个：`background_task` 表建了、工具在写，但用户**完全看不到**
+     * 「它现在后台跑着什么、跑完了没有」。长任务本来就是把结果延后送达，没有这块展示
+     * 就等于一个黑盒。
+     */
+    @GetMapping("/background-tasks")
+    public Map<String, Object> backgroundTasks() {
+        List<Map<String, Object>> rows = backgroundTasks.findAll(
+                        org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Direction.DESC, "id"))
+                .stream().limit(20).map(task -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("at", task.getCreatedAt() == null ? ""
+                            : task.getCreatedAt().toString().replace('T', ' '));
+                    row.put("goal", clipForView(task.getGoal(), 60));
+                    row.put("status", switch (task.getStatus() == null ? "" : task.getStatus()) {
+                        case "QUEUED" -> "排队中";
+                        case "RUNNING" -> "在跑";
+                        case "DONE" -> "做完了";
+                        case "FAILED" -> "没做成";
+                        default -> task.getStatus();
+                    });
+                    String outcome = task.getResult();
+                    if (outcome == null || outcome.isBlank()) {
+                        outcome = task.getError();
+                    }
+                    row.put("outcome", clipForView(outcome, 120));
+                    row.put("took", durationText(task));
+                    return row;
+                }).toList();
+        return Map.of("rows", rows);
+    }
+
+    /** 从开始到结束用了多久；没跑完就显示"—" */
+    private static String durationText(com.liche.wechatagent.agent.BackgroundTask task) {
+        if (task.getStartedAt() == null) {
+            return "—";
+        }
+        java.time.LocalDateTime end = task.getFinishedAt() == null
+                ? java.time.LocalDateTime.now() : task.getFinishedAt();
+        long seconds = java.time.Duration.between(task.getStartedAt(), end).getSeconds();
+        if (seconds < 60) {
+            return seconds + " 秒";
+        }
+        return (seconds / 60) + " 分 " + (seconds % 60) + " 秒";
+    }
+
+    private static String clipForView(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        String flat = value.replace('\n', ' ').trim();
+        return flat.length() <= max ? flat : flat.substring(0, max) + "…";
+    }
+
     @GetMapping("/bilibili-comments")
     public Map<String, Object> bilibiliComments() {
         List<Map<String, Object>> rows = comments.findAll(

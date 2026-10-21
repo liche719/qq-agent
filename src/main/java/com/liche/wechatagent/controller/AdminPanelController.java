@@ -121,6 +121,12 @@ public class AdminPanelController {
                         column("result", "结果", false),
                         column("rpid", "评论号", false),
                         linkedColumn("link", "去看")), List.of()),
+                table("它在后台忙的事（长任务：跑完会主动告诉你）", "/api/admin/self/background-tasks", List.of(
+                        column("at", "什么时候交的", false),
+                        column("goal", "要它做什么", true),
+                        column("status", "现在", false),
+                        column("took", "花了多久", false),
+                        column("outcome", "结果", true)), List.of()),
                 table("自主活动（它自己的时间花在哪）", "/api/admin/self/activities", List.of(
                         column("state", "状态", false),
                         column("activity", "活动", true),

@@ -26,7 +26,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状**：工具 **61 个 / 17 个类**（自主模块开启时）、系统提示词 **26 条**。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
+- **规模现状**：工具 **63 个 / 19 个类**（自主模块开启时）、系统提示词 **26 条**。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md`。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -110,9 +110,11 @@ curl -s https://127.0.0.1/index.html -o /dev/null -w '%{http_code}\n'           
 curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview             # 面板接口（IP 访问证书不匹配，用 -k）
 ```
 
-- **部署默认走 ghcr**（2026-10-21 起）：CI 推镜像到 `ghcr.io/liche719/qq-agent:<sha>`，
-  服务器 `docker pull` 只拉变化的层（~2.8 分钟，原来传 tar 要 ~6 分钟）。
-  要回退：手动触发 workflow 时选 `deploy_mode=tar`。
+- **部署仍走 tar**（2026-10-21 试过 ghcr，**已回退**）：当天切成 registry 后失败了 3 次
+  （一次卡 8.5 小时、一次 8 分钟超时）——根因是服务器到 `ghcr.io` 的跨国下载不稳，
+  而 `docker pull` 是黑盒（卡在哪层看不出来、没有分片重试）。tar 的分片上传慢但可控：
+  16 片并发、每片重试 3 次、进度看得见。**成功 2.8 分钟 vs 失败 8 分钟，期望值反而更差**。
+  要再试 registry：手动触发 workflow 时选 `deploy_mode=registry`（那条路留着）。
   **改了 `deploy/server/wechat-deploy` 必须手动同步到服务器 `/usr/local/bin/`**（CI 不传它）。
 - 只重启 agent：`cd /opt/wechat-agent-infra && AGENT_IMAGE=wechat-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
 
@@ -159,6 +161,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/self-layer-spec.md`、`docs/self-layer.md` | 同上，早期规格与说明（**存档**） |
 | `docs/backup.md` | 备份改版与恢复步骤 |
 | `docs/media-memory.md` | 媒体记忆三件套 |
+| `docs/ai-abilities.md` | **看视频 / 画图 / B站评论带图 / 长任务后台跑**（2026-10-21 那批） |
 | `docs/channel-robustness.md` | 通道健壮性（半开连接、重发、限流） |
 | `docs/deploy-security.md` | 部署安全（受限命令、HMAC 验签、CI 供应链） |
 | `docs/pg-migration.md` | MySQL → PostgreSQL 整库迁移 |
@@ -172,12 +175,12 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **61 个 / 17 个类**、系统提示词 **26 条**。取用记录见 `docs/tools-and-prompt-inventory.md`。
+- **规模**：工具 **63 个 / 19 个类**、系统提示词 **26 条**。取用记录见 `docs/tools-and-prompt-inventory.md`。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
     它已经在里面写了 `notes/` 两份笔记（对自己的反思 + 面试陪练怎么带）。
-  - **它有自己的时间**：心跳 2 小时一次、**放在整点后 10 分**（不是整点——整点会因上次跑晚几十秒而永远差那一点，实测从 6 小时退化成 8 小时），**只在 DeepSeek 谷时**（工作日北京 09–12、14–18 是峰时）才动；
+  - **它有自己的时间**：心跳 2 小时一次、**放在整点后 10 分**（不是整点——整点会因上次跑晚几十秒而永远差那一点，实测从 6 小时退化成 8 小时），**随时都能动**（2026-10-21 起基元律动不区分峰谷，谷时闸门已关）；
     每轮只读 1 条 B 站视频，判据一句话「值不值得占用他一次注意力」，值得就写一句评论 + 跟他说一声。
   - **评论只关思考那一次**：`draftBilibiliComment` 用 `reasoning_effort=none`（实测 thinking token=0），
     判断/读视频/总结仍是 `dialog=low`。禁 AI 腔的规则写在指令里（10~25 字、只说一个具体点）。
@@ -193,6 +196,26 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   排查顺序：表 → 容器环境变量（`docker exec wechat-agent-java env | grep REASONING`）→ yml。
   档位共 **8 档**：`none/minimal/low/medium/high/xhigh/ultra/max`（`none` 才是真关思考；
   `low/medium/high` 日常几乎没差别，要更聪明得用 `max`）。实测表见 `docs/llm-call-modes.md` 末节。
+- **它现在能看、能画**（2026-10-21）：
+  - **看视频**：B 站视频**直接交给 `qwen3.8-flash` 看画面**（不再是抽帧截图），
+    字幕降级成"附带信息"，拿不到也不影响。抽帧保留为兜底（`BILIBILI_FRAME_FALLBACK=true` 时，
+    且**只在没有字幕**时才走）。实测 3 分半视频 ≈ 4.9 万 token ≈ 0.025 元。
+    视频太大（base64 超 16MB）会诚实说"没看成"，不编。
+  - **画图**：`qwen-image-2.0`，**0.2 元/张**。**它自己主动画一天最多 5 张**（`LLM_IMAGE_SELF_DAILY_LIMIT`），
+    用户在对话里让它画的**不占额度**（靠 `SelfTurnMark` 区分：自主轮才限额）。
+  - **B 站评论能带图**：评论接口支持图片，但要先传到 B 站图床
+    （`/x/dynamic/feed/draw/upload_bfs`，字段名是 **`file_up`** 不是 `file`，`biz=new_dyn`、`category=daily`）。
+    画图失败会自动退回纯文字，不阻断评论。
+- **长活儿会先应一声，然后后台做**（`workInBackground`，2026-10-21）：
+  模型判断这活要几分钟，就把任务扔进**单线程池**、立刻结束这一轮（用户能马上继续聊），
+  跑完用 `ProactiveDelivery` **主动汇报**。实测：7 秒返回、150 秒后汇报到。
+  落库 `background_task` 表——**重启后**：QUEUED 的重新排队，RUNNING 的标失败并告诉他
+  "因为重启没做完"。队列上限 3、每轮禁递归、12 轮 / 0.8 元预算。
+- **花费按场景分类显示**（2026-10-21）：顶栏显示**今日花费**（不是余额——基元律动没有余额接口），
+  悬停能看到 dialog/extract/video/image 各花了多少。视频和生图也进审计
+  （生图没 token，按张数 × 0.2 折算）。
+- **峰谷计价已关**（`LLM_PRICE_PEAK_MULTIPLIER=1.0`）：基元律动不区分峰谷。
+  自主模块的谷时限制也关了（`MEMORY_SELF_OFFPEAK_ONLY=false`），随时能跑。代码都留着。
 - **事实层的两条硬规矩**（2026-10-21 加）：① object 是「没有/不上/没课」这类**空信息**不入库
   （原来 38 条有 8 条是这种，问「周三什么课」命中的就是「没有Java课」）；
   ② 检索除了向量相似度，还会**按时间词重排**（查询里的「周X/明天/后天」与 subject 对上就排前面），

@@ -21,6 +21,7 @@
 | 动备份 | `backup.md` |
 | 动通道、重发、主动消息 | `channel-robustness.md` |
 | 动媒体记忆 | `media-memory.md` |
+| 看视频 / 画图 / 评论带图 / 长任务后台跑 / 花费分类 | `ai-abilities.md` |
 | 动数据库结构 / 迁移 | `pg-migration.md` + `AGENTS.md` §5 硬约定 |
 | 动面板前端 | `AGENTS.md` §3「运维面板前端」 |
 | 面板安卓壳（APK） | `panel-app.md` |

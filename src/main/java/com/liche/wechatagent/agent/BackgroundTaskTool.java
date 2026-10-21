@@ -76,6 +76,8 @@ public class BackgroundTaskTool implements AgentToolProvider {
     private final int maxQueue;
     private final int maxRounds;
     private final double budgetYuan;
+    /** 后台任务记录保留几天（过期且已结束的会被清掉） */
+    private final int keepDays;
 
     /** 已经在排队或正在跑的任务数 */
     private final AtomicInteger pending = new AtomicInteger();
@@ -95,7 +97,8 @@ public class BackgroundTaskTool implements AgentToolProvider {
                               List<WeChatChannel> channels,
                               @Value("${agent.background.max-queue:3}") int maxQueue,
                               @Value("${agent.background.max-rounds:12}") int maxRounds,
-                              @Value("${agent.background.budget-yuan:0.8}") double budgetYuan) {
+                              @Value("${agent.background.budget-yuan:0.8}") double budgetYuan,
+            @Value("${agent.background.keep-days:30}") int keepDays) {
         this.agentLoopProvider = agentLoopProvider;
         this.spendMeter = spendMeter;
         this.memoryProvider = memoryProvider;
@@ -106,6 +109,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
         this.maxQueue = Math.max(1, maxQueue);
         this.maxRounds = Math.max(2, maxRounds);
         this.budgetYuan = Math.max(0.05, budgetYuan);
+        this.keepDays = Math.max(1, keepDays);
     }
 
     @Tool(value = "把一件**要干很久**的事放到后台去做，做完你主动汇报给他。"
@@ -310,6 +314,33 @@ public class BackgroundTaskTool implements AgentToolProvider {
             }
         } catch (RuntimeException exception) {
             log.warn("恢复后台任务失败（不影响启动）：{}", exception.getMessage());
+        }
+    }
+    /**
+     * 清理旧的后台任务记录（2026-10-21）。
+     *
+     * <p>为什么要清：一天几十条，一年就是一万多行。而这张表只有「最近发生了什么」的用途，
+     * 留 30 天足够复盘。**只删已经结束的**（DONE/FAILED）——排队和在跑的一律不动，
+     * 删了它们会让重启恢复找不到任务。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            cron = "${agent.background.clean-cron:0 30 3 * * ?}",
+            zone = "${app.time-zone:Asia/Shanghai}")
+    public void cleanOldTasks() {
+        try {
+            java.time.LocalDateTime cutoff = java.time.LocalDateTime.now().minusDays(keepDays);
+            java.util.List<BackgroundTask> finished = tasks.findByStatusInOrderByCreatedAtAsc(
+                    List.of(BackgroundTask.STATUS_DONE, BackgroundTask.STATUS_FAILED));
+            java.util.List<BackgroundTask> stale = finished.stream()
+                    .filter(row -> row.getCreatedAt() != null && row.getCreatedAt().isBefore(cutoff))
+                    .toList();
+            if (stale.isEmpty()) {
+                return;
+            }
+            tasks.deleteAll(stale);
+            log.info("清理了 {} 条超过 {} 天的后台任务记录", stale.size(), keepDays);
+        } catch (RuntimeException exception) {
+            log.warn("清理后台任务记录失败（已忽略）：{}", exception.getMessage());
         }
     }
 }
