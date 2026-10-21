@@ -118,26 +118,37 @@ public class BilibiliTool implements AgentToolProvider {
             // 连续动作、飞过去的字幕、一句话配一个画面，都看不出来。
             WatchLook watch = watchVideo(info.bvid(), page.cid());
 
+            // 两种模式（2026-10-21 按用户要求定死）：
+            //   A. 视频模型能用 → **看视频是主干，字幕只是附带**（有就给，没有也不影响）
+            //   B. 视频模型不能用 → 退回老办法：**字幕优先，没字幕才抽帧**
             FrameLook look = null;
-            if (transcript.available()) {
-                out.append("字幕（").append(transcript.language().isBlank() ? "语言未知" : transcript.language())
-                        .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传").append("）：\n");
-                out.append(transcript.text());
-            } else {
-                out.append("字幕：").append(transcript.reason()).append('\n');
-            }
-
             if (watch.ok()) {
-                out.append("\n画面（这段视频我直接看了）：\n").append(watch.text()).append('\n');
-            } else {
-                // 看不成也要说清为什么——原来只在开了抽帧开关时才输出，
-                // 于是「配了模型但下载失败」这种情况对模型完全静默，它只能干瞪眼。
-                if (!watch.why().isBlank()) {
-                    out.append("\n（画面没看成：").append(watch.why()).append("）\n");
+                out.append("画面（这段视频我直接看了）：\n").append(watch.text()).append('\n');
+                if (transcript.available()) {
+                    out.append("\n附带字幕（").append(transcript.language().isBlank() ? "语言未知" : transcript.language())
+                            .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传")
+                            .append("）——上面是画面，这里是台词原文：\n");
+                    out.append(transcript.text());
+                } else {
+                    out.append("\n（这个视频没拿到字幕：").append(transcript.reason())
+                            .append("。画面已经看过了，字幕只是补充，不影响。）\n");
                 }
-                if (frameFallback) {
-                    look = lookAtFrames(info.bvid(), page.cid());
-                    out.append(look.text());
+            } else {
+                // B 模式：看不成要说清为什么，然后走字幕 / 抽帧
+                if (!watch.why().isBlank()) {
+                    out.append("（画面没看成：").append(watch.why()).append("，改看字幕)\n");
+                }
+                if (transcript.available()) {
+                    out.append("字幕（").append(transcript.language().isBlank() ? "语言未知" : transcript.language())
+                            .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传").append("）：\n");
+                    out.append(transcript.text());
+                } else {
+                    out.append("字幕：").append(transcript.reason()).append('\n');
+                    // 有字幕就不抽帧了（字幕已经够用）；只有没字幕才抽
+                    if (frameFallback) {
+                        look = lookAtFrames(info.bvid(), page.cid());
+                        out.append(look.text());
+                    }
                 }
             }
 

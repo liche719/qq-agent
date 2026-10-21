@@ -316,9 +316,12 @@ embedding:
 # **sessdata 留空也能跑**，但拿不到 AI 字幕（B站要求登录态），这时工具会如实说"没字幕"、不编内容。
 # 凭据只从服务器 .env 的 BILI_SESSDATA 来：整条 Cookie 串或只填 SESSDATA 的值都认。
 bilibili:
-  # 视频模型看不成时要不要回落抽帧（2026-10-21 起默认关）。
-  # 打开 = 没额度/模型挂了的时候还能靠抽帧看到点画面。
-  frame-fallback: ${BILIBILI_FRAME_FALLBACK:false}
+  # 视频模型看不成时的兜底路径（2026-10-21 定）。默认**开着**：
+  # 它的含义是"没有视频模型可用时，退回老办法"，不是"要不要抽帧"的总闸。
+  # 具体顺序见 BilibiliTool#readBilibiliVideo：
+  #   视频模型可用 → 看视频 + 附带字幕
+  #   视频模型不可用 → 字幕优先；**没字幕才**抽帧
+  frame-fallback: ${BILIBILI_FRAME_FALLBACK:true}
   sessdata: ${BILI_SESSDATA:}
   timeout-seconds: ${BILIBILI_TIMEOUT_SECONDS:20}
   # 单次塞给模型的字幕上限（字符）：字幕是线性文本，太长会挤掉别的上下文
