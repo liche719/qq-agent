@@ -52,6 +52,7 @@ public class AgentPolicyProperties {
         Map.entry("sayToUser", "先跟你说一句"),
         Map.entry("noteWatchedVideo", "记视频笔记"),
         Map.entry("drawPicture", "画图给他"),
+        Map.entry("workInBackground", "放后台慢慢做"),
         Map.entry("recallWatchedVideos", "翻看过的视频"),
         Map.entry("recallMemoryFacts", "查事实记忆"),
         Map.entry("recentExtractions", "看最近记住的"),
