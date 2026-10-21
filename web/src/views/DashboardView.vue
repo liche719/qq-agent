@@ -56,6 +56,7 @@ const SCENARIO_LABEL = {
   schedule_parse: '定时任务解析',
   video: '看视频',
   image: '画图',
+  voice: '语音',
 }
 
 const balance = ref(null)

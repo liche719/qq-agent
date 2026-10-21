@@ -91,9 +91,12 @@ public class LlmCallAuditRecorder implements LlmCallSink {
         row.setReasoningTokens(Math.max(0, usage.reasoningTokens()));
         row.setCacheHitTokens((long) hit);
         row.setCacheMissTokens((long) miss);
-        // 单价与峰谷都由账本说了算；表里存 4 位小数（与 agent_quest_run 同口径）
-        row.setCostYuan(BigDecimal.valueOf(ledger.price(hit, miss, completion, Instant.now()))
-                .setScale(4, RoundingMode.HALF_UP));
+        // 单价与峰谷都由账本说了算；表里存 4 位小数（与 agent_quest_run 同口径）。
+        // 语音这种"已知单价、没有 token"的调用直接给金额，否则按 token 账本算出来永远是 0。
+        BigDecimal cost = event.explicitCostYuan() != null
+                ? event.explicitCostYuan()
+                : BigDecimal.valueOf(ledger.price(hit, miss, completion, Instant.now()));
+        row.setCostYuan(cost.setScale(4, RoundingMode.HALF_UP));
         row.setErrorMessage(event.ok() ? null : truncate(event.error(), ERROR_MAX));
         return row;
     }

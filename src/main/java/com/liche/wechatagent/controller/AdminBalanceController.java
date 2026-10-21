@@ -92,7 +92,7 @@ public class AdminBalanceController {
         }
         out.put("available", true);
         out.put("todayYuan", today.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
-        out.put("note", "今天花掉的钱（对话/提取/视频/生图合计）");
+        out.put("note", "今天花掉的钱（对话/提取/视频/生图/语音合计）");
 
         // 分类明细：按场景把今天的花费摊开，钱花在哪一眼能看出来。
         // 生图那类是"没 token 按张折的"，所以 yuan 要按张数重算一遍，不能直接用表里的值（那是 0）。

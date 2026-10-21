@@ -14,9 +14,18 @@ package com.liche.wechatagent.config;
  * @param durationMs 端到端耗时
  * @param usage      归一化后的用量（含缓存命中）
  * @param error      失败原因；成功为 null
+ * @param explicitCostYuan 已知单价的调用（如 TTS 按字符、生图按张）直接给钱；为 null 时按 token 走账本算。
+ *                   <p>为什么要有它：语音合成**没有 token**（按字符 0.8 元/万字符），
+ *                   硬塞进 token 那张账本只能算出 0，面板就永远看不见这笔钱。
  */
 public record LlmCallEvent(String scenario, boolean streaming, boolean ok, long durationMs,
-                           LlmUsage usage, String error) {
+                           LlmUsage usage, String error, java.math.BigDecimal explicitCostYuan) {
+
+    /** 老调用方的便捷构造：按 token 计价的调用不需要显式金额 */
+    public LlmCallEvent(String scenario, boolean streaming, boolean ok, long durationMs,
+                        LlmUsage usage, String error) {
+        this(scenario, streaming, ok, durationMs, usage, error, null);
+    }
 
     public LlmUsage usageOrEmpty() {
         return usage == null ? LlmUsage.EMPTY : usage;

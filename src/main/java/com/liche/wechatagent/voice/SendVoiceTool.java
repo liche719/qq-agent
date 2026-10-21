@@ -35,15 +35,23 @@ public class SendVoiceTool implements AgentToolProvider {
     private final ToolStatusService statusService;
     /** 它自己主动发语音的每日上限（用户明确要听的不算） */
     private final int selfDailyLimit;
+    /** 记账出口：语音没有 token，按字符折钱，不然面板上这笔支出永远是 0 */
+    private final com.liche.wechatagent.config.LlmCallSink auditSink;
+    /** 单价（元/万字符）。qwen3-tts-flash 北京地域 0.8 元/万字符（2026-10-21 查） */
+    private final java.math.BigDecimal pricePer10kChars;
     private final ConcurrentHashMap<String, AtomicInteger> selfUsedToday = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LocalDate> usedDates = new ConcurrentHashMap<>();
 
     public SendVoiceTool(TtsClient ttsClient,
                          ToolStatusService statusService,
-                         @Value("${voice.tts.self-daily-limit:10}") int selfDailyLimit) {
+                         @Value("${voice.tts.self-daily-limit:10}") int selfDailyLimit,
+                         @Value("${voice.tts.price-yuan-per-10k-chars:0.8}") double pricePer10kChars,
+                         org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.config.LlmCallSink> auditSink) {
         this.ttsClient = ttsClient;
         this.statusService = statusService;
         this.selfDailyLimit = Math.max(0, selfDailyLimit);
+        this.pricePer10kChars = java.math.BigDecimal.valueOf(Math.max(0, pricePer10kChars));
+        this.auditSink = auditSink.getIfAvailable();
     }
 
     @Tool(value = "把一句话念出来，以语音的形式发给他（他那边会看到一条语音条）。"
@@ -81,10 +89,34 @@ public class SendVoiceTool implements AgentToolProvider {
         if (SelfTurnMark.active()) {
             countSelfUse();
         }
+        recordCost(speakable, speech);
         log.info("语音已发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
                 speakable.length(), speech.costMs());
         return ToolBusinessResult.success("语音发出去了（" + ttsClient.voice()
                 + " 音色）。他听得到，**别再把这句话用文字重复一遍**，用一句别的接住就行。");
+    }
+
+    /**
+     * 记一笔账：语音**没有 token**，按字符折钱（0.8 元/万字符）。
+     *
+     * <p>不记这一步的后果很具体：面板「今日花费」永远看不见语音这笔支出，
+     * 明明在花钱却显示 ¥0——和当初生图那个坑一样。
+     */
+    private void recordCost(String speakable, TtsClient.Result speech) {
+        if (auditSink == null) {
+            return;
+        }
+        try {
+            int chars = speakable.codePointCount(0, speakable.length());
+            java.math.BigDecimal yuan = pricePer10kChars
+                    .multiply(java.math.BigDecimal.valueOf(chars))
+                    .divide(java.math.BigDecimal.valueOf(10000), 4, java.math.RoundingMode.HALF_UP);
+            auditSink.acceptCall(new com.liche.wechatagent.config.LlmCallEvent(
+                    "voice", false, true, speech.costMs(),
+                    com.liche.wechatagent.config.LlmUsage.EMPTY, null, yuan));
+        } catch (RuntimeException ignored) {
+            // 记账失败不影响发语音（同 LlmCallSink 的约定）
+        }
     }
 
     /** 去掉 markdown 记号：这些念出来只是噪音 */
