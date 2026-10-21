@@ -243,9 +243,9 @@ public class AdminSelfActivityController {
                         // 顶级评论：同样进评论页，不用在视频页里翻
                         row.put("link", "https://www.bilibili.com/h5/comment/sub?oid=" + comment.getAid());
                     }
-                    // 评论号单独一列：万一没跳准，可以按它搜
-                    row.put("rpid", String.valueOf(comment.getRootRpid() > 0
-                            ? comment.getRootRpid() : comment.getParentRpid()));
+                    // 评论号是**它自己那条**的 rpid，不是 root_rpid（那个是"回复谁"，
+                    // 顶级评论时是 0，之前这一列因此一直显示 0）
+                    row.put("rpid", comment.getRpid() > 0 ? String.valueOf(comment.getRpid()) : "—");
                     return row;
                 }).toList();
         return Map.of("rows", rows);
