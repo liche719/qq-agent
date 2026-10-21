@@ -171,6 +171,8 @@ jobs:
 
       # compose 与 searxng 配置两种模式都要更新（registry 模式只换了镜像来源，配置文件照样得传）
       - name: Upload compose and settings
+        env:
+          DEPLOY_TAR_SECRET: ${{ secrets.DEPLOY_TAR_SECRET }}
         run: |
           set -eu
           HOST="${{ secrets.DEPLOY_HOST }}"
