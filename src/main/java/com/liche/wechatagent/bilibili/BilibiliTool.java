@@ -269,10 +269,12 @@ public class BilibiliTool implements AgentToolProvider {
         }
         String view = takeaway == null ? "" : takeaway.trim();
         try {
-            java.util.List<BiliViewLog> found = viewLogs.findByBvidOrderByIdDesc(
-                    bvid.trim(), org.springframework.data.domain.PageRequest.of(0, 1));
-            BiliViewLog entry = found.isEmpty() ? new BiliViewLog() : found.get(0);
-            if (found.isEmpty()) {
+            java.util.Optional<BiliViewLog> existing = viewLogs.findFirstByBvidOrderByIdDesc(bvid.trim());
+            BiliViewLog entry;
+            if (existing.isPresent()) {
+                entry = existing.get();
+            } else {
+                entry = new BiliViewLog();
                 entry.setBvid(bvid.trim());
                 entry.setTitle("");
                 entry.setOutcome(BiliViewLog.OUTCOME_TRANSCRIPT);
@@ -298,18 +300,29 @@ public class BilibiliTool implements AgentToolProvider {
     @Tool(value = "翻你自己看过的 B 站视频。query 传关键词（比如「git 记忆」「听懂不会做」），留空就是看最近看过的。"
             + "返回 BV 号、标题、你看的时候记的摘要和看法。想再看一遍就把 BV 号传给 readBilibiliVideo。")
     @ToolExecutionPolicy(ToolExecutionClass.FAST)
+    /** 按 bvid 去重，保留**最新**那条（列表是按 id 倒序来的，所以先见到的就是最新的） */
+    private java.util.List<BiliViewLog> dedupByBvid(java.util.List<BiliViewLog> rows) {
+        java.util.Map<String, BiliViewLog> seen = new java.util.LinkedHashMap<>();
+        for (BiliViewLog row : rows) {
+            String key = row.getBvid() == null ? "" : row.getBvid().trim();
+            seen.putIfAbsent(key, row);
+        }
+        return new java.util.ArrayList<>(seen.values());
+    }
+
     public ToolBusinessResult recallWatchedVideos(String query, Integer limit) {
         int size = Math.max(1, Math.min(20, limit == null ? 8 : limit));
         java.util.List<BiliViewLog> rows;
         String keyword = query == null ? "" : query.trim();
         try {
+            // 2026-10-21：同一个视频会被记多条（每读一次 recordView 插一条，noteWatchedVideo 再补摘要），
+            // 不去重的话"我看过哪些"会重复列三遍同一个 BV。按 bvid 去重、保留最新那条。
             if (keyword.isBlank()) {
-                rows = viewLogs.findTop100ByOrderByIdDesc().stream().limit(size).toList();
+                rows = dedupByBvid(viewLogs.findTop100ByOrderByIdDesc()).stream().limit(size).toList();
             } else {
-                rows = viewLogs
+                rows = dedupByBvid(viewLogs
                         .findTop30ByTitleContainingIgnoreCaseOrSummaryContainingIgnoreCaseOrTakeawayContainingIgnoreCaseOrderByIdDesc(
-                                keyword, keyword, keyword)
-                        .stream().limit(size).toList();
+                                keyword, keyword, keyword)).stream().limit(size).toList();
             }
         } catch (RuntimeException exception) {
             return ToolBusinessResult.failure("查台账失败：" + exception.getMessage());
