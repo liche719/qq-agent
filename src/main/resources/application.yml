@@ -182,6 +182,12 @@ agent:
   # true = 窗口内任何非命令消息都并成一轮（文字/图片/视频混着发也只回一次）；
   # false = 退回旧行为（只有带媒体/引用的消息能并、纯文字连发各回各的）。
   message-batch-merge-text: ${AGENT_MESSAGE_BATCH_MERGE_TEXT:true}
+  # 带媒体的批次等更久（2026-10-21）：相册一起发三张图，平台拆成三条消息、依次到达；
+  # 前两张一到就回复会变成"回两次"。媒体批次按 5 秒静默 / 最长 20 秒等待。
+  message-batch-media-window-millis: ${AGENT_MESSAGE_BATCH_MEDIA_WINDOW_MILLIS:5000}
+  message-batch-media-max-window-millis: ${AGENT_MESSAGE_BATCH_MEDIA_MAX_WINDOW_MILLIS:20000}
+  # 平台发送时间相差多少毫秒以内算"同一次发出"（相册多选、连点发送），与到达间隔无关。
+  message-batch-same-batch-millis: ${AGENT_MESSAGE_BATCH_SAME_BATCH_MILLIS:1500}
   # 下面两条只在 merge-text=false 时起作用
   message-batch-continuation-window-millis: ${AGENT_MESSAGE_BATCH_CONTINUATION_WINDOW_MILLIS:900}
   message-batch-continuation-pattern: '${AGENT_MESSAGE_BATCH_CONTINUATION_PATTERN:}'

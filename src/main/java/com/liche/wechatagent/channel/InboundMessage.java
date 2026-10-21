@@ -44,9 +44,32 @@ public record InboundMessage(String msgId, String userId, String content, long t
     public static InboundMessage textWithQuote(String msgId, String userId, String content, String botId, String channel,
                                                List<String> images, List<InboundAttachment> attachments,
                                                String quotedContent, List<String> quotedImages, List<InboundAttachment> quotedAttachments) {
-        return new InboundMessage(msgId, userId, content, System.currentTimeMillis(), "text", botId, channel,
-                images, attachments, quotedContent == null ? "" : quotedContent,
+        return textWithQuote(msgId, userId, content, botId, channel, 0L, images, attachments,
+                quotedContent, quotedImages, quotedAttachments);
+    }
+
+    /**
+     * 带**平台发送时间**的构造（2026-10-21 加）。
+     *
+     * <p>{@code platformTime} 是平台事件里的 timestamp，不是我们收到的时间——一次选三张图发出去，
+     * 平台拆成三条消息，它们到达可能有先后，但发送时间是同一次操作，批处理靠它判断"这是一起发的"。
+     * 传 0 或负数时回退成当前时间（模拟器/其它通道没有这个字段）。
+     */
+    public static InboundMessage textWithQuote(String msgId, String userId, String content, String botId, String channel,
+                                               long platformTime, List<String> images, List<InboundAttachment> attachments,
+                                               String quotedContent, List<String> quotedImages, List<InboundAttachment> quotedAttachments) {
+        long sentAt = platformTime > 0 ? platformTime : System.currentTimeMillis();
+        return new InboundMessage(msgId, userId, content, sentAt, "text", botId, channel,
+                images == null ? List.of() : List.copyOf(images),
+                attachments == null ? List.of() : List.copyOf(attachments),
+                quotedContent == null ? "" : quotedContent,
                 quotedImages == null ? List.of() : List.copyOf(quotedImages),
                 quotedAttachments == null ? List.of() : List.copyOf(quotedAttachments));
+    }
+
+    public static InboundMessage text(String msgId, String userId, String content, String botId, String channel,
+                                      long platformTime) {
+        return textWithQuote(msgId, userId, content, botId, channel, platformTime,
+                List.of(), List.of(), "", List.of(), List.of());
     }
 }

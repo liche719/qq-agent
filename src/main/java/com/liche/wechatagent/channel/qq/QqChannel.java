@@ -715,9 +715,14 @@ public class QqChannel implements WeChatChannel {
                 describeJsonShape(data.path("msg_elements"), 0));
         QqQuoteMessage quote = resolveQuote(openid, data);
         InboundMessage inbound = payload.empty() && images.isEmpty() && quoteEmpty(quote)
-                ? InboundMessage.text(msgId, openid, content, "qq", "qq")
-                : InboundMessage.textWithQuote(msgId, openid, content, "qq", "qq", images, payload.attachments(),
+                ? InboundMessage.text(msgId, openid, content, "qq", "qq", message.platformTime())
+                : InboundMessage.textWithQuote(msgId, openid, content, "qq", "qq", message.platformTime(),
+                images, payload.attachments(),
                 quote.content(), quote.imageUrls(), quote.attachments());
+        // 平台发送时间 vs 到达时间：三张图一起发时，这两者的差能看出"上传慢"到底慢多少（2026-10-21）
+        log.info("[qq] inbound timing user={} msg={} platformTs={} arrivedAt={} lagMs={}", openid, msgId,
+                message.platformTime(), System.currentTimeMillis(),
+                message.platformTime() > 0 ? System.currentTimeMillis() - message.platformTime() : -1);
         log.info("[qq] recv(image x{}, file x{}[{}], quote={} chars/{} images) -> {}", images.size(),
                 payload.attachments().size(), attachmentTypes(payload.attachments()),
                 quote.content().length(), quote.imageUrls().size(), openid);
@@ -790,9 +795,9 @@ public class QqChannel implements WeChatChannel {
         String memberContent = "【群成员 " + memberOpenid + "】" + (content.isBlank() ? "[图片]" : content);
         rememberReplyWindow(conversationId, msgId);
         InboundMessage inbound = payload.empty()
-                ? InboundMessage.text(msgId, conversationId, memberContent, "qq", "qq")
-                : InboundMessage.textWithAttachments(msgId, conversationId, memberContent, "qq", "qq",
-                payload.images(), payload.attachments());
+                ? InboundMessage.text(msgId, conversationId, memberContent, "qq", "qq", message.platformTime())
+                : InboundMessage.textWithQuote(msgId, conversationId, memberContent, "qq", "qq",
+                message.platformTime(), payload.images(), payload.attachments(), "", List.of(), List.of());
         log.info("[qq] recv group={} member={} ({} chars, image x{}, file x{})", groupOpenid, memberOpenid,
                 content.length(), payload.images().size(), payload.attachments().size());
         orchestrator.onInbound(inbound);

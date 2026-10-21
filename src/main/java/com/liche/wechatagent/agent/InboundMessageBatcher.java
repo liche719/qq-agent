@@ -31,12 +31,15 @@ public class InboundMessageBatcher {
         private final ArrayList<InboundMessage> messages = new ArrayList<>();
         private final Consumer<InboundMessageBatch> consumer;
         private final long openedAtMillis;
+        /** 这一批第一条的**平台发送时间**（判断"后面来的这条是不是同一次发出的"） */
+        private final long firstSentAt;
         private ScheduledFuture<?> future;
 
         private PendingBatch(InboundMessage first, Consumer<InboundMessageBatch> consumer) {
             this.messages.add(first);
             this.consumer = consumer;
             this.openedAtMillis = System.currentTimeMillis();
+            this.firstSentAt = first.timestamp();
         }
 
         private InboundMessageBatch toBatch() {
@@ -56,6 +59,17 @@ public class InboundMessageBatcher {
      * 看起来像机器人逐条应答。人不是这么聊的——所以默认开启，配 {@code agent.message-batch-merge-text=false} 可退回旧行为。
      */
     private final boolean mergeText;
+    /**
+     * 一次"发送动作"里被平台拆成的多条消息，发送时间几乎相同（2026-10-21 用户要求）。
+     *
+     * <p>典型场景：相册里选三张图一起发，平台拆成三条消息，**没有批次 id**；上传慢的时候
+     * 到达间隔能有几秒。只看到达间隔会把它们拆成两轮、回两次。这里的判断用**平台发送时间**：
+     * 与这批第一条相差 {@code sameBatchMillis} 以内，就算同一次发出。
+     */
+    private final long sameBatchMillis;
+    /** 带媒体的批次要等更久：上传是三张图依次到达，不能前两张一到就回复 */
+    private final long mediaWindowMillis;
+    private final long mediaMaxWindowMillis;
     private final Object monitor = new Object();
     private final Map<String, PendingBatch> pendingByConversation = new HashMap<>();
 
@@ -63,25 +77,33 @@ public class InboundMessageBatcher {
     public InboundMessageBatcher(@Qualifier("messageBatchScheduler") ScheduledExecutorService scheduler,
                                  @Value("${agent.message-batch-window-millis:2500}") long windowMillis,
                                  @Value("${agent.message-batch-max-window-millis:8000}") long maxWindowMillis,
+                                 @Value("${agent.message-batch-media-window-millis:5000}") long mediaWindowMillis,
+                                 @Value("${agent.message-batch-media-max-window-millis:20000}") long mediaMaxWindowMillis,
+                                 @Value("${agent.message-batch-same-batch-millis:1500}") long sameBatchMillis,
                                  @Value("${agent.message-batch-continuation-window-millis:900}") long continuationWindowMillis,
                                  @Value("${agent.message-batch-continuation-pattern:}") String continuationPattern,
                                  @Value("${agent.message-batch-merge-text:true}") boolean mergeText) {
-        this(scheduler, windowMillis, maxWindowMillis, continuationWindowMillis,
-                compilePattern(continuationPattern), mergeText);
+        this(scheduler, windowMillis, maxWindowMillis, mediaWindowMillis, mediaMaxWindowMillis,
+                sameBatchMillis, continuationWindowMillis, compilePattern(continuationPattern), mergeText);
     }
 
     private InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis, long maxWindowMillis,
+                                  long mediaWindowMillis, long mediaMaxWindowMillis, long sameBatchMillis,
                                   long continuationWindowMillis, Pattern continuationPattern, boolean mergeText) {
         this.scheduler = scheduler;
         this.windowMillis = Math.max(0, windowMillis);
         this.maxWindowMillis = Math.max(this.windowMillis, maxWindowMillis);
+        this.mediaWindowMillis = Math.max(this.windowMillis, mediaWindowMillis);
+        this.mediaMaxWindowMillis = Math.max(this.mediaWindowMillis, mediaMaxWindowMillis);
+        this.sameBatchMillis = Math.max(0, sameBatchMillis);
         this.continuationWindowMillis = Math.max(0, continuationWindowMillis);
         this.continuationPattern = continuationPattern;
         this.mergeText = mergeText;
     }
 
     InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis) {
-        this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS, Math.min(windowMillis, 900),
+        this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS, Math.max(windowMillis, 5000),
+                Math.max(windowMillis, 20000), 1500, Math.min(windowMillis, 900),
                 Pattern.compile(DEFAULT_CONTINUATION_PATTERN), false);
     }
 
@@ -115,8 +137,13 @@ public class InboundMessageBatcher {
 
     private void reschedule(String key, PendingBatch pending) {
         cancel(pending);
-        long remaining = Math.max(0, pending.openedAtMillis + maxWindowMillis - System.currentTimeMillis());
-        long delay = Math.min(windowMillis, remaining);
+        // 带媒体的批次等更久：相册里一起发三张图，它们是**一条条**到达的，
+        // 前两张一到就回复会变成"回两次"（2026-10-21 用户反馈）
+        boolean media = pendingHasMediaOrQuote(pending);
+        long window = media ? mediaWindowMillis : windowMillis;
+        long max = media ? mediaMaxWindowMillis : maxWindowMillis;
+        long remaining = Math.max(0, pending.openedAtMillis + max - System.currentTimeMillis());
+        long delay = Math.min(window, remaining);
         pending.future = scheduler.schedule(() -> complete(key, pending), delay, TimeUnit.MILLISECONDS);
     }
 
@@ -134,13 +161,22 @@ public class InboundMessageBatcher {
 
     private void deliver(PendingBatch pending) {
         InboundMessageBatch batch = pending.toBatch();
-        log.info("消息批次就绪 user={} count={} replyTo={}", batch.userId(), batch.messages().size(), batch.replyToMsgId());
+        InboundMessage last = pending.messages.get(pending.messages.size() - 1);
+        // 记下"这一批里最早/最晚的平台发送时间"，出问题时能看出是不是同一次发出来的
+        log.info("消息批次就绪 user={} count={} replyTo={} sentAtSpanMs={} waitedMs={}",
+                batch.userId(), batch.messages().size(), batch.replyToMsgId(),
+                Math.max(0, last.timestamp() - pending.firstSentAt),
+                Math.max(0, System.currentTimeMillis() - pending.openedAtMillis));
         pending.consumer.accept(batch);
     }
 
     private boolean canMerge(PendingBatch pending, InboundMessage incoming) {
         if (isCommand(incoming)) {
             return false;
+        }
+        // 平台发送时间几乎相同 = 同一次发送动作（相册选三张图），跟到达间隔无关（2026-10-21）
+        if (sameBatchMillis > 0 && Math.abs(incoming.timestamp() - pending.firstSentAt) <= sameBatchMillis) {
+            return true;
         }
         // 连发合并：窗口内的消息（文字、图片、视频混着发）当同一轮处理，一起回一次
         if (mergeText) {
