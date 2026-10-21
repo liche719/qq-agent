@@ -100,7 +100,12 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
             // 拿不到就退回本地抓取，不能让"想要全文"变成"什么都没读到"
         }
         try {
-            return ToolBusinessResult.success(fillIfTooShort(url, openAndExtract(url)));
+            String text = openAndExtract(url);
+            // 读成功了就把失败记录抹掉：否则这个网址在 5 分钟内即使恢复也会被缓存挡着
+            if (url != null) {
+                recentFailures.remove(url.trim());
+            }
+            return ToolBusinessResult.success(fillIfTooShort(url, text));
         } catch (UnreadablePageException exception) {
             rememberFailure(url);
             // 本地读不了（常见于纯 JS 渲染 / 需要执行脚本的站）：让 DS 试着抓一次

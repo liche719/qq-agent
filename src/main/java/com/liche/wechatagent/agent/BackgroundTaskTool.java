@@ -78,6 +78,14 @@ public class BackgroundTaskTool implements AgentToolProvider {
     private final double budgetYuan;
     /** 后台任务记录保留几天（过期且已结束的会被清掉） */
     private final int keepDays;
+    /**
+     * 单个任务的硬超时（分钟）。
+     *
+     * <p>为什么要有：线程池是**单线程**的，一个任务卡死（某个工具挂了、HTTP 不返回）
+     * 会让后面所有任务永远排队，而且没有任何提示。TurnScope 的轮数/预算只覆盖
+     * "模型还在正常思考"的情况，兜不住"卡在 I/O"。
+     */
+    private final int taskTimeoutMinutes;
 
     /** 已经在排队或正在跑的任务数 */
     private final AtomicInteger pending = new AtomicInteger();
@@ -98,7 +106,8 @@ public class BackgroundTaskTool implements AgentToolProvider {
                               @Value("${agent.background.max-queue:3}") int maxQueue,
                               @Value("${agent.background.max-rounds:12}") int maxRounds,
                               @Value("${agent.background.budget-yuan:0.8}") double budgetYuan,
-            @Value("${agent.background.keep-days:30}") int keepDays) {
+            @Value("${agent.background.keep-days:30}") int keepDays,
+            @Value("${agent.background.task-timeout-minutes:8}") int taskTimeoutMinutes) {
         this.agentLoopProvider = agentLoopProvider;
         this.spendMeter = spendMeter;
         this.memoryProvider = memoryProvider;
@@ -110,6 +119,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
         this.maxRounds = Math.max(2, maxRounds);
         this.budgetYuan = Math.max(0.05, budgetYuan);
         this.keepDays = Math.max(1, keepDays);
+        this.taskTimeoutMinutes = Math.max(1, taskTimeoutMinutes);
     }
 
     @Tool(value = "把一件**要干很久**的事放到后台去做，做完你主动汇报给他。"
@@ -151,7 +161,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
         final Long savedId = taskId;
 
         pending.incrementAndGet();
-        runner.submit(() -> {
+        java.util.concurrent.Future<?> future = runner.submit(() -> {
             markRunning(savedId);
             double costBefore = spendMeter == null ? 0 : spendMeter.totalYuan();
             long started = System.nanoTime();
@@ -171,6 +181,25 @@ public class BackgroundTaskTool implements AgentToolProvider {
                 pending.decrementAndGet();
             }
         });
+
+        // 看门狗：到点还没跑完就中断它，别让它把单线程池焊死
+        Thread watchdog = new Thread(() -> {
+            try {
+                future.get(taskTimeoutMinutes, java.util.concurrent.TimeUnit.MINUTES);
+            } catch (java.util.concurrent.TimeoutException timeout) {
+                future.cancel(true);
+                log.warn("后台任务超时 {} 分钟，已中断 user={} goal={}", taskTimeoutMinutes, userId,
+                        goal.length() > 40 ? goal.substring(0, 40) + "…" : goal);
+                markFailed(savedId, "超时 " + taskTimeoutMinutes + " 分钟被中断");
+                deliver(userId, "刚才那件事跑了 " + taskTimeoutMinutes
+                        + " 分钟还没完，我先停下了。要是还想要，跟我说一声再试。");
+            } catch (Exception ignored) {
+                // 任务正常结束 / 被取消，都不用管
+            }
+        }, "background-task-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+
         return ToolBusinessResult.success("已经放到后台了，你这一轮说一句「行，我去弄，好了喊你」就行，"
                 + "然后**马上结束这轮**——他后面说的话你照常回，不用等后台那件事。");
     }
