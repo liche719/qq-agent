@@ -61,6 +61,17 @@ public class AgentOrchestrator {
     private final List<WeChatChannel> channels;
     private final ConversationMemoryService conversationMemoryService;
     private final AgentTaskStateStore taskStateStore;
+
+    /**
+     * 多气泡拆分（2026-10-21）。**用 setter 注入**：那条构造器有一串单测在用，
+     * 为它加参数会连带改一排装配（坑 45）；这里为 null 时就是"一条发完"，行为不变。
+     */
+    private ReplySplitter replySplitter;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReplySplitter(ReplySplitter replySplitter) {
+        this.replySplitter = replySplitter;
+    }
     /** 视频抽帧（2026-10-17 加）。用 setter 注入：这个类有两个构造器，别为了它动测试用的那个。 */
     private VideoFrameService videoFrameService;
 
@@ -176,6 +187,8 @@ public class AgentOrchestrator {
             StreamReplySink sink = null;
             boolean processingFailed = false;
             String failureReason = null;
+            // 这一轮途中已经播报过几条：最终回复要按"5 条被动回复上限"扣掉它们（2026-10-21）
+            int progressBubbles = 0;
             String taskId = UUID.randomUUID().toString();
             try {
                 // 上下文绑定也放进 try：这几行任何一句抛异常，原来 finally 就不会执行，
@@ -223,6 +236,9 @@ public class AgentOrchestrator {
                 }
                 log.info("agent_task_finish task={} user={} replyTo={} replyChars={} streamed={}", taskId, batch.userId(), batch.replyToMsgId(),
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
+                // 播报次数要在清掉 ThreadLocal 之前抓下来，发送阶段要拿它算还能发几个气泡
+                progressBubbles = TurnProgress.sentCount();
+                TurnProgress.clear();
                 toolStatusService.unbind();
                 MDC.remove("userScope");
                 MDC.remove("taskId");
@@ -230,23 +246,46 @@ public class AgentOrchestrator {
             if (reply != null && !reply.isBlank()) {
                 WeChatChannel c = channelFor(batch.channel());
                 if (c != null && !(sink != null && sink.isDone())) {
-                    try {
-                        boolean sent;
-                        if (c.hasReliableSendStatus()) {
-                            sent = c.sendTextReplyResultFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
-                        } else {
-                            c.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), reply);
-                            sent = true;
+                    // 多气泡（2026-10-21）：像人一样分 1~3 条发。QQ 对同一条用户消息只认 5 次被动回复，
+                    // 所以要扣掉途中已经播报掉的条数；切不动的长文本会由 ReplySplitter 并回一条。
+                    int budget = Math.max(1, 5 - progressBubbles);
+                    List<String> bubbles = replySplitter == null
+                            ? List.<String>of(reply)
+                            : replySplitter.split(reply, budget);
+                    boolean allSent = true;
+                    for (int index = 0; index < bubbles.size(); index++) {
+                        if (index > 0 && replySplitter != null) {
+                            try {
+                                Thread.sleep(replySplitter.delayMillis());
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                            }
                         }
-                        if (sent) {
-                            if (taskStateStore != null) taskStateStore.markReplySent(taskId);
-                        } else {
-                            markReplyDeliveryFailed(taskId, batch, "通道未确认消息发送成功");
+                        try {
+                            boolean sent;
+                            if (c.hasReliableSendStatus()) {
+                                sent = c.sendTextReplyResultFrom(batch.botId(), batch.userId(),
+                                        batch.replyToMsgId(), bubbles.get(index));
+                            } else {
+                                c.sendTextReplyFrom(batch.botId(), batch.userId(),
+                                        batch.replyToMsgId(), bubbles.get(index));
+                                sent = true;
+                            }
+                            if (!sent) {
+                                markReplyDeliveryFailed(taskId, batch, "通道未确认消息发送成功");
+                                allSent = false;
+                                break;
+                            }
+                        } catch (RuntimeException sendFailure) {
+                            markReplyDeliveryFailed(taskId, batch,
+                                    sendFailure.getClass().getSimpleName() + ": "
+                                            + (sendFailure.getMessage() == null ? "消息发送异常" : sendFailure.getMessage()));
+                            allSent = false;
+                            break;
                         }
-                    } catch (RuntimeException sendFailure) {
-                        markReplyDeliveryFailed(taskId, batch,
-                                sendFailure.getClass().getSimpleName() + ": "
-                                        + (sendFailure.getMessage() == null ? "消息发送异常" : sendFailure.getMessage()));
+                    }
+                    if (allSent && taskStateStore != null) {
+                        taskStateStore.markReplySent(taskId);
                     }
                 }
             }
@@ -347,6 +386,10 @@ public class AgentOrchestrator {
 
     /** 通道支持流式回复时创建 sink（QQ），否则返回 null */
     private StreamReplySink createSinkFor(InboundMessageBatch batch) {
+        // 多气泡要分几条发，而 QQ 的流式只能产出一条消息 —— 开了拆分就不走流式（2026-10-21）
+        if (replySplitter != null && replySplitter.active() && replySplitter.disablesStream()) {
+            return null;
+        }
         WeChatChannel c = channelFor(batch.channel());
         if (c != null) {
             return c.createStreamSink(batch.userId(), batch.replyToMsgId());
@@ -410,7 +453,7 @@ public class AgentOrchestrator {
                 reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink,
                         extracted.failures(), extracted.videoFrameImages(), extracted.videoNotes());
             } finally {
-                TurnProgress.clear();
+                // 只解绑媒体上下文；播报的 ThreadLocal 交给外层 finally 统一收（那里要读播报条数）
                 mediaToolContextService.unbind();
             }
             persistConversation(batch, taskId, userId, profile, reply);
