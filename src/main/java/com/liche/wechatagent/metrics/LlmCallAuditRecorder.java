@@ -129,17 +129,23 @@ public class LlmCallAuditRecorder implements LlmCallSink {
     /** 最近 {@code days} 天：按天的汇总（面板用） */
     public List<Map<String, Object>> byDay(int days) {
         LocalDate from = LocalDate.now(zone).minusDays(Math.max(1, days) - 1L);
-        List<Object[]> rows = repository.summaryByDay(from.atStartOfDay());
+        LocalDateTime since = from.atStartOfDay();
+        // 生图那些行的 cost_yuan 是 0（没有 token），按天汇总必须按张数补上，否则每天的花费都少一块
+        Map<String, Long> imageByDay = imageCountsByDay(since);
+        List<Object[]> rows = repository.summaryByDay(since);
         List<Map<String, Object>> result = new ArrayList<>(rows.size());
         for (Object[] row : rows) {
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("day", String.valueOf(row[0]));
+            String day = String.valueOf(row[0]);
+            double yuan = asDouble(row[2]) + imageYuan(imageByDay.getOrDefault(day, 0L));
+            item.put("day", day);
             item.put("calls", asLong(row[1]));
-            item.put("yuan", asDouble(row[2]));
+            item.put("yuan", round2(yuan));
             item.put("promptTokens", asLong(row[3]));
             item.put("completionTokens", asLong(row[4]));
             item.put("cacheHitTokens", asLong(row[5]));
             item.put("cacheHitPercent", percent(asLong(row[5]), asLong(row[3])));
+            item.put("imageCalls", imageByDay.getOrDefault(day, 0L));
             result.add(item);
         }
         return result;
@@ -152,9 +158,13 @@ public class LlmCallAuditRecorder implements LlmCallSink {
         List<Map<String, Object>> result = new ArrayList<>(rows.size());
         for (Object[] row : rows) {
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("scenario", String.valueOf(row[0]));
-            item.put("calls", asLong(row[1]));
-            item.put("yuan", asDouble(row[2]));
+            String scenario = String.valueOf(row[0]);
+            long calls = asLong(row[1]);
+            // 生图：表里是 0，按张数重算（与 todayYuan 同口径）
+            double yuan = "image".equals(scenario) ? imageYuan(calls) : asDouble(row[2]);
+            item.put("scenario", scenario);
+            item.put("calls", calls);
+            item.put("yuan", round2(yuan));
             item.put("avgPromptTokens", asLong(row[3]));
             item.put("cacheHitTokens", asLong(row[4]));
             item.put("promptTokens", asLong(row[5]));
@@ -162,7 +172,47 @@ public class LlmCallAuditRecorder implements LlmCallSink {
             item.put("cacheHitPercent", percent(asLong(row[4]), asLong(row[5])));
             result.add(item);
         }
+        // 补上单价重算之后排序会变，重排一次，保证"钱花得多的在上面"
+        result.sort((a, b) -> Double.compare((Double) b.get("yuan"), (Double) a.get("yuan")));
         return result;
+    }
+
+    /** 某个时间点之后的总花费：token 行 + 生图按张折（语音那种已经写在 cost_yuan 里了） */
+    public BigDecimal totalYuanSince(LocalDateTime since) {
+        BigDecimal llm = repository.sumCostSince(since);
+        long images = repository.countByScenarioSince("image", since);
+        return (llm == null ? BigDecimal.ZERO : llm)
+                .add(BigDecimal.valueOf(imageYuan(images)))
+                .setScale(4, RoundingMode.HALF_UP);
+    }
+
+    /** 最近 {@code days} 天（含今天）的总花费 */
+    public BigDecimal totalYuanLastDays(int days) {
+        LocalDate from = LocalDate.now(zone).minusDays(Math.max(1, days) - 1L);
+        return totalYuanSince(from.atStartOfDay());
+    }
+
+    private Map<String, Long> imageCountsByDay(LocalDateTime since) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        try {
+            for (Object[] row : repository.countImageByDay(since)) {
+                counts.put(String.valueOf(row[0]), asLong(row[1]));
+            }
+        } catch (RuntimeException exception) {
+            log.warn("统计每天的画图张数失败（已忽略）：{}", exception.getMessage());
+        }
+        return counts;
+    }
+
+    private double imageYuan(long count) {
+        if (count <= 0) {
+            return 0d;
+        }
+        return BigDecimal.valueOf(count).multiply(imagePriceYuan).doubleValue();
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     private static double percent(long part, long total) {

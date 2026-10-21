@@ -37,6 +37,18 @@ public interface LlmCallAuditRepository extends JpaRepository<LlmCallAudit, Long
     @Query("select count(a) from LlmCallAudit a where a.scenario = :scenario and a.createdAt >= :since")
     long countByScenarioSince(@Param("scenario") String scenario, @Param("since") LocalDateTime since);
 
+    /**
+     * 每天生图几张（2026-10-21）。生图的 cost_yuan 是 0，金额只能按张数 × 单价折——
+     * 按天汇总时也得这么补，否则"今天花了多少"会把画图漏掉。
+     */
+    @Query(value = """
+            select created_at::date as day, count(*) as calls
+              from llm_call_audit
+             where scenario = 'image' and created_at >= :since
+             group by 1
+            """, nativeQuery = true)
+    List<Object[]> countImageByDay(@Param("since") LocalDateTime since);
+
     /** 按天聚合 */
     @Query(value = """
             select created_at::date                                  as day,

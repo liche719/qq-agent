@@ -38,7 +38,11 @@ const DICTIONARY = {
     extract: '记忆提取',
     reflect: '自主反思',
     reminder_parse: '提醒解析',
-    schedule_parse: '定时任务解析'
+    schedule_parse: '定时任务解析',
+    // 2026-10-21 补：视频/生图/语音也进审计表了，「花费」页要用
+    video: '看视频',
+    image: '画图',
+    voice: '语音'
   },
   // 思考强度（reasoning_effort）；空值表示不传这个字段、用上游默认
   // 2026-10-21：补全上游的 8 档。none 是真不思考（实测 reasoning_tokens=0），

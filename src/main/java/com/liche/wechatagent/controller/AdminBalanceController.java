@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
@@ -103,9 +104,8 @@ public class AdminBalanceController {
                 String scenario = String.valueOf(row.get("scenario"));
                 double yuan = row.get("yuan") instanceof Number n ? n.doubleValue() : 0d;
                 long calls = row.get("calls") instanceof Number n ? n.longValue() : 0L;
-                if ("image".equals(scenario)) {
-                    yuan = calls * 0.2;
-                }
+                // 生图的"按张折钱"已经在 audit.byScenario 里算好了（2026-10-21 挪过去的），
+                // 这里不再重算，否则两处单价各写一份，改一处就会不一致。
                 if (yuan <= 0 && calls <= 0) {
                     continue;
                 }
@@ -129,6 +129,34 @@ public class AdminBalanceController {
             if (ds != null) {
                 out.put("searchBalance", ds);
             }
+        }
+        out.put("checkedAt", Instant.now().toString());
+        return out;
+    }
+
+    /**
+     * 用量明细（2026-10-21）：**一个地方**看全每个场景花了多少 token、多少钱。
+     *
+     * <p>为什么单独一个接口：原来只有 {@code /balance} 的"今天 + 分类"，而分类明细只藏在
+     * 顶栏数字的 tooltip 里，看不到 token 分布、也看不到历史。这个接口给面板的「花费」页用，
+     * 一次返回区间内的场景汇总 + 按天汇总。
+     *
+     * @param days 1=今天，7=近一周，30=近一月（1~90）
+     */
+    @GetMapping("/usage")
+    public Map<String, Object> usage(@RequestParam(defaultValue = "7") int days) {
+        int bounded = Math.max(1, Math.min(90, days));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("days", bounded);
+        try {
+            out.put("todayYuan", audit.todayYuan().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+            out.put("rangeYuan", audit.totalYuanLastDays(bounded)
+                    .setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+            out.put("scenarios", audit.byScenario(bounded));
+            out.put("daily", audit.byDay(bounded));
+        } catch (RuntimeException exception) {
+            log.warn("统计用量明细失败：{}", exception.toString());
+            out.put("error", "统计失败，稍后再试");
         }
         out.put("checkedAt", Instant.now().toString());
         return out;
