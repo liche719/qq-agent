@@ -70,6 +70,10 @@ services:
       DEEPSEEK_SEARCH_API_KEY: ${DEEPSEEK_SEARCH_API_KEY:-}
       DEEPSEEK_SEARCH_BASE_URL: ${DEEPSEEK_SEARCH_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_SEARCH_ENABLED: ${DEEPSEEK_SEARCH_ENABLED:-true}
+      # 2026-10-21：视频理解。留空 = 不启用（回落抽帧）。实测 qwen3.8-flash 能吃视频。
+      LLM_VIDEO_MODEL: ${LLM_VIDEO_MODEL:-qwen3.8-flash}
+      # 视频模型看不成时回落抽帧
+      BILIBILI_FRAME_FALLBACK: ${BILIBILI_FRAME_FALLBACK:-true}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_API_KEY: ${LLM_API_KEY:-}
       # 漏一个就"改了 .env 不生效且不报错"（坑 36）：温度/超时以前根本没透传，改了也没用
