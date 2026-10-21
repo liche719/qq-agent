@@ -276,23 +276,9 @@ public class MediaToolContextService {
         if (!media.failedNotices().isEmpty()) {
             return "📤 文件发送失败：" + String.join("、", media.failedNotices()) + "。";
         }
-        if (!media.savedNotices().isEmpty()) {
-            StringBuilder notice = new StringBuilder("📎 ");
-            for (int index = 0; index < media.savedNotices().size(); index++) {
-                SavedNotice saved = media.savedNotices().get(index);
-                if (index > 0) notice.append("；");
-                if (saved.duplicate()) {
-                    notice.append("这份资料之前已经保存过：").append(saved.fileName());
-                } else {
-                    notice.append("已长期保存：").append(saved.fileName());
-                }
-                if (saved.olderVersionPreserved()) {
-                    notice.append("（检测到同名旧版，旧版仍安全保留）");
-                }
-            }
-            notice.append("。以后你可以直接问我这份资料里的内容。");
-            return notice.toString();
-        }
+        // 2026-10-21 用户要求：保存成功不要再往回复里贴「已长期保存：xxx」——
+        // 那句话是程序拼的，读起来像系统回执，不像人在说话。模型需要知道保存结果时，
+        // 工具返回值里本来就有；正文让它自己决定说什么。
         if (media.attachmentCount() > 0) {
             // 用"附件"而不是"文件"：2026-10-17 起视频也走这条路（抽帧给视觉模型看），说"文件"会打架
             return "📎 附件已经读完；这次只用于当前对话，没有作为长期资料保存。";

@@ -49,30 +49,40 @@ public class InboundMessageBatcher {
     private final long maxWindowMillis;
     private final long continuationWindowMillis;
     private final Pattern continuationPattern;
+    /**
+     * 窗口内**任何**消息都合并（2026-10-21 用户要求）。
+     *
+     * <p>原来只有"带媒体/引用"的消息能并进同一批，纯文字连发会被当成两轮、各回一次，
+     * 看起来像机器人逐条应答。人不是这么聊的——所以默认开启，配 {@code agent.message-batch-merge-text=false} 可退回旧行为。
+     */
+    private final boolean mergeText;
     private final Object monitor = new Object();
     private final Map<String, PendingBatch> pendingByConversation = new HashMap<>();
 
     @Autowired
     public InboundMessageBatcher(@Qualifier("messageBatchScheduler") ScheduledExecutorService scheduler,
-                                 @Value("${agent.message-batch-window-millis:1500}") long windowMillis,
-                                 @Value("${agent.message-batch-max-window-millis:4000}") long maxWindowMillis,
+                                 @Value("${agent.message-batch-window-millis:2500}") long windowMillis,
+                                 @Value("${agent.message-batch-max-window-millis:8000}") long maxWindowMillis,
                                  @Value("${agent.message-batch-continuation-window-millis:900}") long continuationWindowMillis,
-                                 @Value("${agent.message-batch-continuation-pattern:}") String continuationPattern) {
-        this(scheduler, windowMillis, maxWindowMillis, continuationWindowMillis, compilePattern(continuationPattern));
+                                 @Value("${agent.message-batch-continuation-pattern:}") String continuationPattern,
+                                 @Value("${agent.message-batch-merge-text:true}") boolean mergeText) {
+        this(scheduler, windowMillis, maxWindowMillis, continuationWindowMillis,
+                compilePattern(continuationPattern), mergeText);
     }
 
     private InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis, long maxWindowMillis,
-                                  long continuationWindowMillis, Pattern continuationPattern) {
+                                  long continuationWindowMillis, Pattern continuationPattern, boolean mergeText) {
         this.scheduler = scheduler;
         this.windowMillis = Math.max(0, windowMillis);
         this.maxWindowMillis = Math.max(this.windowMillis, maxWindowMillis);
         this.continuationWindowMillis = Math.max(0, continuationWindowMillis);
         this.continuationPattern = continuationPattern;
+        this.mergeText = mergeText;
     }
 
     InboundMessageBatcher(ScheduledExecutorService scheduler, long windowMillis) {
         this(scheduler, windowMillis, DEFAULT_MAX_WINDOW_MILLIS, Math.min(windowMillis, 900),
-                Pattern.compile(DEFAULT_CONTINUATION_PATTERN));
+                Pattern.compile(DEFAULT_CONTINUATION_PATTERN), false);
     }
 
     public void submit(InboundMessage message, Consumer<InboundMessageBatch> consumer) {
@@ -131,6 +141,10 @@ public class InboundMessageBatcher {
     private boolean canMerge(PendingBatch pending, InboundMessage incoming) {
         if (isCommand(incoming)) {
             return false;
+        }
+        // 连发合并：窗口内的消息（文字、图片、视频混着发）当同一轮处理，一起回一次
+        if (mergeText) {
+            return true;
         }
         if (hasMediaOrQuote(incoming)) {
             return true;

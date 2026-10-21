@@ -69,6 +69,24 @@ public class AgentLoop {
     private static final Pattern MODEL_TOOL_DISCLOSURE_LINE = Pattern.compile(
             "^(?:>\\s*)?(?:#{1,6}\\s*)?(?:[_*`]{1,3}\\s*)?(?:【\\s*)?(?:工具调用(?:说明|详情|情况)?|调用工具)(?:\\s*】)?(?:[_*`]{1,3})?(?:\\s*[:：].*)?\\s*$",
             Pattern.CASE_INSENSITIVE);
+    /** 语音工具的注册名：它发完就算"话已经说了"（不挂工具尾注，也不强制补一句文字） */
+    private static final String VOICE_TOOL = "sendVoice";
+
+    /** 一轮的结果：调了工具 / 说出了文本 / 什么都没说（2026-10-21 起区分后两者） */
+    record RoundOutcome(String text, boolean toolCalls) {
+        static RoundOutcome tools() {
+            return new RoundOutcome(null, true);
+        }
+
+        static RoundOutcome text(String value) {
+            return new RoundOutcome(value, false);
+        }
+
+        static RoundOutcome silent() {
+            return new RoundOutcome(null, false);
+        }
+    }
+
     private final StreamingChatModel streamingChatModel;
 
     /**
@@ -305,10 +323,22 @@ public class AgentLoop {
                             + "要留下来、要记下来的东西现在就得做；最后一步只能写字。）"));
                 }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
-                String roundText = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
+                RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
                         toolResults, scope, round);
-                if (roundText != null) {
-                    return completeReply(roundText, successfulTools, failedTools, toolResults, sink);
+                if (outcome.toolCalls()) {
+                    continue;
+                }
+                if (outcome.text() != null) {
+                    return completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink);
+                }
+                // 这一轮既没调工具、也没说话。发过语音就视为"已经把话说完"——
+                // 2026-10-21 用户要求：语音本身就是回复，不要再硬凑一句文字。
+                if (successfulTools.contains(VOICE_TOOL)) {
+                    log.info("本轮已发语音且没有补充文字，视为完成 user={}", userId);
+                    if (turnTraceStore != null) {
+                        turnTraceStore.finishTurn(userId, 0);
+                    }
+                    return "";
                 }
             }
         } catch (RuntimeException exception) {
@@ -382,13 +412,16 @@ public class AgentLoop {
     }
 
     /**
-     * 发起一轮流式请求：增量仅在内部累积（不推送微信）；
-     * 工具调用轮执行工具并回填 messages 后返回 null；最终文本轮返回完整文本。
+     * 发起一轮流式请求：增量仅在内部累积（不推送微信）。
+     *
+     * <p>返回值区分三种情况（2026-10-21 改）：这一轮**调了工具**（还要继续）、
+     * 这一轮**给出了文本**（本轮结束）、这一轮**什么都没说**（既没工具也没文本）。
+     * 最后一种以前和"调了工具"混在 null 里，导致"只发语音、不再说话"没法实现。
      */
-    private String streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
-                                  Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
-                                  Map<String, ToolExecutionOutcome> toolResults,
-                                  TurnScope scope, int round) {
+    private RoundOutcome streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
+                                        Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
+                                        Map<String, ToolExecutionOutcome> toolResults,
+                                        TurnScope scope, int round) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -469,13 +502,13 @@ public class AgentLoop {
             }
             throw new RuntimeException("LLM 调用失败: " + error.get().getMessage(), error.get());
         }
-        // 关键：本轮若有工具调用（即使输出了过程文本），必须返回 null 继续下一轮，
+        // 关键：本轮若有工具调用（即使输出了过程文本），必须继续下一轮，
         // 让模型基于工具结果生成最终回复；工具轮的过程文本不应作为回复发送给用户
         if (Boolean.TRUE.equals(hasTools.get())) {
-            return null;
+            return RoundOutcome.tools();
         }
         String text = acc.get().toString();
-        return (text == null || text.isBlank()) ? null : text;
+        return (text == null || text.isBlank()) ? RoundOutcome.silent() : RoundOutcome.text(text);
     }
 
     static String appendToolFooter(String reply, Set<String> invokedTools) {
@@ -487,8 +520,13 @@ public class AgentLoop {
             return reply;
         }
         List<String> names = invokedTools.stream()
+                // 语音本身就是一条回复，再挂「调用工具：发语音」很怪（2026-10-21 用户要求）
+                .filter(name -> !VOICE_TOOL.equals(name))
                 .map(name -> displayNames == null ? name : displayNames.getOrDefault(name, name))
                 .toList();
+        if (names.isEmpty()) {
+            return reply;
+        }
         return reply.stripTrailing() + "\n\n> _调用工具：" + String.join("、", names) + "_";
     }
 
