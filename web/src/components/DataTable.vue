@@ -43,6 +43,9 @@ function busyAt(rowIndex, actionIndex) {
           <td v-for="column in columns" :key="column.label" :data-label="column.label"
               :class="{ mono: column.mono, wide: column.wide }">
             <span v-if="column.tag" class="tag" :class="column.tag(row).tone">{{ column.tag(row).text }}</span>
+            <!-- 2026-10-21：可点的外链（用它去看某条 B 站评论） -->
+            <a v-else-if="column.link && column.link(row)" class="cell-link"
+               :href="column.link(row)" target="_blank" rel="noopener noreferrer">{{ column.link(row) }}</a>
             <template v-else>{{ text(row, column) }}</template>
           </td>
           <td v-if="$slots.actions || rowActions.length" data-label="操作">
