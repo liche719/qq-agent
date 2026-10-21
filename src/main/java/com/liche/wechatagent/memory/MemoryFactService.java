@@ -628,8 +628,14 @@ public class MemoryFactService {
                 primary.put(key, fact);
             }
         }
+        // 按"人的认知顺序"排（2026-10-21）：课程 → 时间 → 地点 → 教师 → 其它。
+        // 原来是按向量相似度顺序拼的，于是「教室 8B304；教师 钟雪峰；时间 19:30」——
+        // 读起来像数据库 dump。排过之后是「课程 数字系统综合设计；时间 19:30-22:00；
+        // 教室 8B304；教师 钟雪峰」，模型引用时直接就是人话。
+        List<Map.Entry<String, MemoryFact>> ordered = new ArrayList<>(primary.entrySet());
+        ordered.sort(java.util.Comparator.comparingInt(entry -> predicateRank(entry.getKey())));
         StringBuilder line = new StringBuilder();
-        for (Map.Entry<String, MemoryFact> entry : primary.entrySet()) {
+        for (Map.Entry<String, MemoryFact> entry : ordered) {
             if (line.length() > 0) {
                 line.append("；");
             }
@@ -640,6 +646,17 @@ public class MemoryFactService {
             }
         }
         return line.length() == 0 ? "（没有有效值）" : line.toString();
+    }
+
+    /** 属性在"一句话"里的先后：先说什么、后说什么 */
+    private static int predicateRank(String predicate) {
+        String key = predicate == null ? "" : predicate;
+        if (key.matches(".*(课程|名称|科目|标题|是什么|项目|事情).*")) return 0;
+        if (key.matches(".*(时间|节次|日期|周次|几点|时长).*")) return 1;
+        if (key.matches(".*(教室|地点|位置|在哪|场所|楼).*")) return 2;
+        if (key.matches(".*(教师|老师|授课|负责|联系人|人).*")) return 3;
+        if (key.matches(".*(进度|状态|结果|备注|其他|其它).*")) return 9;
+        return 5;
     }
 
     /** 按 subject 聚合成多行文本（召回工具用） */
