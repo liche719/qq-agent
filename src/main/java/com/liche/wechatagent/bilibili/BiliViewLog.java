@@ -29,6 +29,8 @@ public class BiliViewLog {
 
     public static final String OUTCOME_TRANSCRIPT = "字幕";
     public static final String OUTCOME_FRAMES = "抽帧";
+    /** 2026-10-21 起：直接让视频模型看整段画面（抽帧降级成兜底） */
+    public static final String OUTCOME_VIDEO = "看了画面";
     public static final String OUTCOME_FAILED = "读不到";
 
     @Id

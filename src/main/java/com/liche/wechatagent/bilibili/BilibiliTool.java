@@ -21,12 +21,17 @@ import org.springframework.stereotype.Component;
 @Component
 public class BilibiliTool implements AgentToolProvider {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(BilibiliTool.class);
+
     private static final int DESC_PREVIEW_CHARS = 300;
     /** browseBilibili 默认给几条候选：够挑又不至于让他看得眼花 */
     private static final int DEFAULT_BROWSE_COUNT = 12;
 
     private final BilibiliClient client;
     private final com.liche.wechatagent.media.VideoFrameService videoFrameService;
+    private final com.liche.wechatagent.media.VideoUnderstandService videoUnderstandService;
+    /** 视频模型看不成时要不要回落抽帧（2026-10-21 起默认关，没额度了可以打开兜底） */
+    private final boolean frameFallback;
     private final com.liche.wechatagent.media.MediaToolContextService mediaContext;
     private final int maxTranscriptChars;
     /** 抽帧兜底最多下多少字节的视频（360p，2 分钟约 9MB；这里给到 60MB ≈ 十几分钟） */
@@ -36,6 +41,8 @@ public class BilibiliTool implements AgentToolProvider {
 
     public BilibiliTool(BilibiliClient client,
                         com.liche.wechatagent.media.VideoFrameService videoFrameService,
+                        com.liche.wechatagent.media.VideoUnderstandService videoUnderstandService,
+                        @Value("${bilibili.frame-fallback:false}") boolean frameFallback,
                         com.liche.wechatagent.media.MediaToolContextService mediaContext,
                         @Value("${bilibili.max-transcript-chars:6000}") int maxTranscriptChars,
                         @Value("${bilibili.frame-fallback-max-bytes:62914560}") long maxDownloadBytes,
@@ -43,6 +50,8 @@ public class BilibiliTool implements AgentToolProvider {
         this.client = client;
         this.viewLogs = viewLogs;
         this.videoFrameService = videoFrameService;
+        this.videoUnderstandService = videoUnderstandService;
+        this.frameFallback = frameFallback;
         this.mediaContext = mediaContext;
         this.maxTranscriptChars = Math.max(500, Math.min(20_000, maxTranscriptChars));
         this.maxDownloadBytes = Math.max(5L * 1024 * 1024, maxDownloadBytes);
@@ -103,29 +112,51 @@ public class BilibiliTool implements AgentToolProvider {
             }
 
             BilibiliClient.Transcript transcript = client.transcript(info.bvid(), page.cid(), maxTranscriptChars);
+
+            // 2026-10-21：先让视频模型把画面看一遍，字幕降级成"附带信息"。
+            // 原来的顺序是「没字幕才抽帧」，而抽帧看到的是每 4 秒一张的静态切片——
+            // 连续动作、飞过去的字幕、一句话配一个画面，都看不出来。
+            WatchLook watch = watchVideo(info.bvid(), page.cid());
+
             FrameLook look = null;
             if (transcript.available()) {
                 out.append("字幕（").append(transcript.language().isBlank() ? "语言未知" : transcript.language())
                         .append(transcript.aiGenerated() ? "，B站自动生成" : "，UP主上传").append("）：\n");
                 out.append(transcript.text());
             } else {
-                // 没字幕不等于看不到：2026-10-17 起会下 360p 抽帧兜底，把画面交给视觉模型（见 lookAtFrames）
                 out.append("字幕：").append(transcript.reason()).append('\n');
-                look = lookAtFrames(info.bvid(), page.cid());
-                out.append(look.text());
-                if (!look.ok()) {
-                    // 抽帧也没成，才说"只能依据标题和简介"——抽成了再说这句会自相矛盾
-                    out.append("\n（所以**只能**依据上面的简介，不要凭标题「").append(info.title())
-                            .append("」编造视频里讲了什么。）");
+            }
+
+            if (watch.ok()) {
+                out.append("\n画面（这段视频我直接看了）：\n").append(watch.text()).append('\n');
+            } else {
+                // 看不成也要说清为什么——原来只在开了抽帧开关时才输出，
+                // 于是「配了模型但下载失败」这种情况对模型完全静默，它只能干瞪眼。
+                if (!watch.why().isBlank()) {
+                    out.append("\n（画面没看成：").append(watch.why()).append("）\n");
+                }
+                if (frameFallback) {
+                    look = lookAtFrames(info.bvid(), page.cid());
+                    out.append(look.text());
                 }
             }
-            if (transcript.available()) {
+
+            // 字幕、画面、抽帧三样都没有，才说"只能依据简介"
+            if (!transcript.available() && !watch.ok() && (look == null || !look.ok())) {
+                out.append("\n（所以**只能**依据上面的简介，不要凭标题「").append(info.title())
+                        .append("」编造视频里讲了什么。）");
+            }
+
+            if (watch.ok()) {
+                recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_VIDEO,
+                        "视频模型看了 " + watch.promptTokens() + " token");
+            } else if (transcript.available()) {
                 recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_TRANSCRIPT,
                         transcript.text() == null ? "" : transcript.text().length() + " 字");
+            } else if (look != null && look.ok()) {
+                recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_FRAMES, "抽帧成功");
             } else {
-                recordView(info.bvid(), info.title(),
-                        look != null && look.ok() ? BiliViewLog.OUTCOME_FRAMES : BiliViewLog.OUTCOME_FAILED,
-                        look != null && look.ok() ? "抽帧成功" : "没字幕也没抽到帧");
+                recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_FAILED, "没字幕也没看成画面");
             }
             return ToolBusinessResult.success(out.toString());
         } catch (BilibiliClient.BilibiliException exception) {
@@ -313,6 +344,58 @@ public class BilibiliTool implements AgentToolProvider {
      *
      * <p>任何失败都只回一句话，绝不抛异常：字幕已经拿到了的话，抽帧失败不能把结果整个弄没。
      */
+    /**
+     * 让视频模型直接看这段视频（2026-10-21）。
+     *
+     * <p>和 {@link #lookAtFrames} 的区别：那边抽几帧静态图、拼成联系表交给主模型；
+     * 这边把整段视频交给能干这个活的模型（默认 {@code qwen3.8-flash}），画面、节奏、
+     * 台词的语气它自己能看。没配模型时返回 skipped，调用方按老逻辑走。
+     *
+     * <p>视频要**先下载到本地再 base64**：上游还能直接收公网 URL，但那是让**它的服务器**
+     * 去下载，B 站视频有防盗链（服务端 403），所以只能自己下。
+     */
+    private WatchLook watchVideo(String bvid, long cid) {
+        if (videoUnderstandService == null) {
+            log.info("视频理解没启用：service 没注入");
+            return WatchLook.skipped();
+        }
+        if (!videoUnderstandService.enabled()) {
+            log.info("视频理解没启用：模型/地址/密钥没配全");
+            return WatchLook.skipped();
+        }
+        java.nio.file.Path file = null;
+        try {
+            BilibiliClient.PlayUrl play = client.playUrl(bvid, cid);
+            if (play.sizeBytes() > maxDownloadBytes) {
+                return WatchLook.failed("视频太大（" + (play.sizeBytes() / 1024 / 1024) + "MB）");
+            }
+            file = java.nio.file.Files.createTempFile("va-bili-watch-", ".mp4");
+            client.downloadTo(play.url(), bvid, file, maxDownloadBytes);
+            com.liche.wechatagent.media.VideoUnderstandService.Result result = videoUnderstandService.watch(file, null);
+            if (result.ok()) {
+                return new WatchLook(true, result.text(), result.promptTokens(), "");
+            }
+            return WatchLook.failed(result.text());
+        } catch (Exception e) {
+            return WatchLook.failed("看视频没成（" + shortReason(e) + "）");
+        } finally {
+            com.liche.wechatagent.media.VideoFrameService.deleteQuietly(file);
+        }
+    }
+
+    /** 视频模型看画面的结果：成没成 / 它说了什么 / 花了多少 token / 没成的原因 */
+    private record WatchLook(boolean ok, String text, int promptTokens, String why) {
+
+        /** 没配视频模型（或没开）：不打日志、不提示，安静地按老逻辑走 */
+        static WatchLook skipped() {
+            return new WatchLook(false, "", 0, "");
+        }
+
+        static WatchLook failed(String why) {
+            return new WatchLook(false, "", 0, why == null ? "" : why);
+        }
+    }
+
     private FrameLook lookAtFrames(String bvid, long cid) {
         if (videoFrameService == null || mediaContext == null) {
             return FrameLook.failed("");

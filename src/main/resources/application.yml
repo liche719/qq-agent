@@ -68,6 +68,15 @@ llm:
   base-url: ${LLM_BASE_URL:https://api.deepseek.com/v1}
   model: ${LLM_MODEL:deepseek-flash}
   api-key: ${LLM_API_KEY:}
+  # 视频理解用的模型（2026-10-21）：留空 = 不启用这条路径，回落到抽帧。
+  # 实测 qwen3.8-flash 能吃视频（5 秒 360p ≈ 3680 prompt token ≈ 0.0015 元），
+  # 传法是 OpenAI 扩展的 video_url + base64 data URL；详见 VideoUnderstandService。
+  video-model: ${LLM_VIDEO_MODEL:qwen3.8-flash}
+  # base64 之后的体积上限，超了就放弃直传（让调用方回落抽帧）。16MB ≈ 12MB 原始视频
+  video-max-base64-bytes: ${LLM_VIDEO_MAX_BASE64_BYTES:16777216}
+  # 实测一个 3 分半的视频：思考 2361 token + 正文 596 字。给 1200 的话正文会被挤成空，
+  # 看起来像"模型没说话"。这里给足 4000。
+  video-max-output-tokens: ${LLM_VIDEO_MAX_OUTPUT_TOKENS:4000}
   # 花销单价（元/百万 token）——**按 cache 命中分开**：官方 Flash 的命中价是未命中的 1/50，
   # 而我们的作业每轮都带同样的系统提示词，命中率很高，只按未命中算会把成本高估好几倍。
   # 峰谷：官方峰时价是谷时 2 倍（UTC 01–04、06–10，周一至周五；北京时间 09–12、14–18）。
@@ -307,6 +316,9 @@ embedding:
 # **sessdata 留空也能跑**，但拿不到 AI 字幕（B站要求登录态），这时工具会如实说"没字幕"、不编内容。
 # 凭据只从服务器 .env 的 BILI_SESSDATA 来：整条 Cookie 串或只填 SESSDATA 的值都认。
 bilibili:
+  # 视频模型看不成时要不要回落抽帧（2026-10-21 起默认关）。
+  # 打开 = 没额度/模型挂了的时候还能靠抽帧看到点画面。
+  frame-fallback: ${BILIBILI_FRAME_FALLBACK:false}
   sessdata: ${BILI_SESSDATA:}
   timeout-seconds: ${BILIBILI_TIMEOUT_SECONDS:20}
   # 单次塞给模型的字幕上限（字符）：字幕是线性文本，太长会挤掉别的上下文
