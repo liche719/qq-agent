@@ -50,6 +50,18 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
     private int deepSeekFetchMinChars = 200;
 
     /**
+     * 最近失败的网址（2026-10-21 加）。
+     *
+     * <p>为什么要记：实测它有"死磕"行为——同一个 GitHub 页面失败后连着调 4 次、一分钟 7 次，
+     * 每次都等一轮超时。等待时间全是白费的，而且它并不是想换方法，是**已经不记得刚试过**。
+     *
+     * <p>记 5 分钟就够：网络抖动恢复得比这快，太长的记忆反而会挡住"刚恢复"的站。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> recentFailures =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long FAILURE_MEMORY_MILLIS = 5 * 60 * 1000L;
+
+    /**
      * 确定性不可读：链接非法、HTTP 4xx、不是网页文本、跳转异常……同一个链接再试多少次都一样。
      *
      * <p>**为什么要单独分一类**（2026-10-09 实测修）：原来这些情况一律 `throw IllegalStateException`，
@@ -71,6 +83,13 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
             + "GitHub/GitLab 的 blob 链接会自动换成纯文本地址，读代码传 true 更稳。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult readWebPage(String url, Boolean fullText) {
+        // 5 分钟内刚失败过的网址：直接告诉他别再试同一个，省一轮超时也省一次思考
+        Long failedAt = url == null ? null : recentFailures.get(url.trim());
+        if (failedAt != null && System.currentTimeMillis() - failedAt < FAILURE_MEMORY_MILLIS) {
+            return ToolBusinessResult.failure("这个链接刚才试过了，**打不开**（几分钟内同样的结果）。"
+                    + "别再重试同一个地址——换个来源：用 searchWeb 找同一内容的别的页面，"
+                    + "或者找它的镜像 / 缓存。");
+        }
         status("我正在打开这个网页…");
         // 模型明确要"完整正文"：直接走 DeepSeek 渲染后取全文，不去猜字数
         if (Boolean.TRUE.equals(fullText)) {
@@ -83,6 +102,7 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
         try {
             return ToolBusinessResult.success(fillIfTooShort(url, openAndExtract(url)));
         } catch (UnreadablePageException exception) {
+            rememberFailure(url);
             // 本地读不了（常见于纯 JS 渲染 / 需要执行脚本的站）：让 DS 试着抓一次
             String rescued = fetchFromDeepSeek(url);
             if (!rescued.isBlank()) {
@@ -96,8 +116,41 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
                 return ToolBusinessResult.failure("网页内容超过安全读取上限（"
                         + readableSize(maxResponseBytes) + "），无法读取");
             }
-            // 超时 / 连接失败 / DNS：瞬时故障，抛出去让工具框架重试
+            // 超时 / 连接失败 / DNS。GitHub 的 raw 地址在国内时通时断，
+            // 先换 jsdelivr 镜像试一次，别让"读自己的代码"变成运气问题。
+            String mirrored = tryMirror(url);
+            if (mirrored != null && !mirrored.isBlank()) {
+                return ToolBusinessResult.success(fillIfTooShort(url, mirrored));
+            }
+            rememberFailure(url);
             throw new IllegalStateException("网页暂时无法访问，请稍后重试或换一个链接", exception);
+        }
+    }
+
+    /** 记下这次失败（同一个地址 5 分钟内不再重复尝试） */
+    private void rememberFailure(String url) {
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        if (recentFailures.size() > 200) {
+            recentFailures.clear();
+        }
+        recentFailures.put(url.trim(), System.currentTimeMillis());
+    }
+
+    /** 走镜像再试一次（只对 raw.githubusercontent 有意义） */
+    private String tryMirror(String rawUrl) {
+        String mirror = mirrorForRawGithub(normalizeForRawText(rawUrl));
+        if (mirror == null) {
+            return null;
+        }
+        try {
+            org.slf4j.LoggerFactory.getLogger(WebPageTool.class).info("GitHub 直连失败，改走镜像：{}", mirror);
+            return openAndExtract(mirror);
+        } catch (Exception exception) {
+            org.slf4j.LoggerFactory.getLogger(WebPageTool.class)
+                    .warn("镜像也失败：{} -> {}", mirror, exception.getMessage());
+            return null;
         }
     }
 
@@ -125,6 +178,33 @@ public class WebPageTool implements com.liche.wechatagent.tool.AgentToolProvider
             return raw;
         }
         return trimmed;
+    }
+
+    /**
+     * 给 raw.githubusercontent 找一个国内能通的镜像（2026-10-21）。
+     *
+     * <p>为什么需要：三天里 readWebPage 失败 8 次，**全是 GitHub** ——
+     * 本机（和这台服务器）到大厂 CDN 还行，到 raw.githubusercontent.com 时通时断，
+     * 报的是"网页暂时无法访问"（连接超时）。它想读自己的代码，试六次才读到一段。
+     *
+     * <p>jsdelivr 在国内走的是有备案的 CDN，同样的文件路径换个域名就能拿到，
+     * 而且它本来就给 GitHub 仓库做镜像，不是第三方不可信代理。
+     *
+     * @return 镜像地址；不是 raw 地址就返回 null
+     */
+    private String mirrorForRawGithub(String url) {
+        if (url == null) {
+            return null;
+        }
+        java.util.regex.Matcher raw = java.util.regex.Pattern
+                .compile("^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$")
+                .matcher(url.trim());
+        if (!raw.matches()) {
+            return null;
+        }
+        // jsdelivr 的 GitHub 路径是 /gh/<owner>/<repo>@<ref>/<path>
+        return "https://cdn.jsdelivr.net/gh/" + raw.group(1) + "/" + raw.group(2)
+                + "@" + raw.group(3) + "/" + raw.group(4);
     }
 
     private String openAndExtract(String rawUrl) throws IOException {

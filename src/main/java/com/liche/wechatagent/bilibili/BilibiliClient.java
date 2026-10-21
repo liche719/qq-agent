@@ -85,6 +85,33 @@ public class BilibiliClient {
         this.redirectProbe = http.newBuilder().followRedirects(false).build();
     }
 
+    /**
+     * 当前登录的 B 站账号昵称（2026-10-21）。
+     *
+     * <p>为什么要暴露：用户问过「你自己不就是雾看花吗」，它答不上来——因为发评论的工具
+     * 只回了「发出去了 + rpid」，它连自己叫什么都不确定。昵称早就存在凭据表里，白存了。
+     *
+     * @return 昵称；没登录或没存就是空串
+     */
+    public String myDisplayName() {
+        try {
+            BiliCredential credential = credentialService == null ? null : credentialService.current();
+            return credential == null || credential.getUname() == null ? "" : credential.getUname().trim();
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
+    /** 当前登录账号的 mid（数字 UID）；没有就是空串 */
+    public String myMid() {
+        try {
+            BiliCredential credential = credentialService == null ? null : credentialService.current();
+            return credential == null || credential.getMid() == null ? "" : credential.getMid().trim();
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
     public boolean configured() {
         return !cookieHeader().isBlank();
     }

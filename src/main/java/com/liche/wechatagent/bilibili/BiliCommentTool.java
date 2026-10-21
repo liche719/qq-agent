@@ -177,7 +177,10 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
             + "②机主明确让你去发。别因为一句闲聊就发评论。"
             + "message 用你自己的语气、短、像人说的话，别写成总结报告，别提机主的账号/机器/聊天记录，不要放链接。"
             + "要回复楼中楼就传 rootRpid（那一楼的根评论号）和 parentRpid（你回复的那条评论号）。"
-            + "护栏：每天最多几条、同一视频只评一次、两条之间要隔一段时间——被拦了会告诉你原因，如实转述、别绕。")
+            + "护栏：每天最多几条、同一视频只评一次、两条之间要隔一段时间。"
+            + "发之前先想一下：今天评过几条、这个视频评过没有、上一条是几点——"
+            + "这些从 listMyCommentReplies 和之前的工具结果里能看出来，别一头撞上去被拒。"
+            + "被拦了会告诉你原因，如实转述、别绕。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
             riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @com.liche.wechatagent.tool.NonIdempotentTool
@@ -230,9 +233,12 @@ public class BiliCommentTool implements com.liche.wechatagent.tool.AgentToolProv
             if (!result.ok()) {
                 return ToolBusinessResult.failure("B 站没让发（" + result.code() + "：" + result.message() + "），如实跟他说。");
             }
+            String me = client.myDisplayName();
             return ToolBusinessResult.success("已经发出去了" + (pictures != null && !pictures.isEmpty() ? "（带图）" : "")
                     + "。" + pictureNote + "rpid=" + result.rpid()
                     + "；视频《" + title + "》；今天第 " + guard.todayCount() + " 条。"
+                    + (me.isBlank() ? "" : "\n这条是用「" + me + "」这个账号发的（就是他的账号）——"
+                    + "要是他问起是哪个号，你就说这个名字。")
                     + "（B 站回了成功不等于立刻公开可见，可能还在审核，不用因此重发。）");
         } catch (BilibiliClient.BilibiliException exception) {
             return ToolBusinessResult.failure(exception.getMessage());

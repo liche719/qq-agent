@@ -86,7 +86,15 @@ function toColumns(columns) {
     key: column?.key,
     mono: Boolean(column?.mono),
     wide: Boolean(column?.wide),
-    tag: column?.tag ? row => toTag(column.tag, row?.[column.key]) : undefined
+    tag: column?.tag ? row => toTag(column.tag, row?.[column.key]) : undefined,
+    // 2026-10-21：列可以声明「这一格是外链」——后端给 { link: "link" }（同名字段），
+    // 或者直接给 url 模板字符串。用它点开某条 B 站评论。
+    link: column?.link === true || column?.link === 'link'
+      ? row => row?.[column.key] || ''
+      : (typeof column?.link === 'string' && column.link.includes('{')
+        ? row => column.link.replace(/\{(\w+)\}/g, (_, k) => row?.[k] ?? '')
+        : undefined),
+    linkText: column?.linkText ? row => row[column.linkText] : undefined
   }))
 }
 

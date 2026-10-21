@@ -119,7 +119,7 @@ public class AdminPanelController {
                         column("video", "视频", true),
                         column("content", "评论原文", true),
                         column("result", "结果", false),
-                        column("link", "链接", false)), List.of()),
+                        linkedColumn("link", "去看")), List.of()),
                 table("自主活动（它自己的时间花在哪）", "/api/admin/self/activities", List.of(
                         column("state", "状态", false),
                         column("activity", "活动", true),
@@ -320,6 +320,15 @@ public class AdminPanelController {
         option.put("value", value);
         option.put("label", label);
         return option;
+    }
+
+    /** 一个渲染成可点外链的列（2026-10-21）：用它点开某条 B 站评论 */
+    private Map<String, Object> linkedColumn(String key, String label) {
+        Map<String, Object> column = new LinkedHashMap<>();
+        column.put("key", key);
+        column.put("label", label);
+        column.put("link", true);
+        return column;
     }
 
     private Map<String, Object> column(String key, String label, boolean wide) {
