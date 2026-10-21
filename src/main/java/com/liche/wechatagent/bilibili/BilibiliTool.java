@@ -57,13 +57,13 @@ public class BilibiliTool implements AgentToolProvider {
         this.maxDownloadBytes = Math.max(5L * 1024 * 1024, maxDownloadBytes);
     }
 
-    @Tool(value = "读取一个 B 站视频的字幕，用来知道视频里到底讲了什么。用户转发 B 站视频、"
-            + "发来 B 站链接或 BV 号时调用。参数 url 传链接或 BV 号都行；"
+    @Tool(value = "看一个 B 站视频到底讲了什么。用户转发 B 站视频、发来 B 站链接或 BV 号时调用。"
+            + "参数 url 传链接或 BV 号都行；"
             + "**如果只有标题（比如他转发过来的卡片没有带链接），直接把那个标题原样传进来**——"
             + "我会拿标题去 B 站搜，只有搜到标题逐字一致的视频才会用。"
-            + "返回标题、UP 主、时长、简介和带时间戳的字幕正文。"
-            + "如果这个视频没有字幕（或接口拿不到），结果会明确写出来——"
-            + "**这时只能依据标题和简介，不要编造视频里的内容**。")
+            + "返回标题、UP 主、时长、简介，以及**画面内容**（我会直接看视频，不是只看几张截图）；"
+            + "能拿到字幕时会附带台词原文。"
+            + "**画面都没看到时**结果会明确写出来——那时只能依据标题和简介，不要编造视频里的内容。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult readBilibiliVideo(String url) {
         try {
