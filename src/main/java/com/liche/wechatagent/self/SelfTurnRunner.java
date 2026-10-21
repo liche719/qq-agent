@@ -68,8 +68,16 @@ public class SelfTurnRunner {
         long started = System.nanoTime();
         // 2026-10-20：这一轮**不关思考**（用户明确"其他时候按原来的不变"）。
         // 只有"写那句评论"是单独一次 SELF_COMMENT 调用，见 BiliCommentTool#draftBilibiliComment。
-        String reply = agentLoop.chat(SelfCoreService.SELF_SCOPE, null, null, personaOf(owner), null, null,
-                List.of(), instruction, List.of(), List.of(), null, scope);
+        String reply;
+        // 2026-10-21：标上"这一轮是她自己在跑"。工具层靠它区分
+        // 「她自己想画」和「用户让她画」——前者有每天 5 张的额度，后者不占。
+        com.liche.wechatagent.self.SelfTurnMark.install();
+        try {
+            reply = agentLoop.chat(SelfCoreService.SELF_SCOPE, null, null, personaOf(owner), null, null,
+                    List.of(), instruction, List.of(), List.of(), null, scope);
+        } finally {
+            com.liche.wechatagent.self.SelfTurnMark.clear();
+        }
         long durationMs = Math.max(0, (System.nanoTime() - started) / 1_000_000L);
         double yuan = Math.max(0, (spendMeter == null ? 0 : spendMeter.totalYuan()) - costBefore);
         return new Result(reply, 0, 0, durationMs, yuan);

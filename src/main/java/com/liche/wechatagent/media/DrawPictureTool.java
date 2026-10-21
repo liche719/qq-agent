@@ -37,8 +37,15 @@ public class DrawPictureTool implements AgentToolProvider {
     private final ImageGenClient imageClient;
     private final ToolStatusService statusService;
     private final MediaToolContextService mediaContext;
-    private final int dailyLimit;
-    private final java.util.concurrent.atomic.AtomicInteger todayUsed = new java.util.concurrent.atomic.AtomicInteger();
+    /**
+     * **自主画**的每日额度（2026-10-21 定）：
+     * 她自己主动画一天最多 5 张；**用户让她画的不算**。
+     *
+     * <p>怎么区分：{@code SelfTurnMark.active()} —— 自主轮在跑时为 true。
+     * 用户对话里调这个工具永远是 false，所以不受限。
+     */
+    private final int selfDailyLimit;
+    private final java.util.concurrent.atomic.AtomicInteger selfUsedToday = new java.util.concurrent.atomic.AtomicInteger();
     private volatile java.time.LocalDate usedDate = java.time.LocalDate.now();
     private final HttpClient downloader;
     /** 审计出口：生图没有 token，但也要留一条记录，面板才能数出今天画了几张 */
@@ -47,23 +54,27 @@ public class DrawPictureTool implements AgentToolProvider {
     public DrawPictureTool(ImageGenClient imageClient,
                            ToolStatusService statusService,
                            MediaToolContextService mediaContext,
-                           @Value("${llm.image-daily-limit:8}") int dailyLimit,
+                           @Value("${llm.image-self-daily-limit:5}") int selfDailyLimit,
                            org.springframework.beans.factory.ObjectProvider<com.liche.wechatagent.config.LlmCallSink> auditSink) {
         this.imageClient = imageClient;
         this.statusService = statusService;
         this.mediaContext = mediaContext;
-        this.dailyLimit = Math.max(0, dailyLimit);
+        this.selfDailyLimit = Math.max(0, selfDailyLimit);
         this.auditSink = auditSink.getIfAvailable();
         this.downloader = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
     }
 
+    /** 只有**自主画**才受额度限制；用户明确让它画的一律放行（2026-10-21 用户要求） */
     private boolean quotaExceeded() {
+        if (!com.liche.wechatagent.self.SelfTurnMark.active()) {
+            return false;
+        }
         java.time.LocalDate today = java.time.LocalDate.now();
         if (!today.equals(usedDate)) {
             usedDate = today;
-            todayUsed.set(0);
+            selfUsedToday.set(0);
         }
-        return dailyLimit > 0 && todayUsed.get() >= dailyLimit;
+        return selfDailyLimit > 0 && selfUsedToday.get() >= selfDailyLimit;
     }
 
     @Tool(value = "画一张图并发给用户。用户说「给我画个…」「画一张…」「做个图」时调用。"
@@ -79,8 +90,9 @@ public class DrawPictureTool implements AgentToolProvider {
             return ToolBusinessResult.failure("没说要画什么。问他要画什么。");
         }
         if (quotaExceeded()) {
-            return ToolBusinessResult.failure("今天画的张数到上限了（每天 " + dailyLimit
-                    + " 张，一张两毛）。跟他说今天先不画了。");
+            return ToolBusinessResult.failure("今天你自己主动画的张数到上限了（" + selfDailyLimit
+                    + " 张/天）。**他要你画的不受影响**——这一轮就别画了，或者跟他说一声"
+                    + "\"今天我自己画满了，你要我画就说\"。");
         }
 
         ImageGenClient.Result result = imageClient.generate(prompt.trim());
@@ -109,7 +121,9 @@ public class DrawPictureTool implements AgentToolProvider {
 
             String fileName = "画的图-" + System.currentTimeMillis() + ".png";
             boolean sent = statusService.sendMedia(new OutboundMedia(file, fileName, "image/png"));
-            todayUsed.incrementAndGet();
+            if (com.liche.wechatagent.self.SelfTurnMark.active()) {
+                selfUsedToday.incrementAndGet();
+            }
             if (auditSink != null) {
                 try {
                     auditSink.acceptCall(new com.liche.wechatagent.config.LlmCallEvent(

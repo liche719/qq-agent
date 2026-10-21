@@ -81,8 +81,9 @@ llm:
   # 留空 = 不启用（工具会如实说画不了）。
   image-model: ${LLM_IMAGE_MODEL:qwen-image-2.0}
   image-timeout-seconds: ${LLM_IMAGE_TIMEOUT_SECONDS:120}
-  # 每天最多画几张（0 = 不限）。按 0.2 元/张算，8 张约 1.6 元/天。
-  image-daily-limit: ${LLM_IMAGE_DAILY_LIMIT:8}
+  # **她自己主动画**的每日额度（0 = 不限）。2026-10-21 用户定：5 张/天，约 1 元。
+  # **用户让她画的不占这个额度**——区分靠 SelfTurnMark（自主轮在跑时为 true）。
+  image-self-daily-limit: ${LLM_IMAGE_SELF_DAILY_LIMIT:5}
   # 花销单价（元/百万 token）——**按 cache 命中分开**：官方 Flash 的命中价是未命中的 1/50，
   # 而我们的作业每轮都带同样的系统提示词，命中率很高，只按未命中算会把成本高估好几倍。
   # 峰谷：官方峰时价是谷时 2 倍（UTC 01–04、06–10，周一至周五；北京时间 09–12、14–18）。
