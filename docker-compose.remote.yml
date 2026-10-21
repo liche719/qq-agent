@@ -42,11 +42,15 @@ services:
       # （健康检查会用新口令去 ping 而库里还是旧的 → 部署直接起不来）。现在两者彻底分开。
       MYSQL_USER: ${MYSQL_APP_USER:-root}
       MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:-root}
-      # 2026-09-17：整库迁 pg 用。**不设 DB_URL/DB_DRIVER 就是原来的 MySQL**（默认值给了非空回退，
-      # 因为 Spring 的 `${DB_URL:默认}` 只在"变量缺失"时用默认，**空字符串会覆盖掉默认** —— 这个坑必须避开）。
+      # 2026-10-21：默认值从 MySQL 改成 PostgreSQL。
+      # 原来是迁库期间的过渡兜底（"不设 DB_URL 就还是 MySQL"），但生产早就只有 pg 了，
+      # 这个兜底现在**只剩风险**：万一 .env 丢了或某行被注释掉，容器会拿 MySQL 串去连
+      # PostgreSQL 主机，直接起不来，而且报错信息（"Communications link failure"）指向性很差。
+      # 保留非空回退的理由仍然成立：Spring 的 `${DB_URL:默认}` 只在"变量缺失"时用默认，
+      # **空字符串会覆盖掉默认** —— 这个坑必须避开。
       # 切换=在服务器 .env 写 pg 的四个值 + 重建；回滚=把这四个值改回 MySQL（或从 .env 删掉）。
-      DB_URL: ${DB_URL:-jdbc:mysql://127.0.0.1:3306/wechat_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
-      DB_DRIVER: ${DB_DRIVER:-com.mysql.cj.jdbc.Driver}
+      DB_URL: ${DB_URL:-jdbc:postgresql://127.0.0.1:5432/wechat_agent}
+      DB_DRIVER: ${DB_DRIVER:-org.postgresql.Driver}
       DB_USER: ${DB_USER:-${MYSQL_APP_USER:-root}}
       DB_PASSWORD: ${DB_PASSWORD:-${MYSQL_APP_PASSWORD:-root}}
       REDIS_HOST: 127.0.0.1
@@ -74,7 +78,12 @@ services:
       # 没列的场景不传该字段、用上游默认。实测 low 的思考 token 只有默认的 1/3、耗时 4.8s vs 14s。
       # 2026-09-29：extract 从 high 降到 low（账本显示它是最大单项开销，71% 是输出、思考占 4178 token）。
       # 这里的默认值只是兜底，面板上的滑块优先（落库、改完立刻生效）。
-      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low}
+      # ⚠️ 这份默认值必须和 application.yml 的 llm.reasoning-effort **保持完全一致**。
+      # 2026-10-21 踩过：这里留了旧值（没有 dialog_first / self_comment），
+      # compose 的 ${VAR:-默认} 优先级高于 yml 的 ${VAR:默认}，
+      # 结果 yml 里新加的 dialog_first=high、self_comment=none 全部失效，
+      # 但日志里只是两条「认不出的场景已忽略」的 WARN，很难注意到。
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog_first=high,dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low,self_comment=none}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，
       # 4096 会把正文挤没 → JSON 解析失败、这一趟白跑（上限不计费，放宽没有额外成本）
