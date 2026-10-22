@@ -241,10 +241,10 @@ public class AgentOrchestrator {
                 progressBubbles = TurnProgress.sentCount();
                 progressMessages = TurnProgress.progressLineCount();
                 TurnProgress.clear();
-                // 工具进度那条消息撤回（2026-10-22）：他要的是"过程可见但不留垃圾"
+                // 工具进度消息**不撤回**（2026-10-22 用户决定：撤回不退还额度，不如留着当工作记录）
                 WeChatChannel progressChannelToClose = channelFor(batch.channel());
                 if (progressChannelToClose != null) {
-                    progressChannelToClose.closeProgress(batch.botId(), batch.userId(), true);
+                    progressChannelToClose.closeProgress(batch.botId(), batch.userId(), false);
                 }
                 toolStatusService.unbind();
                 MDC.remove("userScope");

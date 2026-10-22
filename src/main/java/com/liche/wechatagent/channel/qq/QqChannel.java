@@ -1285,7 +1285,12 @@ public class QqChannel implements WeChatChannel {
     @Override
     public void closeProgress(String botId, String userId, boolean recall) {
         ProgressSession session = progressSessions.remove(userId);
-        if (session == null || !recall) {
+        if (session == null) {
+            return;
+        }
+        // 2026-10-22 用户决定：**不撤回了**。撤回不退还被动回复额度（发送时就扣了），
+        // 所以撤掉只是把信息藏起来，不如留着当工作记录。要恢复撤回把 recall 传 true。
+        if (!recall) {
             return;
         }
         java.util.List<String> ids;
