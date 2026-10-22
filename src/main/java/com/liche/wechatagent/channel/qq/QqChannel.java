@@ -1202,15 +1202,33 @@ public class QqChannel implements WeChatChannel {
             ObjectNode body = objectMapper.createObjectNode();
             body.put("msg_type", 7);
             body.putObject("media").put("file_info", fileInfo);
-            if (replyToMsgId != null && !replyToMsgId.isBlank()) {
+            boolean passive = replyToMsgId != null && !replyToMsgId.isBlank();
+            if (passive) {
                 body.put("msg_id", replyToMsgId);
                 body.put("msg_seq", messageSequence.next());
             }
-            client.post().uri(messagePath(userId), targetOpenid(userId))
-                    .header("Authorization", "QQBot " + accessToken)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body.toString())
-                    .retrieve().body(String.class);
+            try {
+                client.post().uri(messagePath(userId), targetOpenid(userId))
+                        .header("Authorization", "QQBot " + accessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body.toString())
+                        .retrieve().body(String.class);
+            } catch (RuntimeException passiveFailure) {
+                // 主动任务（定时/后台/自主）用的是**合成 msg_id**，QQ 会判定无效；
+                // 这时改走主动消息（不带 msg_id）重发一次——语音是"没发出去"状态，重发不会重复。
+                if (!passive) {
+                    throw passiveFailure;
+                }
+                log.info("[qq] voice passive send rejected, retry proactive user={}", userId);
+                ObjectNode proactive = objectMapper.createObjectNode();
+                proactive.put("msg_type", 7);
+                proactive.putObject("media").put("file_info", fileInfo);
+                client.post().uri(messagePath(userId), targetOpenid(userId))
+                        .header("Authorization", "QQBot " + accessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(proactive.toString())
+                        .retrieve().body(String.class);
+            }
             log.info("[qq] voice sent user={} replyTo={}", userId, replyToMsgId);
             return true;
         } catch (Exception exception) {

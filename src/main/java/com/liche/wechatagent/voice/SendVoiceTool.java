@@ -104,8 +104,12 @@ public class SendVoiceTool implements AgentToolProvider {
         }
         boolean sent = statusService.sendVoice(speech.url());
         if (!sent) {
-            return ToolBusinessResult.failure("语音合成好了，但发送通道没送出去。"
-                    + "如实跟他说：这次语音没发成，用文字说了。");
+            // 主动任务（定时/后台/自主）里通道可能拒收：排到本轮末尾，由 orchestrator 走主动发送
+            com.liche.wechatagent.agent.VoiceOutbox.put(speech.url());
+            log.info("语音即时发送未成功，改为本轮末尾补发 voice={} 字数={}ms", ttsClient.voice(),
+                    speakable.length(), speech.costMs());
+            return ToolBusinessResult.success("语音合成好了（" + ttsClient.voice()
+                    + " 音色），**会在这一轮末尾补发**。别提前说「已经发你了」，说「这就发」就行。");
         }
         log.info("语音已发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
                 speakable.length(), speech.costMs());

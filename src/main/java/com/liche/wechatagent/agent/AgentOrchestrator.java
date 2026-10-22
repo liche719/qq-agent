@@ -353,6 +353,19 @@ public class AgentOrchestrator {
      * <p>只有在"消息到达时这一轮已经给出最终答复"的情况下才会走到这里；
      * 大多数情况它们已经在 {@link TurnSteering#drainTexts} 里被这一轮消费掉了。
      */
+    /** 同步主动任务里补发暂存语音（不带 msg_id，走主动消息） */
+    private void flushDeferredVoice(InboundMessage msg) {
+        String audioUrl = VoiceOutbox.drain();
+        if (audioUrl == null || msg == null) {
+            return;
+        }
+        WeChatChannel channel = channelFor(msg.channel());
+        if (channel != null) {
+            boolean sent = channel.sendVoiceReplyFrom(msg.botId(), msg.userId(), null, audioUrl);
+            log.info("同步任务补发语音 user={} sent={}", msg.userId(), sent);
+        }
+    }
+
     private void resumePendingBatches(String userId) {
         java.util.List<InboundMessageBatch> pending = TurnSteering.drainBatches(userId);
         if (pending.isEmpty()) {
@@ -404,6 +417,9 @@ public class AgentOrchestrator {
         try {
             conversationTraceLogger.inbound(batch.replyAnchor());
             String reply = handleSafely(batch, taskId).text();
+            // 定时/后台这种同步主动任务没有异步发送阶段：暂存的语音在这里补发，
+            // 否则 atEnd=true 的语音会丢（2026-10-22）
+            flushDeferredVoice(msg);
             conversationTraceLogger.assistant(msg.userId(), reply);
             if (taskStateStore != null) {
                 taskStateStore.finish(taskId, "SUCCEEDED", msg.userId(), batch.replyToMsgId());
