@@ -1,0 +1,4 @@
+
+# 部署脚本必须 LF：服务器用 /bin/bash 直接执行，CRLF 会变成 /bin/bash^M
+*.sh text eol=lf
+deploy/server/wechat-deploy text eol=lf
