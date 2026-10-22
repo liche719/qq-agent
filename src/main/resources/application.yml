@@ -209,7 +209,7 @@ agent:
     enabled: ${AGENT_REPLY_SPLIT_ENABLED:true}
     # 流式与多气泡的折中（2026-10-22）：默认**走流式**，第一条气泡流式回放、后面的再补发；
     # 设 true 则完全关流式（所有气泡都等生成完一次性发）——只在流式出问题时当回滚开关用。
-    disable-stream: ${AGENT_REPLY_SPLIT_DISABLE_STREAM:false}
+    disable-stream: ${AGENT_REPLY_SPLIT_DISABLE_STREAM:true}
     max-bubbles: ${AGENT_REPLY_SPLIT_MAX_BUBBLES:4}
     max-chars-per-bubble: ${AGENT_REPLY_SPLIT_MAX_CHARS:70}
     split-threshold: ${AGENT_REPLY_SPLIT_THRESHOLD:60}

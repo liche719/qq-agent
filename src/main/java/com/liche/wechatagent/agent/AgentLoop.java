@@ -71,6 +71,11 @@ public class AgentLoop {
             Pattern.CASE_INSENSITIVE);
     /** 语音工具的注册名：它发完就算"话已经说了"（不挂工具尾注，也不强制补一句文字） */
     private static final String VOICE_TOOL = "sendVoice";
+    /**
+     * 这两个不算"工具调用"，不显示在进度条和尾注里（2026-10-22 用户要求）：
+     * {@code sayToUser} 是"先说一句"（本来就是说话），{@code sendVoice} 是发语音（本身就是回复）。
+     */
+    private static final Set<String> SILENT_TOOLS = Set.of(VOICE_TOOL, "sayToUser");
 
     /** 一轮的结果：调了工具 / 说出了文本 / 什么都没说（2026-10-21 起区分后两者） */
     record RoundOutcome(String text, boolean toolCalls) {
@@ -477,7 +482,7 @@ public class AgentLoop {
                                 ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
                                 // 每个工具第一次跑时先报一句进度（2026-10-22 用户要求"每个工具都能看到说明"）；
                                 // 同一轮同一个工具只报一次，避免连续调用刷屏
-                                if (announcedTools.add(request.name())) {
+                                if (!SILENT_TOOLS.contains(request.name()) && announcedTools.add(request.name())) {
                                     TurnProgress.hint(progressLabel(request));
                                 }
                                 ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
@@ -544,7 +549,7 @@ public class AgentLoop {
         }
         List<String> names = invokedTools.stream()
                 // 语音本身就是一条回复，再挂「调用工具：发语音」很怪（2026-10-21 用户要求）
-                .filter(name -> !VOICE_TOOL.equals(name))
+                .filter(name -> !SILENT_TOOLS.contains(name))
                 .map(name -> displayNames == null ? name : displayNames.getOrDefault(name, name))
                 .toList();
         if (names.isEmpty()) {

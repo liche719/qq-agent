@@ -1300,19 +1300,19 @@ public class QqChannel implements WeChatChannel {
         if (session == null) {
             return;
         }
-        // 收尾（state=10）把它定格成普通消息；**不撤回**，留作工作记录
-        synchronized (session) {
-            sendProgressFrame(userId, session.replyToMsgId, session, 10);
+        // 不要再发结束帧：答案流已经用同一条入站消息收过尾，平台会回
+        // 40034019「流式引导已经结束，不能继续发送」（2026-10-22 实测）。
+        // 直接丢掉会话即可，进度消息会随这一轮结束一起定格。
+        log.info("[qq] progress closed user={} lines={} chars={}", userId,
+                session.text.toString().split("\n").length, session.text.length());
+        if (!recall) {
+            return;
         }
-        if (recall) {
-            // 保留能力：真要撤回时（普通消息才撤得掉），流式消息 id 会被平台拒绝，
-            // 这里只打日志，不影响主流程。
-            String messageId = session.messageId;
-            if (messageId != null && !messageId.isBlank() && deleteMessage(botId, userId, messageId)) {
-                log.info("[qq] progress recalled user={}", userId);
-            } else {
-                log.warn("[qq] progress recall unsupported user={} messageId={}", userId, messageId);
-            }
+        String messageId = session.messageId;
+        if (messageId != null && !messageId.isBlank() && deleteMessage(botId, userId, messageId)) {
+            log.info("[qq] progress recalled user={}", userId);
+        } else {
+            log.warn("[qq] progress recall unsupported user={} messageId={}", userId, messageId);
         }
     }
 
@@ -1713,21 +1713,8 @@ public class QqChannel implements WeChatChannel {
             @Override
             public void onPartial(String partial) {
                 if (partial == null || partial.isBlank() || state.done) return;
-                state.buffered.append(partial);
-                if (state.frozen) return; // 第一段已定稿，剩下的只累计、等 onDone 补发
-                String text = state.buffered.toString();
-                // 到第一个句末再定稿：这样第一条气泡是完整的一两句，不会半句断开
-                if (shouldFreezeFirstBubble(text)) {
-                    String prefix = cutAtSentenceBoundary(text);
-                    if (prefix != null && sendStreamFrame(userId, passiveMsgId, state, prefix, 1)) {
-                        state.hasPartialContent = true;
-                        state.frozen = true;
-                        state.frozenText = prefix;
-                        log.info("[qq] stream first bubble frozen user={} chars={}", userId, prefix.length());
-                        return;
-                    }
-                }
-                if (sendStreamFrame(userId, passiveMsgId, state, text, 1)) { // GENERATING
+                // append 模式：每帧只发**增量**（2026-10-22 恢复；replace 累计模式会撞 40007）
+                if (sendStreamFrame(userId, passiveMsgId, state, partial, 1)) { // GENERATING
                     state.hasPartialContent = true;
                 }
             }
@@ -1736,23 +1723,6 @@ public class QqChannel implements WeChatChannel {
             public void onDone(String fullText) {
                 if (state.done) return;
                 String finalContent = fullText == null ? "" : fullText;
-                // 第一段已经流式显示过：用定稿文本收尾，剩下的再补 1~2 条气泡
-                if (state.frozen && state.frozenText != null
-                        && finalContent.startsWith(state.frozenText)) {
-                    String rest = finalContent.substring(state.frozenText.length()).trim();
-                    log.info("[qq] stream finalize first bubble user={} firstLen={} restLen={}", userId,
-                            state.frozenText.length(), rest.length());
-                    long startedFrozen = System.nanoTime();
-                    boolean frozenSent = recordTextSend(startedFrozen,
-                            sendStreamFrame(userId, passiveMsgId, state, state.frozenText, 10));
-                    state.failed = !frozenSent;
-                    state.done = frozenSent;
-                    streamStates.remove(userId);
-                    if (frozenSent && !rest.isEmpty()) {
-                        sendFollowUpBubbles(userId, passiveMsgId, rest);
-                    }
-                    return;
-                }
                 boolean toolFooter = finalContent.contains("\n\n> _调用工具：");
                 if (toolFooter && !state.hasPartialContent) {
                     log.info("[qq] sending tool footer through standard markdown user={}", userId);
@@ -1851,10 +1821,9 @@ public class QqChannel implements WeChatChannel {
     // Builds one append-mode payload for a QQ streaming reply.
     private ObjectNode buildStreamBody(String msgId, StreamSessionState state, String contentRaw, int inputState) {
         ObjectNode body = objectMapper.createObjectNode();
-        // 2026-10-22 改 replace：每帧发**累计全文**。官方文档要求 replace 模式下 content_raw 以上游
-        // 已下发前缀开头（我们天然满足），而且已下发前缀不可改（40007）——append 模式如果中途定稿
-        // 第一段再补，前缀就对不上了。
-        body.put("input_mode", "replace");
+        // 答案流式用 append（每帧是**增量**）；replace 只给进度条用——两者别混，
+        // 混了就是 40007「已经提交的消息内容不可修改」（2026-10-22 实测踩过）。
+        body.put("input_mode", "append");
         body.put("input_state", inputState);
         body.put("content_type", "markdown");
         body.put("content_raw", contentRaw);
