@@ -160,7 +160,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 | 文档 | 什么时候看 |
 |---|---|
-| `docs/pitfalls.md` | **踩坑第一步**：76 条完整坑 + 按主题索引 |
+| `docs/pitfalls.md` | **踩坑第一步**：78 条完整坑 + 按主题索引 |
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |

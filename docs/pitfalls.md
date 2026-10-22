@@ -1,4 +1,4 @@
-# 已知坑与约定（完整版 · 76 条）
+# 已知坑与约定（完整版 · 78 条）
 
 > 本文件是 `AGENTS.md` 第 5 节的**完整版**。`AGENTS.md` 因为超过 harness 的 64 KB 读取上限会被截断，
 > 现在只保留「违反就出线上事故」的十几条硬约定；**细节、来龙去脉、实测证据全在这里**。
@@ -6,7 +6,7 @@
 > **编号是稳定契约：不要重排、不要插号、不要合并。** 全项目的代码注释和 `docs/` 其它文档都按
 > 「坑 38」「坑 52」这样引用；改了编号会让这些引用全部指错。
 >
-> 新踩的坑**追加到下一条编号**（现在最后一条是 76），别往中间插。
+> 新踩的坑**追加到下一条编号**（现在最后一条是 78），别往中间插。
 >
 > ⚠️ **这是一份按时间累积的记录，条目本身不改写**（改了就等于抹掉当时为什么这么做）。
 > 但凡某条的**结论/现状**后来变了，都在原条目后面用 `（日期 注：…）` 标注。
@@ -37,7 +37,7 @@
 
 ---
 
-## 原文（1 ~ 76）
+## 原文（1 ~ 78）
 
 1. MySQL 必须钉 `8.0.46`：数据卷由 8.0.46 创建，换 8.0.27 会导致 InnoDB 启动失败。
    **（2026-10-10 注：生产 2026-09-18 已迁到 PostgreSQL 16 + pgvector、MySQL 容器 2026-09-20 退役，
@@ -361,3 +361,27 @@
    先 `git ls-files | grep <文件名>` 确认它归谁管。归仓库管的，改仓库、推上去，让 CI 带下来。
    只有 `.env` 这种**故意不入库**的才在服务器上直接改。
    （这条和坑 74② 是一对：那条说"compose 不列的变量不进容器"，这条说"compose 本身也不归你手改"。）
+
+77. **在 Windows 上编辑过的部署脚本会带上 CRLF，上传后直接变成 `/bin/bash^M: bad interpreter`**（2026-10-22 踩到，把整条部署通道打死）：
+   项目改名 qq-agent 时，我改了 `deploy/server/wechat-deploy`（`COMPOSE_DIR`、镜像名、容器名、加一行 `rm -f` 旧容器），
+   `scp` 到服务器 `install` 覆盖 `/usr/local/bin/wechat-deploy`——之后**每次构建都在合并分片那步失败**：
+   `bash: /usr/local/bin/wechat-deploy: /bin/bash^M: bad interpreter: No such file or directory`。
+   因为那个脚本是 `authorized_keys` 的 forced command，跑不起来 = 整个 CI 推不进来任何东西，
+   而报错出现在"分片合并"那步，看起来像网络/上传问题，很有迷惑性。
+   **规矩**：① 仓库加 `.gitattributes`：`*.sh text eol=lf`、`deploy/server/wechat-deploy text eol=lf`；
+   ② 传服务器之前先 `sed -i 's/\r$//'`；③ 覆盖后立刻 `bash -n /usr/local/bin/wechat-deploy` 验语法，
+   再 `head -c 20 | xxd` 确认首行是 `#!/bin/bash\n` 而不是 `#!/bin/bash\r`。
+   **判据**：凡是服务器"直接执行"的脚本（部署入口、acme reloadcmd、cron 脚本），换行符是功能性错误，不是风格问题。
+
+78. **同一个 YAML 里出现两个顶层同名键，SnakeYAML 直接拒绝加载整个文件**（2026-10-22 改名时把线上打挂了约 10 分钟）：
+   给通道模式换配置键（`wechat.channel.mode` → `agent.channel.mode`）时，我在 `application.yml` 末尾又写了一个顶层 `agent:`，
+   而文件前面（第 165 行）本来就有 `agent:`（长任务后台那段）。本地只跑 `mvn package`（**不加载配置**）所以没发现，
+   部署后容器反复重启，日志第一行就是：
+   `while constructing a mapping ... found duplicate key agent`，后跟 `Application run failed`。
+   **止损顺序**（当时就是这么救回来的）：① 立刻用**上一个可用镜像**起回来：
+   `cd /opt/qq-agent && AGENT_IMAGE=wechat-agent:<旧tag> docker compose -f docker-compose.remote.yml up -d --no-build agent`；
+   ② 再改代码、push、等 CI 覆盖。
+   **规矩**：① 改 `application.yml` 后本地至少跑一次**真正加载配置**的启动（`java -jar` 起几秒看有没有 `Started`），
+   别只 `mvn package`；② 新增顶层键前先 `grep -n "^agent:"` 之类确认没有同名块，**新配置并进已有的块**；
+   ③ 遇到"容器反复重启 + 日志只有栈"先看**异常第一段**（`while constructing a mapping` / `found duplicate key`），
+   不要在栈底找原因。
