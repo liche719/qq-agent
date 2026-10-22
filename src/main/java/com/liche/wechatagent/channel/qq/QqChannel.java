@@ -1268,6 +1268,8 @@ public class QqChannel implements WeChatChannel {
         final StringBuilder text = new StringBuilder();
         volatile String messageId;
         volatile String replyToMsgId;
+        /** 平台已经拒绝过这一轮（msg_id 失效/流式已收尾）：别再重试，静默降级 */
+        volatile boolean dead;
 
         ProgressSession(int msgSeq) {
             this.msgSeq = msgSeq;
@@ -1284,6 +1286,9 @@ public class QqChannel implements WeChatChannel {
         }
         ProgressSession session = progressSessions.computeIfAbsent(userId,
                 ignored -> new ProgressSession(messageSequence.next()));
+        if (session.dead) {
+            return;
+        }
         synchronized (session) {
             session.replyToMsgId = replyToMsgId;
             if (session.text.length() > 0) {
@@ -1347,9 +1352,11 @@ public class QqChannel implements WeChatChannel {
             }
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? "" : exception.getMessage();
-            if (message.contains("40034019")) {
-                // 答案流已经把这条消息的"流式引导"收尾了：进度帧发不出去是预期内的，别刷 WARN
-                log.debug("[qq] progress frame after stream closed user={}", userId);
+            if (message.contains("40034019") || message.contains("40034024")) {
+                // 流式已收尾 / msg_id 失效：这一轮的进度条到此为止，别再重试
+                session.dead = true;
+                log.info("[qq] progress stopped user={} reason={}", userId,
+                        message.contains("40034024") ? "msg_id 失效" : "流式已收尾");
             } else {
                 log.warn("[qq] progress frame failed user={}: {}", userId, message);
             }
