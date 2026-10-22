@@ -30,7 +30,7 @@
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
-- **规模现状**：工具 **63 个 / 20 个类**（自主模块开启时，2026-10-21 23:19 生产启动日志 `20 个类 / 63 个工具`，含新加的 `SendVoiceTool`）、系统提示词 **27 条**（编号 1–29，**15 已并入 9、20 空号**；2026-10-22 压缩重写，4800→3750 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
+- **规模现状**：工具 **64 个 / 21 个类**（2026-10-22 生产启动日志 `21 个类 / 64 个工具`；新增 `DiscoverToolsTool`）、系统提示词 **30 条**（编号 1–30，**15 已并入 9、20 空号**；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -179,7 +179,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **63 个 / 20 个类**、系统提示词 **27 条**（2026-10-22 压缩重写：15 并入 9）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
+- **规模**：工具 **64 个 / 21 个类**、系统提示词 **30 条**（2026-10-22 压缩重写：15 并入 9，之后新增第 30 条）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
@@ -191,6 +191,19 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   - **它自己的话**在一张表 `agent_self_note`：`kind=BLOCK` + `slot` 表达"我对自己的描述"（改写=插新行+旧行标失效，
     历史自带），其它 kind 只追加。
   - 研究活动**当前关着**（`MEMORY_SELF_RESEARCH_ENABLED=false`），只留刷 B 站。
+- **交互反馈（2026-10-22 一批，细节见 `docs/interaction-feedback.md`）**：
+  - **进度条**：一条流式消息，每开始一个工具追加一行「· 看B站视频：xxx」，上限 12 行，**不撤回**
+    （撤回不退被动额度）；慢工具跑超 30 秒会补「还在…」心跳。流式消息的 uuid 撤不掉（40061001），别再试。
+  - **语音时机由模型定**：`sendVoice(text, atEnd?)`；省略 = 立刻发，`true` = 排到本轮文字之后。
+    「先发」→ 省略、「最后发」→ true、不确定 → 省略。工具返回的措辞必须和实际一致。
+    **定时任务曾经发不出语音**：合成消息的 channel 是 `simulator`，生产没这个通道 → 现在按真实通道跑，
+    合成 msg_id 被拒时自动改投主动消息。
+  - **轮内注入**：他干活时插话不另起一轮，`TurnSteering` 在每次调模型前塞进上下文（每轮≤2 次）；
+    没赶上的轮末合并成下一轮。实测「停」1 秒后被注入并生效。
+  - **工具按需解锁**：默认只发核心 **34/64** 个，缺了用 `discoverTools` 搜（本轮生效）；
+    每轮省约 2.8k token。开关 `AGENT_TOOLS_PROGRESSIVE=false`。
+  - **搜索条数**：`count` 可选，默认 6、上限 15；原文摘录封顶 3000 字。
+  - **文字不再等 2.5 秒**：合并窗口 300ms（带图仍 5 秒等齐）。
 - **长活儿可以先说一句**（`sayToUser`，2026-10-20 加）：要调好几个工具的活儿，它能在途中先发一条
   （「行，我去翻翻」）再继续干，不用等最后一次性回。**上限每轮 3 次**——QQ 对同一条用户消息
   只允许被动回复 5 次（`msg_seq` 1~5，见 `QqChannel#buildMessageBody`），最终回复还要占一次。
