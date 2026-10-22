@@ -459,10 +459,31 @@ public class AgentLoop {
         return reply;
     }
 
+    /**
+     * 轮次/预算耗尽时的兜底开场白（2026-10-22 改）：原来只说"这次处理没有完成"，
+     * 他既不知道卡在哪、也不知道是不是白等。现在带上**失败的那个工具和原因**，
+     * 让他能判断要不要重试。
+     */
+    private String fallbackLead(Map<String, ToolExecutionOutcome> failedTools) {
+        if (failedTools == null || failedTools.isEmpty()) {
+            return "这次没跑完——步骤绕得太多，我先停下来了。你说一句最想要哪个结果，我直接重做。";
+        }
+        Map.Entry<String, ToolExecutionOutcome> first = failedTools.entrySet().iterator().next();
+        String display = toolDisplayNames.getOrDefault(first.getKey(), first.getKey());
+        String reason = first.getValue() == null ? "" : first.getValue().failureReason();
+        String clipped = reason == null ? "" : reason.replaceAll("\\s+", " ").trim();
+        if (clipped.length() > 60) {
+            clipped = clipped.substring(0, 60) + "…";
+        }
+        return "这次没跑完——「" + display + "」没成功"
+                + (clipped.isBlank() ? "" : "（" + clipped + "）")
+                + "，我先停下来了。要不要换个方式再试一次？";
+    }
+
     private String fallbackReply(Map<String, ToolExecutionOutcome> failedTools,
                                  Set<String> successfulTools,
                                  Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
-        String fallback = "这次处理没有完成。";
+        String fallback = fallbackLead(failedTools);
         String notice = mediaToolContextService.completionNotice();
         if (!notice.isBlank()) {
             fallback += "\n\n" + notice;

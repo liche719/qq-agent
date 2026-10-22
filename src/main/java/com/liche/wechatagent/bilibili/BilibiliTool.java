@@ -95,6 +95,9 @@ public class BilibiliTool implements AgentToolProvider {
             }
             out.append("UP主：").append(info.owner().isBlank() ? "未知" : info.owner())
                     .append("，时长：").append(duration(info.durationSeconds())).append('\n');
+            // 长度约束写进工具结果（2026-10-22）：只在系统提示词里写"80 字"，实测看视频后
+            // 仍然会回 600+ 字；工具结果是模型当下必读的，放在这里比系统提示词管用。
+            out.append("（回答提示：只讲最要紧的 2–3 点，200 字以内；他明确要详细时才展开）\n");
 
             if (info.pages().isEmpty()) {
                 recordView(info.bvid(), info.title(), BiliViewLog.OUTCOME_FAILED, "拿不到分P信息");
