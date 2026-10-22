@@ -117,12 +117,26 @@ public class ToolStatusService {
     /** 发语音：参数是音频地址（QQ 自己去下载），通道不支持时返回 false */
     public boolean sendVoice(String audioUrl) {
         StatusContext context = current.get();
-        if (context == null || audioUrl == null || audioUrl.isBlank()) {
+        if (context == null) {
+            // 定时/后台这类独立线程里的调用，没绑上下文就会静默 false（2026-10-22 卡在这）
+            log.info("语音未发送：没有工具上下文");
+            return false;
+        }
+        if (audioUrl == null || audioUrl.isBlank()) {
             return false;
         }
         WeChatChannel channel = channelFor(context.channel);
-        return channel != null && channel.sendVoiceReplyFrom(context.botId, context.userId,
+        if (channel == null) {
+            log.info("语音未发送：找不到通道 channel={}", context.channel);
+            return false;
+        }
+        boolean sent = channel.sendVoiceReplyFrom(context.botId, context.userId,
                 context.replyToMsgId, audioUrl);
+        if (!sent) {
+            log.info("语音未发送：通道返回失败 channel={} user={} replyTo={}",
+                    context.channel, context.userId, context.replyToMsgId);
+        }
+        return sent;
     }
 
     private WeChatChannel channelFor(String channelName) {
