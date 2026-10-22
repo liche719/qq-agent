@@ -35,16 +35,19 @@ import java.util.Map;
  * <p>如果配了 {@code DEEPSEEK_SEARCH_API_KEY}，还会顺带带上 DeepSeek 官方余额
  * （搜索还在用那个账号，余额见底了搜索会先坏）。
  *
- * <p>缓存 60 秒：这个数由本地落库算出，本来就不贵，但面板每 10 秒刷一次也没必要重算。
+ * <p>缓存：聚合结果放 Redis（{@code panel:balance:v1} / {@code panel:usage:v1:N}，TTL 可配，默认 30 秒）。
+ * **真源仍是 PostgreSQL**——缓存只是省掉重复的 group by 和余额接口调用，过期后照常从库里重算。
  */
 @RestController
 @RequestMapping("/api/admin")
 public class AdminBalanceController {
 
     private static final Logger log = LoggerFactory.getLogger(AdminBalanceController.class);
-    private static final long CACHE_MILLIS = 60 * 1000L;
+    private static final String BALANCE_CACHE_KEY = "panel:balance:v1";
+    private static final String USAGE_CACHE_KEY_PREFIX = "panel:usage:v1:";
 
     private final LlmCallAuditRecorder audit;
+    private final com.liche.wechatagent.metrics.PanelCache panelCache;
     private final String searchApiKey;
     private final String searchBalanceUrl;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -52,13 +55,12 @@ public class AdminBalanceController {
             .connectTimeout(Duration.ofSeconds(8))
             .build();
 
-    private volatile Map<String, Object> cached;
-    private volatile long cachedAt;
-
     public AdminBalanceController(LlmCallAuditRecorder audit,
+                                  com.liche.wechatagent.metrics.PanelCache panelCache,
                                   @Value("${deepseek.search.api-key:}") String searchApiKey,
                                   @Value("${deepseek.search.base-url:https://api.deepseek.com}") String searchBaseUrl) {
         this.audit = audit;
+        this.panelCache = panelCache;
         this.searchApiKey = searchApiKey == null ? "" : searchApiKey.trim();
         this.searchBalanceUrl = this.searchApiKey.isBlank()
                 ? ""
@@ -67,13 +69,16 @@ public class AdminBalanceController {
 
     @GetMapping("/balance")
     public Map<String, Object> balance() {
-        long now = System.currentTimeMillis();
-        if (cached != null && now - cachedAt < CACHE_MILLIS) {
+        Map<String, Object> cached = panelCache.get(BALANCE_CACHE_KEY);
+        if (cached != null) {
+            // checkedAt 是"这次读取的时间"，不该跟着缓存一起变旧
+            cached.put("checkedAt", Instant.now().toString());
+            cached.put("cached", true);
             return cached;
         }
         Map<String, Object> result = query();
-        cached = result;
-        cachedAt = now;
+        result.put("cached", false);
+        panelCache.put(BALANCE_CACHE_KEY, result);
         return result;
     }
 
@@ -146,6 +151,13 @@ public class AdminBalanceController {
     @GetMapping("/usage")
     public Map<String, Object> usage(@RequestParam(defaultValue = "7") int days) {
         int bounded = Math.max(1, Math.min(90, days));
+        String cacheKey = USAGE_CACHE_KEY_PREFIX + bounded;
+        Map<String, Object> cached = panelCache.get(cacheKey);
+        if (cached != null) {
+            cached.put("checkedAt", Instant.now().toString());
+            cached.put("cached", true);
+            return cached;
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("days", bounded);
         try {
@@ -157,8 +169,11 @@ public class AdminBalanceController {
         } catch (RuntimeException exception) {
             log.warn("统计用量明细失败：{}", exception.toString());
             out.put("error", "统计失败，稍后再试");
+            return out;
         }
+        out.put("cached", false);
         out.put("checkedAt", Instant.now().toString());
+        panelCache.put(cacheKey, out);
         return out;
     }
 
