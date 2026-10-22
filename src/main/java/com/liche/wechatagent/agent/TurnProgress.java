@@ -26,13 +26,15 @@ public final class TurnProgress {
     private static final Logger log = LoggerFactory.getLogger(TurnProgress.class);
 
     /** 默认每轮最多播报几次（最终回复还要占一次，QQ 一条消息总共只认 5 次） */
-    private static final int DEFAULT_MAX = 2;
+    static final int DEFAULT_MAX = 2;
     /** 两次播报之间至少隔这么久，防刷屏 */
     private static final long MIN_GAP_MILLIS = 3000;
     /** 单条最长（长了不像"顺口说一句"，而且浪费被动额度） */
     private static final int MAX_CHARS = 200;
     /** 工具进度提示更短：它只是一句"我在干嘛" */
     private static final int HINT_MAX_CHARS = 40;
+    /** 一条进度消息里最多追加几行（再多就成流水账了） */
+    private static final int MAX_HINT_LINES = 8;
 
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
@@ -41,12 +43,17 @@ public final class TurnProgress {
 
     private static final class State {
         final Consumer<String> sender;
+        /** 工具进度走这条通道（QQ 上是一条可更新的流式消息，最后撤回） */
+        final Consumer<String> progressSender;
         final int max;
         final AtomicInteger sent;
+        /** 进度行数（流式消息内容只追加，不占被动回复额度） */
+        final AtomicInteger progressLines = new AtomicInteger();
         final AtomicLong lastAt = new AtomicLong(0);
 
-        State(Consumer<String> sender, int max, int alreadySent) {
+        State(Consumer<String> sender, Consumer<String> progressSender, int max, int alreadySent) {
             this.sender = sender;
+            this.progressSender = progressSender;
             this.max = max;
             this.sent = new AtomicInteger(alreadySent);
         }
@@ -54,21 +61,35 @@ public final class TurnProgress {
 
     /** 装上一轮的播报通道（{@code AgentOrchestrator} 在调模型前装，finally 里清） */
     public static void install(Consumer<String> sender) {
-        install(sender, DEFAULT_MAX);
+        install(sender, null, DEFAULT_MAX);
     }
 
     public static void install(Consumer<String> sender, int max) {
+        install(sender, null, max);
+    }
+
+    /**
+     * @param progressSender 工具进度专用通道（QQ 上是一条可更新的流式消息，最后撤回）；
+     *                       为 null 时退化到普通发送，并受 {@code max} 限制
+     */
+    public static void install(Consumer<String> sender, Consumer<String> progressSender, int max) {
         if (sender == null) {
             CURRENT.remove();
             return;
         }
-        CURRENT.set(new State(sender, Math.max(1, Math.min(3, max)), 0));
+        CURRENT.set(new State(sender, progressSender, Math.max(1, Math.min(3, max)), 0));
     }
 
     /** 已经播报过几次（最终回复那边可以据此算还能发几条） */
     public static int sentCount() {
         State state = CURRENT.get();
         return state == null ? 0 : state.sent.get();
+    }
+
+    /** 进度消息是否已经发过（发过就占了 1 条被动回复额度，算最终气泡时要扣掉） */
+    public static boolean progressStarted() {
+        State state = CURRENT.get();
+        return state != null && state.progressLines.get() > 0;
     }
 
     public static void clear() {
@@ -94,6 +115,21 @@ public final class TurnProgress {
         if (message.length() > HINT_MAX_CHARS) {
             message = message.substring(0, HINT_MAX_CHARS - 1) + "…";
         }
+        // 有专用进度通道（QQ 流式消息）时：只追加、不占被动回复额度，最后统一撤回
+        if (state.progressSender != null) {
+            if (state.progressLines.get() >= MAX_HINT_LINES) {
+                return;
+            }
+            try {
+                state.progressSender.accept(message);
+                state.progressLines.incrementAndGet();
+                log.info("工具进度（第 {} 行）：{}", state.progressLines.get(), message);
+            } catch (RuntimeException exception) {
+                log.warn("工具进度发送失败：{}", exception.getMessage());
+            }
+            return;
+        }
+        // 没有进度通道就退回普通消息：受额度和间隔限制
         if (state.sent.get() >= state.max) {
             return;
         }

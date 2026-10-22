@@ -51,6 +51,17 @@ public interface WeChatChannel {
     }
 
     /**
+     * 工具进度（2026-10-22）：像 QQ 的"一条可更新的消息"那样，把「正在看视频…」这类状态
+     * 追加进去，**不占被动回复额度**。不支持的通道什么都不做（进度是锦上添花）。
+     */
+    default void progressLine(String botId, String userId, String replyToMsgId, String line) {
+    }
+
+    /** 本轮结束：撤回那条进度消息（recall=true）或把它定格成最后状态 */
+    default void closeProgress(String botId, String userId, boolean recall) {
+    }
+
+    /**
      * 发一条语音（2026-10-21）。参数是**音频的公网地址**，不是文件：QQ 的语音接口支持
      * {@code file_type=3} + {@code url}，由平台自己下载转码。不支持的通道返回 false，调用方退回文字。
      */

@@ -297,6 +297,8 @@ public class AgentLoop {
         boolean scoped = scope != null && scope.isScoped();
         double budgetYuan = scope == null ? 0 : scope.budgetYuan();
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
+        // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
+        Set<String> announcedTools = new LinkedHashSet<>();
         try {
             for (int round = 0; round < maxRounds; round++) {
                 // 按**钱**熔断（作用域调用专用）：轮数不是钱的代理——每轮 prompt 大小差很多
@@ -324,7 +326,7 @@ public class AgentLoop {
                 }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
-                        toolResults, scope, round);
+                        toolResults, scope, round, announcedTools);
                 if (outcome.toolCalls()) {
                     continue;
                 }
@@ -421,7 +423,7 @@ public class AgentLoop {
     private RoundOutcome streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
                                         Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                         Map<String, ToolExecutionOutcome> toolResults,
-                                        TurnScope scope, int round) {
+                                        TurnScope scope, int round, Set<String> announcedTools) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -457,11 +459,10 @@ public class AgentLoop {
                             hasTools.set(true);
                             for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
                                 ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
-                                // 慢工具先给一句进度（2026-10-22）：他能看到"正在看视频…"，
-                                // 才知道要不要再补一句；预算与 sayToUser 共享，最多 2 条。
-                                if (executionClass == ToolExecutionClass.SLOW_EXTERNAL) {
-                                    TurnProgress.hint("正在"
-                                            + toolDisplayNames.getOrDefault(request.name(), request.name()) + "…");
+                                // 每个工具第一次跑时先报一句进度（2026-10-22 用户要求"每个工具都能看到说明"）；
+                                // 同一轮同一个工具只报一次，避免连续调用刷屏
+                                if (announcedTools.add(request.name())) {
+                                    TurnProgress.hint(toolDisplayNames.getOrDefault(request.name(), request.name()));
                                 }
                                 ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
                                         ? executeTool(request, userId)

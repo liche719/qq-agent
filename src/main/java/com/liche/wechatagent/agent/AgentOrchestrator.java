@@ -189,6 +189,7 @@ public class AgentOrchestrator {
             String failureReason = null;
             // 这一轮途中已经播报过几条：最终回复要按"5 条被动回复上限"扣掉它们（2026-10-21）
             int progressBubbles = 0;
+            boolean progressMessageSent = false;
             String taskId = UUID.randomUUID().toString();
             try {
                 // 上下文绑定也放进 try：这几行任何一句抛异常，原来 finally 就不会执行，
@@ -238,7 +239,13 @@ public class AgentOrchestrator {
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
                 // 播报次数要在清掉 ThreadLocal 之前抓下来，发送阶段要拿它算还能发几个气泡
                 progressBubbles = TurnProgress.sentCount();
+                progressMessageSent = TurnProgress.progressStarted();
                 TurnProgress.clear();
+                // 工具进度那条消息撤回（2026-10-22）：他要的是"过程可见但不留垃圾"
+                WeChatChannel progressChannelToClose = channelFor(batch.channel());
+                if (progressChannelToClose != null) {
+                    progressChannelToClose.closeProgress(batch.botId(), batch.userId(), true);
+                }
                 toolStatusService.unbind();
                 MDC.remove("userScope");
                 MDC.remove("taskId");
@@ -248,7 +255,7 @@ public class AgentOrchestrator {
                 if (c != null && !(sink != null && sink.isDone())) {
                     // 多气泡（2026-10-21）：像人一样分 1~3 条发。QQ 对同一条用户消息只认 5 次被动回复，
                     // 所以要扣掉途中已经播报掉的条数；切不动的长文本会由 ReplySplitter 并回一条。
-                    int budget = Math.max(1, 5 - progressBubbles);
+                    int budget = Math.max(1, 5 - progressBubbles - (progressMessageSent ? 1 : 0));
                     List<String> bubbles = replySplitter == null
                             ? List.<String>of(reply)
                             : replySplitter.split(reply, budget);
@@ -446,8 +453,14 @@ public class AgentOrchestrator {
             }
             final WeChatChannel progressChannel = resolvedChannel;
             if (progressChannel != null) {
-                TurnProgress.install(text -> progressChannel.sendTextReplyFrom(
-                        batch.botId(), batch.userId(), batch.replyToMsgId(), text));
+                // 两条通道：sayToUser 走普通消息（占额度，最多 2 条）；
+                // 工具进度走 channel 自己的"可更新消息"（QQ 上是一条流式消息，最后撤回，不占额度）
+                TurnProgress.install(
+                        text -> progressChannel.sendTextReplyFrom(
+                                batch.botId(), batch.userId(), batch.replyToMsgId(), text),
+                        line -> progressChannel.progressLine(
+                                batch.botId(), batch.userId(), batch.replyToMsgId(), line),
+                        TurnProgress.DEFAULT_MAX);
             }
             try {
                 reply = invokeAgent(batch, userId, content, profile, mem, history, documents, sink,

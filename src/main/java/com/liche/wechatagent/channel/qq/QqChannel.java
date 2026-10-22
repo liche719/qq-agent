@@ -1252,6 +1252,96 @@ public class QqChannel implements WeChatChannel {
         return types.toString();
     }
 
+    /**
+     * 工具进度：每个用户**一条**流式消息，内容只往后追加（满足 replace 模式的"前缀不可改"），
+     * 本轮结束时撤回。这样每个工具都能显示、且只占 1 条被动回复额度（2026-10-22 用户要求）。
+     */
+    private static final class ProgressSession {
+        final int msgSeq;
+        int index;
+        final StringBuilder text = new StringBuilder();
+        volatile String messageId;
+
+        ProgressSession(int msgSeq) {
+            this.msgSeq = msgSeq;
+        }
+    }
+
+    private final java.util.Map<String, ProgressSession> progressSessions = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public void progressLine(String botId, String userId, String replyToMsgId, String line) {
+        if (isGroupConversation(userId) || line == null || line.isBlank()
+                || replyToMsgId == null || replyToMsgId.isBlank()) {
+            return;
+        }
+        ProgressSession session = progressSessions.computeIfAbsent(userId,
+                ignored -> new ProgressSession(messageSequence.next()));
+        synchronized (session) {
+            if (session.text.length() > 0) {
+                session.text.append('\n');
+            }
+            session.text.append("· ").append(line.trim());
+            sendProgressFrame(userId, replyToMsgId, session, 1);
+        }
+    }
+
+    @Override
+    public void closeProgress(String botId, String userId, boolean recall) {
+        ProgressSession session = progressSessions.remove(userId);
+        if (session == null) {
+            return;
+        }
+        if (recall) {
+            String messageId = session.messageId;
+            if (messageId != null && !messageId.isBlank()) {
+                try {
+                    deleteMessage(botId, userId, messageId);
+                    log.info("[qq] progress recalled user={} lines={}", userId, session.index);
+                } catch (RuntimeException exception) {
+                    log.warn("[qq] progress recall failed user={}: {}", userId, exception.getMessage());
+                }
+            }
+            return;
+        }
+        synchronized (session) {
+            sendProgressFrame(userId, null, session, 10);
+        }
+    }
+
+    private void sendProgressFrame(String userId, String replyToMsgId, ProgressSession session, int inputState) {
+        try {
+            ensureToken();
+            RestClient client = buildRestClient(apiBase);
+            ObjectNode body = objectMapper.createObjectNode();
+            body.put("input_mode", "replace");
+            body.put("input_state", inputState);
+            body.put("content_type", "markdown");
+            body.put("content_raw", session.text.toString());
+            if (replyToMsgId != null && !replyToMsgId.isBlank()) {
+                body.put("msg_id", replyToMsgId);
+            }
+            body.put("msg_seq", session.msgSeq);
+            body.put("index", session.index++);
+            if (session.messageId != null) {
+                body.put("stream_msg_id", session.messageId);
+            }
+            String response = client.post().uri("/v2/users/{openid}/stream_messages", userId)
+                    .header("Authorization", "QQBot " + accessToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body.toString())
+                    .retrieve().body(String.class);
+            if (session.messageId == null && response != null) {
+                String id = objectMapper.readTree(response).path("id").asText("");
+                if (!id.isBlank()) {
+                    session.messageId = id;
+                }
+            }
+        } catch (Exception exception) {
+            log.warn("[qq] progress frame failed user={}: {}", userId, exception.getMessage());
+        }
+    }
+
     private int qqFileType(String contentType) {
         String normalized = contentType == null ? "" : contentType.toLowerCase();
         if (normalized.startsWith("image/png") || normalized.startsWith("image/jpeg")) return 1;
@@ -1800,9 +1890,11 @@ public class QqChannel implements WeChatChannel {
      * 间隔与拆分规则交给 {@link ReplySplitter}，这样流式和普通发送的分法保持一致。
      */
     private void sendFollowUpBubbles(String userId, String replyToMsgId, String rest) {
+        // 发过进度消息就只剩 1 条气泡的额度（5 = sayToUser 2 + 进度 1 + 答案 2），否则最多补 2 条
+        int room = progressSessions.containsKey(userId) ? 1 : Math.max(1, splitMaxBubbles - 1);
         java.util.List<String> bubbles = replySplitter == null
                 ? java.util.List.of(rest)
-                : replySplitter.split(rest, Math.max(1, splitMaxBubbles - 1));
+                : replySplitter.split(rest, room);
         for (int i = 0; i < bubbles.size(); i++) {
             if (i > 0) {
                 try {
