@@ -93,7 +93,9 @@ public class SendVoiceTool implements AgentToolProvider {
         log.info("语音已发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
                 speakable.length(), speech.costMs());
         return ToolBusinessResult.success("语音发出去了（" + ttsClient.voice()
-                + " 音色）。他听得到，**别再把这句话用文字重复一遍**，用一句别的接住就行。");
+                + " 音色）。他听得到，**别再把这句话用文字重复一遍**，用一句别的接住就行。"
+                + "如果确实还有要紧的补充，**最多两句、60 字以内**；不要发长篇总结——"
+                + "要讲的长内容刚才就该放进语音里。");
     }
 
     /**

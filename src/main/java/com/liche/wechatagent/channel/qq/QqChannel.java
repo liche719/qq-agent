@@ -1300,11 +1300,12 @@ public class QqChannel implements WeChatChannel {
         if (session == null) {
             return;
         }
-        // 不要再发结束帧：答案流已经用同一条入站消息收过尾，平台会回
-        // 40034019「流式引导已经结束，不能继续发送」（2026-10-22 实测）。
-        // 直接丢掉会话即可，进度消息会随这一轮结束一起定格。
-        log.info("[qq] progress closed user={} lines={} chars={}", userId,
-                session.text.toString().split("\n").length, session.text.length());
+        // 收尾（state=10）：把进度定格成普通消息，否则 QQ 会一直显示"生成中"。
+        // 答案流式已关（disable-stream=true），不会再有 40034019；万一以后重新开流式，
+        // 这里的失败只记 debug，不影响主流程。
+        synchronized (session) {
+            sendProgressFrame(userId, session.replyToMsgId, session, 10);
+        }
         if (!recall) {
             return;
         }
@@ -1345,7 +1346,13 @@ public class QqChannel implements WeChatChannel {
                 }
             }
         } catch (Exception exception) {
-            log.warn("[qq] progress frame failed user={}: {}", userId, exception.getMessage());
+            String message = exception.getMessage() == null ? "" : exception.getMessage();
+            if (message.contains("40034019")) {
+                // 答案流已经把这条消息的"流式引导"收尾了：进度帧发不出去是预期内的，别刷 WARN
+                log.debug("[qq] progress frame after stream closed user={}", userId);
+            } else {
+                log.warn("[qq] progress frame failed user={}: {}", userId, message);
+            }
         }
     }
 
