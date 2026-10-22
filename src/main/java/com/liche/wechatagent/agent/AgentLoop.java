@@ -656,11 +656,40 @@ public class AgentLoop {
         if (sources.isEmpty()) {
             return reply;
         }
-        StringBuilder footer = new StringBuilder(reply.stripTrailing()).append("\n\n> _参考来源_");
+        String body = stripEmbeddedSources(reply);
+        if (body.isBlank()) {
+            body = reply;
+        }
+        StringBuilder footer = new StringBuilder(body.stripTrailing()).append("\n\n> _参考来源_");
         for (String source : sources) {
             footer.append("\n> ").append(source);
         }
         return footer.toString();
+    }
+
+    /**
+     * 裁掉模型自己写的「参考来源」块（2026-10-22）。
+     *
+     * <p>规则 14 让它别自己列来源，但它偶尔还是会抄一份——于是同一条回复里出现两个
+     * 「> _参考来源_」块（18:14 那条就是：模型 6 条 + 程序 5 条）。这里只裁**末尾那段纯引用块**：
+     * 从最后一个标记开始，后面每一行都以 {@code >} 开头才认为是块，正文里的引用不受影响。
+     */
+    static String stripEmbeddedSources(String reply) {
+        if (reply == null) {
+            return "";
+        }
+        int index = reply.lastIndexOf("> _参考来源_");
+        if (index < 0) {
+            return reply;
+        }
+        String tail = reply.substring(index);
+        for (String line : tail.split("\n")) {
+            if (!line.isBlank() && !line.stripLeading().startsWith(">")) {
+                return reply;
+            }
+        }
+        String head = reply.substring(0, index).stripTrailing();
+        return head.isBlank() ? reply : head;
     }
 
     static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {
