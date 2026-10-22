@@ -1,0 +1,881 @@
+package com.liche.qqagent.bilibili;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * B 站只读客户端：解析视频号 → 取元信息 → 取字幕。
+ *
+ * <p><b>为什么有这个东西</b>（2026-10-10）：用户在 QQ 里转发 B站视频，卡片只给标题和封面
+ * （平台把跳转链接留在 {@code ark_data.fields.jump_url} 里，见 {@code QqArkCard}）。
+ * 要真的"看懂视频"，只能顺着链接去取**字幕**——B站的 AI 字幕/UP 主字幕覆盖了绝大多数视频。
+ *
+ * <p><b>取字幕需要登录态</b>：{@code sessdata} 为空时通常拿不到字幕（尤其是 AI 字幕），
+ * 这时会如实返回"没有字幕"，不假装看过。凭据只从服务器 <code>.env</code> 的 {@code BILI_SESSDATA} 来。
+ *
+ * <p>链路与降级照抄用户本地那份跑通的 {@code 哔哩哔哩视频总结/src/bilibili.js}：
+ * {@code /x/web-interface/view} 拿 cid → {@code /x/player/wbi/v2} 拿字幕轨
+ * （失败退回无签名的 {@code /x/player/v2} 再试一次）→ 下载 {@code subtitle_url} 的 JSON。
+ */
+@Component
+public class BilibiliClient {
+
+    /** 照抄浏览器 UA：不带它 B站接口容易返回空数据 */
+    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    private static final String API = "https://api.bilibili.com";
+    private static final String HOME = "https://www.bilibili.com/";
+    private static final Pattern BV_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
+    private static final Pattern AV_PATTERN = Pattern.compile("\\bav(\\d+)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PAGE_PATTERN = Pattern.compile("[?&]p=(\\d+)");
+
+    private final OkHttpClient http;
+    private final OkHttpClient redirectProbe;
+    private final ObjectMapper objectMapper;
+    /** .env 里的那份（历史遗留，只有一个 SESSDATA）；库里有扫码凭据时以库里为准 */
+    private final String envCookie;
+    /** 扫码登录存库的凭据（2026-10-20 加）；为空表示还没接上 */
+    private BiliCredentialService credentialService;
+
+    /** 扫码登录后库里那份优先；没有才用 .env 这份老的 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCredentialService(BiliCredentialService credentialService) {
+        this.credentialService = credentialService;
+    }
+
+    /** 当前生效的 Cookie 头（每次调用现取：扫码登录后不用重启） */
+    private String cookieHeader() {
+        if (credentialService != null) {
+            String fromStore = credentialService.cookieHeader();
+            if (fromStore != null && !fromStore.isBlank()) {
+                return fromStore;
+            }
+        }
+        return envCookie;
+    }
+
+    public BilibiliClient(ObjectMapper objectMapper,
+                          @Value("${bilibili.sessdata:}") String sessdata,
+                          @Value("${bilibili.timeout-seconds:20}") int timeoutSeconds) {
+        this.objectMapper = objectMapper;
+        this.envCookie = buildCookieHeader(sessdata);
+        int timeout = Math.max(3, Math.min(120, timeoutSeconds));
+        this.http = new OkHttpClient.Builder()
+                .connectTimeout(Duration.ofSeconds(Math.min(timeout, 8)))
+                .readTimeout(Duration.ofSeconds(timeout))
+                .followRedirects(true)
+                .build();
+        // 短链只看一跳，自己校验跳到哪去，不盲目跟随
+        this.redirectProbe = http.newBuilder().followRedirects(false).build();
+    }
+
+    /**
+     * 当前登录的 B 站账号昵称（2026-10-21）。
+     *
+     * <p>为什么要暴露：用户问过「你自己不就是雾看花吗」，它答不上来——因为发评论的工具
+     * 只回了「发出去了 + rpid」，它连自己叫什么都不确定。昵称早就存在凭据表里，白存了。
+     *
+     * @return 昵称；没登录或没存就是空串
+     */
+    public String myDisplayName() {
+        try {
+            BiliCredential credential = credentialService == null ? null : credentialService.current();
+            return credential == null || credential.getUname() == null ? "" : credential.getUname().trim();
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
+    /** 当前登录账号的 mid（数字 UID）；没有就是空串 */
+    public String myMid() {
+        try {
+            BiliCredential credential = credentialService == null ? null : credentialService.current();
+            return credential == null || credential.getMid() == null ? "" : credential.getMid().trim();
+        } catch (RuntimeException exception) {
+            return "";
+        }
+    }
+
+    public boolean configured() {
+        return !cookieHeader().isBlank();
+    }
+
+    /**
+     * 登录态自检（2026-10-20 加）：{@code /x/web-interface/nav} 会回 {@code isLogin}、昵称和 uid。
+     * 面板"扫码完了到底登没登"就看它。
+     */
+    public record NavInfo(boolean loggedIn, long mid, String uname) {
+    }
+
+    public NavInfo nav() throws IOException {
+        return navWithCookie(cookieHeader());
+    }
+
+    /** 用指定 Cookie 问一次登录态（扫码成功后还没存库时要先验证再存） */
+    public NavInfo navWithCookie(String cookie) throws IOException {
+        Request.Builder builder = new Request.Builder()
+                .url(API + "/x/web-interface/nav")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", HOME);
+        if (cookie != null && !cookie.isBlank()) {
+            builder.header("Cookie", cookie);
+        }
+        try (Response response = http.newCall(builder.get().build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站接口 HTTP " + response.code());
+            }
+            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode data = root.path("data");
+            return new NavInfo(data.path("isLogin").asBoolean(false),
+                    data.path("mid").asLong(0), data.path("uname").asText(""));
+        }
+    }
+
+    /** 视频标识：BV 号优先；只有 av 号时用 aid。page 是分 P（1 起）。 */
+    public record VideoRef(String bvid, Long aid, Integer page) {
+    }
+
+    public record Page(int index, long cid, String title, int durationSeconds) {
+    }
+
+    public record VideoInfo(String bvid, long aid, String title, String desc, String owner,
+                            int durationSeconds, List<Page> pages) {
+    }
+
+    public record Transcript(boolean available, String reason, String language, boolean aiGenerated, String text) {
+    }
+
+    /** 可直接下载的播放流（2026-10-17：没字幕时抽帧用） */
+    public record PlayUrl(String url, long sizeBytes, int quality) {
+    }
+
+    /**
+     * 一条候选视频（2026-10-20 加：给「它自己刷 B 站」用）。
+     *
+     * @param source 从哪儿看到的（hot / following / later），推给他时要说清楚
+     */
+    public record FeedItem(String bvid, String title, String owner, String desc,
+                           int durationSeconds, long view, String source) {
+    }
+
+    /**
+     * 从任意输入里认视频：完整链接 / BV 号 / av 号 / b23.tv 短链 / 带 {@code ?p=3} 的分 P。
+     *
+     * <p>认不出来属于**确定性失败**（同一个输入再试多少次都一样），所以抛业务异常让工具直接回话，不走重试。
+     */
+    public VideoRef parse(String input) throws IOException {
+        String text = input == null ? "" : input.trim();
+        if (text.isBlank()) {
+            throw new BilibiliException("没看到链接或 BV 号。");
+        }
+        Integer page = intOrNull(text, PAGE_PATTERN);
+        Matcher bv = BV_PATTERN.matcher(text);
+        if (bv.find()) {
+            return new VideoRef(bv.group(), null, page);
+        }
+        Matcher av = AV_PATTERN.matcher(text);
+        if (av.find()) {
+            return new VideoRef(null, Long.parseLong(av.group(1)), page);
+        }
+        if (text.regionMatches(true, 0, "http", 0, 4)) {
+            String resolved = followOneHop(text);
+            Matcher shortBv = BV_PATTERN.matcher(resolved);
+            if (shortBv.find()) {
+                return new VideoRef(shortBv.group(), null, page != null ? page : intOrNull(resolved, PAGE_PATTERN));
+            }
+            Matcher shortAv = AV_PATTERN.matcher(resolved);
+            if (shortAv.find()) {
+                return new VideoRef(null, Long.parseLong(shortAv.group(1)), page);
+            }
+            throw new BilibiliException("这个链接跳转后没找到视频号，换个链接试试。");
+        }
+        throw new BilibiliException("认不出这是哪个视频，把 B 站链接或 BV 号发我。");
+    }
+
+    public VideoInfo videoInfo(VideoRef ref) throws IOException {
+        String query = ref.bvid() != null ? "bvid=" + ref.bvid() : "aid=" + ref.aid();
+        JsonNode root = get(API + "/x/web-interface/view?" + query, null);
+        int code = root.path("code").asInt(-1);
+        if (code != 0) {
+            throw new BilibiliException(viewError(code, root.path("message").asText("")));
+        }
+        JsonNode data = root.path("data");
+        List<Page> pages = new ArrayList<>();
+        for (JsonNode item : data.path("pages")) {
+            pages.add(new Page(item.path("page").asInt(), item.path("cid").asLong(),
+                    item.path("part").asText(""), item.path("duration").asInt()));
+        }
+        return new VideoInfo(data.path("bvid").asText(ref.bvid() == null ? "" : ref.bvid()),
+                data.path("aid").asLong(0L), data.path("title").asText(""), data.path("desc").asText(""),
+                data.path("owner").path("name").asText(""), data.path("duration").asInt(0), List.copyOf(pages));
+    }
+
+    /**
+     * 用**标题**去 B 站搜一个视频，返回 BV 号；**只有标题逐字一致才认**，否则返回 {@code null}。
+     *
+     * <p><b>为什么要它</b>（2026-10-10）：用户转发的 B站卡片**不带链接**（实测 {@code ark_data.fields}
+     * 只有 {@code [preview, source, source_logo, title]}），所以拿不到 BV。但卡片给了**完整标题**，
+     * 而 B站自己的搜索很准——实测三条真实的转发标题**全部在第一位就搜到逐字一致的结果**。
+     *
+     * <p><b>为什么要求逐字一致</b>：拿错视频比没拿到更糟——模型会对着一个不相干的视频侃侃而谈，
+     * 而且从回复里看不出任何异常。宁可返回 null，让上游如实说"搜不到，把链接发我"。
+     *
+     * <p>这个接口**不需要 wbi 签名**（2026-10-10 实测带 Cookie 直接 {@code code:0}）；
+     * 返回的 {@code title} 里带 {@code <em>} 高亮标签，比较前要去掉。
+     */
+    public String searchByTitle(String title) throws IOException {
+        String keyword = title == null ? "" : title.trim();
+        if (keyword.isBlank()) {
+            return null;
+        }
+        String encoded = URLEncoder.encode(keyword, StandardCharsets.UTF_8).replace("+", "%20");
+        JsonNode root = get(API + "/x/web-interface/search/type?search_type=video&keyword=" + encoded, HOME);
+        if (root.path("code").asInt(-1) != 0) {
+            return null;
+        }
+        String wanted = normalizeTitle(keyword);
+        for (JsonNode item : root.path("data").path("result")) {
+            if (normalizeTitle(deTag(item.path("title").asText(""))).equals(wanted)) {
+                String bvid = item.path("bvid").asText("");
+                if (!bvid.isBlank()) {
+                    return bvid;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 去掉搜索结果标题里的 {@code <em class="keyword">} 高亮标签，并还原常见实体。 */
+    private static String deTag(String title) {
+        String text = title == null ? "" : title.replaceAll("<[^>]+>", "");
+        return text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ");
+    }
+
+    /** 比标题时忽略空白与大小写——推送里偶尔多个空格，那不该算"不一致"。 */
+    private static String normalizeTitle(String title) {
+        return title == null ? "" : title.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    /** 取字幕正文。拿不到就返回 {@code available=false} 并说明原因——**上层要如实转告，不许编**。 */
+    public Transcript transcript(String bvid, long cid, int maxChars) throws IOException {
+        JsonNode tracks = subtitleTracks(bvid, cid);
+        if (tracks == null) {
+            return new Transcript(false, "这个视频的字幕信息拿不到（接口没返回）。", "", false, "");
+        }
+        List<JsonNode> usable = new ArrayList<>();
+        for (JsonNode track : tracks) {
+            if (track != null && !track.path("subtitle_url").asText("").isBlank()) {
+                usable.add(track);
+            }
+        }
+        if (usable.isEmpty()) {
+            return new Transcript(false, configured()
+                    ? "这个视频没有可用字幕（UP 主没传、也没有 B 站 AI 字幕）。"
+                    : "这个视频没读到字幕（也可能是没登录 B 站账号，AI 字幕需要登录态）。",
+                    "", false, "");
+        }
+        JsonNode picked = pick(usable);
+        List<String> lines = downloadSubtitle(picked.path("subtitle_url").asText(""));
+        if (lines.isEmpty()) {
+            return new Transcript(false, "字幕轨在，但内容是空的。", "", false, "");
+        }
+        StringBuilder text = new StringBuilder();
+        for (String line : lines) {
+            if (text.length() + line.length() + 1 > maxChars) {
+                text.append("\n…（字幕太长，后面省略）");
+                break;
+            }
+            if (text.length() > 0) {
+                text.append('\n');
+            }
+            text.append(line);
+        }
+        return new Transcript(true, "", picked.path("lan").asText(""), picked.path("ai_type").asInt(0) == 1,
+                text.toString());
+    }
+
+    // ------------------------------------------------------------------ 内部
+
+    /**
+     * 找一批候选视频（2026-10-20 加，「它自己刷 B 站」的入口）。
+     *
+     * <p><b>三个来源都实测过（2026-10-20，带 SESSDATA 直连）</b>：
+     * <ul>
+     *   <li>{@code hot} 全站热门排行 {@code /x/web-interface/ranking/v2?rid=0&type=all} —— **不用登录**、100 条；</li>
+     *   <li>{@code following} 关注动态 {@code /x/polymer/web-dynamic/v1/feed/all?type=video} —— 要登录，20 条；</li>
+     *   <li>{@code later} 稍后再看 {@code /x/v2/history/toview} —— 要登录，他当前 25 条。</li>
+     * </ul>
+     * 三个**都不需要 wbi 签名**（原来以为要，实测直接 GET 就是 {@code code:0}），所以没引入签名那套。
+     * 拿不到视频时就返回空列表，让上层如实说"这边没看到什么"，别编。
+     */
+    public List<FeedItem> feed(String source, int count) throws IOException {
+        int limit = Math.max(1, Math.min(30, count));
+        String normalized = source == null ? "hot" : source.trim().toLowerCase(Locale.ROOT);
+        if (!normalized.equals("following") && !normalized.equals("later")) {
+            normalized = "hot";
+        }
+        if (normalized.equals("hot")) {
+            JsonNode root = get(API + "/x/web-interface/ranking/v2?rid=0&type=all", HOME);
+            if (root.path("code").asInt(-1) != 0) {
+                throw new BilibiliException("取热门榜失败：" + root.path("message").asText(""));
+            }
+            List<FeedItem> items = new ArrayList<>();
+            for (JsonNode video : root.path("data").path("list")) {
+                FeedItem item = toFeedItem(video, "热门", "");
+                if (item != null && items.size() < limit) {
+                    items.add(item);
+                }
+            }
+            return items;
+        }
+
+        if (!configured()) {
+            throw new BilibiliException("这条要靠登录态，但现在没配置 B 站账号（服务器 .env 的 BILI_SESSDATA）。");
+        }
+        if (normalized.equals("later")) {
+            JsonNode root = get(API + "/x/v2/history/toview", HOME);
+            if (root.path("code").asInt(-1) != 0) {
+                throw new BilibiliException("取「稍后再看」失败：" + root.path("message").asText("")
+                        + "（登录态可能过期了）。");
+            }
+            List<FeedItem> items = new ArrayList<>();
+            for (JsonNode video : root.path("data").path("list")) {
+                FeedItem item = toFeedItem(video, "稍后再看", video.path("desc").asText(""));
+                if (item != null && items.size() < limit) {
+                    items.add(item);
+                }
+            }
+            return items;
+        }
+
+        JsonNode root = get(API + "/x/polymer/web-dynamic/v1/feed/all?type=video&page=1",
+                "https://t.bilibili.com/");
+        if (root.path("code").asInt(-1) != 0) {
+            throw new BilibiliException("取关注动态失败：" + root.path("message").asText("")
+                    + "（登录态可能过期了）。");
+        }
+        List<FeedItem> items = new ArrayList<>();
+        for (JsonNode entry : root.path("data").path("items")) {
+            JsonNode archive = entry.path("modules").path("module_dynamic").path("major").path("archive");
+            if (archive.isMissingNode() || archive.isEmpty()) {
+                continue;
+            }
+            String bvid = archive.path("bvid").asText("");
+            if (bvid.isBlank()) {
+                continue;
+            }
+            if (items.size() >= limit) {
+                break;
+            }
+            items.add(new FeedItem(bvid, archive.path("title").asText(""),
+                    "", archive.path("desc").asText(""),
+                    seconds(archive.path("duration_text").asText("")),
+                    archive.path("stat").path("play").asLong(0), "关注动态"));
+        }
+        return items;
+    }
+
+    private FeedItem toFeedItem(JsonNode video, String source, String desc) {
+        String bvid = video.path("bvid").asText("");
+        if (bvid.isBlank()) {
+            return null;
+        }
+        return new FeedItem(bvid, video.path("title").asText(""),
+                video.path("owner").path("name").asText(""),
+                desc.isBlank() ? video.path("desc").asText("") : desc,
+                video.path("duration").asInt(0),
+                video.path("stat").path("view").asLong(0), source);
+    }
+
+    /** {@code "12:34"} / {@code "1:02:03"} → 秒；解析不了给 0 */
+    private static int seconds(String durationText) {
+        if (durationText == null || durationText.isBlank()) {
+            return 0;
+        }
+        int total = 0;
+        for (String part : durationText.trim().split(":")) {
+            try {
+                total = total * 60 + Integer.parseInt(part.trim());
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return total;
+    }
+
+    /**
+     * 取一个**能直接下载的 mp4 地址**（2026-10-17 加，给"没字幕就抽帧"兜底用）。
+     *
+     * <p>走 {@code platform=html5&qn=32}：这个组合不需要 wbi 签名、拿到的是一条完整的 mp4
+     * （{@code durl}，不是 DASH 分片），实测 2 分钟的片子约 8.9MB、360p。
+     * **画质故意要最低**——我们只是抽几帧看"画面里有什么"，360p 足够，还能少下几十 MB。
+     */
+    public PlayUrl playUrl(String bvid, long cid) throws IOException {
+        String url = API + "/x/player/playurl?bvid=" + bvid + "&cid=" + cid
+                + "&qn=32&fnval=0&platform=html5&high_quality=1";
+        JsonNode root = get(url, "https://www.bilibili.com/video/" + bvid);
+        if (root.path("code").asInt(-1) != 0) {
+            throw new BilibiliException("取视频播放地址失败：" + root.path("message").asText(""));
+        }
+        JsonNode data = root.path("data");
+        JsonNode durl = data.path("durl");
+        if (!durl.isArray() || durl.isEmpty()) {
+            // DASH 形态（fnval 变过）也认一下，挑最低码率的那路视频
+            JsonNode videos = data.path("dash").path("video");
+            if (videos.isArray() && !videos.isEmpty()) {
+                JsonNode lowest = videos.get(videos.size() - 1);
+                return new PlayUrl(lowest.path("baseUrl").asText(""), lowest.path("size").asLong(0),
+                        lowest.path("id").asInt(0));
+            }
+            throw new BilibiliException("这个视频没有可直接下载的 mp4 流（可能要大会员或已下架）。");
+        }
+        JsonNode first = durl.get(0);
+        String streamUrl = first.path("url").asText("");
+        if (streamUrl.isBlank()) {
+            throw new BilibiliException("播放地址是空的。");
+        }
+        return new PlayUrl(streamUrl, first.path("size").asLong(0), data.path("quality").asInt(0));
+    }
+
+    /** 把播放地址的字节流下载到本地文件（带 Cookie 与 Referer，CDN 才认） */
+    public void downloadTo(String streamUrl, String bvid, Path target, long maxBytes) throws IOException {
+        Request.Builder builder = new Request.Builder().url(streamUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/video/" + bvid)
+                .get();
+        if (!cookieHeader().isBlank()) {
+            builder.header("Cookie", cookieHeader());
+        }
+        try (Response response = http.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("下载视频流失败 HTTP " + response.code());
+            }
+            long declared = response.body().contentLength();
+            if (declared > maxBytes) {
+                throw new IOException("视频太大（" + (declared / 1024 / 1024) + "MB），不下了");
+            }
+            try (var in = response.body().byteStream();
+                 var out = java.nio.file.Files.newOutputStream(target)) {
+                byte[] buffer = new byte[64 * 1024];
+                long total = 0;
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    total += read;
+                    if (total > maxBytes) {
+                        throw new IOException("视频超过大小限制");
+                    }
+                    out.write(buffer, 0, read);
+                }
+            }
+        }
+    }
+
+    private JsonNode subtitleTracks(String bvid, long cid) throws IOException {
+        String referer = "https://www.bilibili.com/video/" + bvid;
+        JsonNode root = get(API + "/x/player/wbi/v2?bvid=" + bvid + "&cid=" + cid, referer);
+        if (root.path("code").asInt(-1) != 0) {
+            // 参考实现（用户的 bilibili.js）在这里退回旧版无签名地址再试一次
+            JsonNode legacy = get(API + "/x/player/v2?bvid=" + bvid + "&cid=" + cid, referer);
+            return legacy.path("code").asInt(-1) == 0 ? findSubtitles(legacy.path("data")) : null;
+        }
+        return findSubtitles(root.path("data"));
+    }
+
+    /** 字幕轨在返回体里的位置有好几种写法（新版/旧版/不同视频），逐个试。 */
+    private static JsonNode findSubtitles(JsonNode data) {
+        if (data == null || !data.isObject()) {
+            return null;
+        }
+        for (JsonNode candidate : List.of(data.path("subtitle").path("subtitles"),
+                data.path("subtitle").path("list"), data.path("subtitles"), data.path("subtitle"))) {
+            if (candidate.isArray()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** 中文字幕优先，其次 AI 字幕，最后随便挑一条。 */
+    private static JsonNode pick(List<JsonNode> tracks) {
+        for (JsonNode track : tracks) {
+            String lan = track.path("lan").asText("").toLowerCase(Locale.ROOT);
+            if (lan.contains("zh-cn") || lan.contains("zh-hans") || lan.contains("ai-zh")) {
+                return track;
+            }
+        }
+        for (JsonNode track : tracks) {
+            if (track.path("lan").asText("").toLowerCase(Locale.ROOT).startsWith("zh")) {
+                return track;
+            }
+        }
+        for (JsonNode track : tracks) {
+            if (track.path("ai_type").asInt(0) == 0) {
+                return track;
+            }
+        }
+        return tracks.get(0);
+    }
+
+    private List<String> downloadSubtitle(String url) throws IOException {
+        String target = url.startsWith("//") ? "https:" + url
+                : url.startsWith("http://") ? "https://" + url.substring("http://".length()) : url;
+        JsonNode root = get(target, HOME);
+        List<String> lines = new ArrayList<>();
+        for (JsonNode line : root.path("body")) {
+            String content = line.path("content").asText("").trim();
+            if (!content.isBlank()) {
+                lines.add("[" + timestamp(line.path("from").asDouble(0)) + "] " + content);
+            }
+        }
+        return lines;
+    }
+
+    private static String timestamp(double seconds) {
+        int total = (int) Math.max(0, Math.floor(seconds));
+        int hours = total / 3600;
+        int minutes = (total % 3600) / 60;
+        int secs = total % 60;
+        return hours > 0 ? String.format("%d:%02d:%02d", hours, minutes, secs)
+                : String.format("%02d:%02d", minutes, secs);
+    }
+
+    /** 只看一跳，并且要求跳转目标仍然是 B 站域名——短链是用户给的，不能盲目跟随。 */
+    private String followOneHop(String url) throws IOException {
+        Request request = new Request.Builder().url(url).header("User-Agent", USER_AGENT)
+                .header("Referer", HOME).get().build();
+        try (Response response = redirectProbe.newCall(request).execute()) {
+            String location = response.header("Location");
+            if (location == null || location.isBlank()) {
+                return url;
+            }
+            String lowered = location.toLowerCase(Locale.ROOT);
+            if (!lowered.contains("bilibili.com") && !lowered.contains("b23.tv")) {
+                throw new BilibiliException("这个短链跳到的不是 B 站，我不跟。");
+            }
+            return location;
+        }
+    }
+
+    private JsonNode get(String url, String referer) throws IOException {
+        Request.Builder builder = new Request.Builder().url(url)
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", referer == null ? HOME : referer)
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+                .get();
+        if (!cookieHeader().isBlank()) {
+            builder.header("Cookie", cookieHeader());
+        }
+        try (Response response = http.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站接口 HTTP " + response.code());
+            }
+            return objectMapper.readTree(response.body().string());
+        }
+    }
+
+    /** 发评论/回复的结果：B 站的业务码 + 它给的一句人话 */
+    public record CommentResult(int code, String message, long rpid) {
+        public boolean ok() {
+            return code == 0;
+        }
+    }
+
+    /**
+     * 发一条评论或回复（2026-10-20 加，**写操作**）。
+     *
+     * <p>实测要点（见坑 72）：
+     * <ul>
+     *   <li>必须带 {@code csrf=<bili_jct>}，否则 {@code -111 CSRF 校验失败}；</li>
+     *   <li>{@code root} 与 {@code parent} 都传 = 回复楼中楼；都为空 = 顶级评论；</li>
+     *   <li>业务失败也会返回 HTTP 200，**必须看 {@code code}**（例如 `12002 当前页面评论功能已关闭`）；</li>
+     *   <li>**接口回 0 不等于公开可见**（可能进审核），插件作者也把这列为待验证项。</li>
+     * </ul>
+     */
+    /**
+     * 把一张图上传到 B 站的图片服务（2026-10-21）。
+     *
+     * <p>参数是**从前端 JS 里抠出来的**（`bili-comments.*.js` 里那个 uploader 的定义）：
+     * <pre>url: /x/dynamic/feed/draw/upload_bfs
+     * body: file_up=&lt;文件&gt; biz=new_dyn category=daily</pre>
+     * 字段名是 {@code file_up} 而**不是** {@code file}——我一开始按 {@code file} 传，
+     * 一直返回 {@code 4100001 参数错误}，猜了五种组合都不对，最后在 JS 里找到真正的名字。
+     *
+     * <p>返回的 {@code image_url} 是有时效的（签名 CDN），要立刻用。
+     */
+    public UploadedImage uploadImage(Path file) throws IOException {
+        BiliCredential credential = credentialService == null ? null : credentialService.current();
+        if (credential == null || credential.getBiliJct() == null || credential.getBiliJct().isBlank()) {
+            throw new BilibiliException("上传图片需要 bili_jct，现在没有——去面板「B站」页签扫一次码。");
+        }
+        if (file == null || !java.nio.file.Files.isRegularFile(file)) {
+            throw new BilibiliException("要上传的图片不存在。");
+        }
+        String contentType = detectImageType(file);
+        okhttp3.MultipartBody body = new okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart("file_up", file.getFileName().toString(),
+                        okhttp3.RequestBody.create(file.toFile(),
+                                okhttp3.MediaType.parse(contentType)))
+                .addFormDataPart("biz", "new_dyn")
+                .addFormDataPart("category", "daily")
+                .addFormDataPart("csrf", credential.getBiliJct())
+                .build();
+        Request request = new Request.Builder()
+                .url(API + "/x/dynamic/feed/draw/upload_bfs")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/")
+                .header("Origin", "https://www.bilibili.com")
+                .header("Cookie", cookieHeader())
+                .post(body)
+                .build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站图片上传 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            if (code != 0) {
+                throw new BilibiliException("上传图片失败（" + code + "：" + json.path("message").asText("") + "）");
+            }
+            JsonNode data = json.path("data");
+            String url = data.path("image_url").asText("");
+            if (url.isBlank()) {
+                throw new BilibiliException("上传接口没返回图片地址。");
+            }
+            return new UploadedImage(url, data.path("image_width").asInt(0), data.path("image_height").asInt(0));
+        }
+    }
+
+    private static String detectImageType(Path file) {
+        String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".png")) {
+            return "image/png";
+        }
+        if (name.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (name.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "image/jpeg";
+    }
+
+    /** 上传到 B 站图床后拿到的图片信息（发评论时要用） */
+    public record UploadedImage(String url, int width, int height) {
+    }
+
+    /** 发一条**带图**的评论（2026-10-21）。pictures 用 B 站评论接口认的那种结构 */
+    public CommentResult commentWithPictures(long aid, String message, java.util.List<UploadedImage> pictures,
+                                             Long root, Long parent) throws IOException {
+        if (pictures == null || pictures.isEmpty()) {
+            return comment(aid, message, root, parent);
+        }
+        StringBuilder json = new StringBuilder("[");
+        for (int i = 0; i < pictures.size(); i++) {
+            UploadedImage img = pictures.get(i);
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append("{\"img_src\":\"").append(img.url())
+                    .append("\",\"img_width\":").append(img.width())
+                    .append(",\"img_height\":").append(img.height()).append('}');
+        }
+        json.append(']');
+        return commentInternal(aid, message, root, parent, json.toString());
+    }
+
+    public CommentResult comment(long aid, String message, Long root, Long parent) throws IOException {
+        return commentInternal(aid, message, root, parent, null);
+    }
+
+    /** 真正干活的那个；picturesJson 为空就是纯文字评论 */
+    private CommentResult commentInternal(long aid, String message, Long root, Long parent,
+                                          String picturesJson) throws IOException {
+        BiliCredential credential = credentialService == null ? null : credentialService.current();
+        if (credential == null || credential.getBiliJct() == null || credential.getBiliJct().isBlank()) {
+            throw new BilibiliException("发评论需要 bili_jct，现在没有——去面板「B站」页签扫一次码。");
+        }
+        String referer = "https://www.bilibili.com/video/av" + aid;
+        okhttp3.FormBody.Builder form = new okhttp3.FormBody.Builder()
+                .add("oid", String.valueOf(aid))
+                .add("type", "1")
+                .add("message", message)
+                .add("csrf", credential.getBiliJct())
+                .add("plat", "1");
+        if (picturesJson != null && !picturesJson.isBlank()) {
+            form.add("pictures", picturesJson);
+        }
+        if (root != null && root > 0) {
+            form.add("root", String.valueOf(root));
+            form.add("parent", String.valueOf(parent == null || parent <= 1 ? root : parent));
+        }
+        Request.Builder builder = new Request.Builder()
+                .url(API + "/x/v2/reply/add")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", referer)
+                .header("Origin", "https://www.bilibili.com")
+                .header("Cookie", cookieHeader())
+                .post(form.build());
+        try (Response response = http.newCall(builder.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站评论接口 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            long rpid = json.path("data").path("rpid").asLong(0);
+            return new CommentResult(code, json.path("message").asText(""), rpid);
+        }
+    }
+
+    /** 别人在某条评论下的一条回复 */
+    public record CommentReply(long rpid, long rootRpid, long parentRpid, long mid,
+                               String uname, String message, long createdAtEpoch) {
+    }
+
+    /**
+     * 拉「某条评论下的回复」（2026-10-20 加，用于回复别人对它的回复）。
+     *
+     * <p>实测（`/x/v2/reply/reply?oid=<aid>&type=1&root=<评论rpid>`）：
+     * {@code code:0} + {@code data.replies} 数组；没人回复时 {@code replies} 是 {@code null} 而不是空数组。
+     * **不需要 wbi 签名**，但要带 Cookie（否则看不到部分内容）。
+     *
+     * @param rootRpid 那条被回复的评论（就是它自己发的那条）
+     */
+    public java.util.List<CommentReply> replies(long aid, long rootRpid, int limit) throws IOException {
+        java.util.List<CommentReply> result = new java.util.ArrayList<>();
+        if (aid <= 0 || rootRpid <= 0) {
+            return result;
+        }
+        int size = Math.max(1, Math.min(20, limit));
+        Request request = new Request.Builder()
+                .url(API + "/x/v2/reply/reply?oid=" + aid + "&type=1&root=" + rootRpid
+                        + "&ps=" + size + "&pn=1")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com/video/av" + aid)
+                .header("Cookie", cookieHeader())
+                .get()
+                .build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("B 站回复接口 HTTP " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            int code = json.path("code").asInt(-1);
+            if (code != 0) {
+                // -352 = 风控；其他码也照实说，别让调用方以为"没人回复"
+                throw new BilibiliException("拉回复失败（code " + code + "）："
+                        + json.path("message").asText(""));
+            }
+            JsonNode arr = json.path("data").path("replies");
+            if (arr == null || !arr.isArray()) {
+                return result;
+            }
+            for (JsonNode node : arr) {
+                long rpid = node.path("rpid").asLong(0);
+                if (rpid <= 0) {
+                    continue;
+                }
+                result.add(new CommentReply(
+                        rpid,
+                        node.path("root").asLong(0),
+                        node.path("parent").asLong(0),
+                        node.path("mid").asLong(0),
+                        node.path("member").path("uname").asText(""),
+                        node.path("content").path("message").asText(""),
+                        node.path("ctime").asLong(0)));
+            }
+            return result;
+        }
+    }
+
+    private String viewError(int code, String message) {
+        if (code == -404) {
+            return "这个视频不存在或已被删除。";
+        }
+        if (code == -101 || code == -400) {
+            return "登录态失效了（B 站返回 " + code + "）。";
+        }
+        return "取视频信息失败：" + (message == null || message.isBlank() ? "错误码 " + code : message);
+    }
+
+    /**
+     * 把配置里的登录信息整理成 Cookie 头。照抄参考实现：扫码登录存的是整条 Cookie 串，
+     * 手工填的通常只有 SESSDATA 的值；两者都要认。缺 buvid3 时补一个随机值。
+     */
+    static String buildCookieHeader(String input) {
+        String raw = input == null ? "" : input.trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+        String header;
+        if (raw.contains("=")) {
+            StringBuilder joined = new StringBuilder();
+            for (String part : raw.split("[;\\r\\n]+")) {
+                String trimmed = part.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                if (joined.length() > 0) {
+                    joined.append("; ");
+                }
+                joined.append(trimmed);
+            }
+            header = joined.toString();
+        } else {
+            header = "SESSDATA=" + raw;
+        }
+        if (!header.toLowerCase(Locale.ROOT).contains("buvid3=")) {
+            header += "; buvid3=" + randomBuvid();
+        }
+        return header;
+    }
+
+    private static String randomBuvid() {
+        String hex = "0123456789ABCDEF";
+        StringBuilder value = new StringBuilder(32);
+        java.util.Random random = new java.util.Random();
+        for (int i = 0; i < 32; i++) {
+            value.append(hex.charAt(random.nextInt(hex.length())));
+        }
+        return value + "infoc";
+    }
+
+    private static Integer intOrNull(String text, Pattern pattern) {
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            int value = Integer.parseInt(matcher.group(1));
+            return value > 0 ? value : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /** 确定性失败：链接不认、视频不存在、没字幕——**不要交给工具框架重试**（坑 67）。 */
+    public static class BilibiliException extends RuntimeException {
+        public BilibiliException(String message) {
+            super(message);
+        }
+    }
+}
+
+

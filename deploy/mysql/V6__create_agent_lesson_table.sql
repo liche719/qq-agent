@@ -8,7 +8,7 @@
 --      挡的是"写感悟"（"以后要更细心"这种没法执行的句子）。
 --   2. ExpeL 的四个操作 ADD / UPVOTE / DOWNVOTE / EDIT；但**投票只能来自后续真实事件**
 --      （没再犯 / 又犯了），模型不能自己给自己点赞 —— 否则又是自我暗示。
---   3. S/D + next_review_at 走 FSRS（与倾向共用 com.liche.wechatagent.self.Fsrs 那套数学）：
+--   3. S/D + next_review_at 走 FSRS（与倾向共用 com.liche.qqagent.self.Fsrs 那套数学）：
 --      "该复查了"是算出来的，不是拍脑袋定的天数。
 --   4. 同类（category + 文本相似度）**合并**而不是新增，并且清单有上限 —— 否则退化成流水账/写作文。
 CREATE TABLE IF NOT EXISTS agent_lesson (

@@ -27,7 +27,7 @@
 
 ```powershell
 # 1) 基础设施（Docker Desktop 需先启动）
-cd wechat-agent-java
+cd qq-agent
 docker compose up -d mysql redis searxng     # 本地这份 compose 仍是 MySQL/Redis/SearXNG
 
 # 2) 凭据：复制 .env.example 为 .env（已 gitignore），至少填 LLM_API_KEY
@@ -35,7 +35,7 @@ $env:LLM_API_KEY='…'
 
 # 3) 起服务
 mvn -DskipTests package
-java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
+java -jar "target\qq-agent-0.0.1-SNAPSHOT.jar"
 ```
 
 - 面板：<http://127.0.0.1:8080/>（Vue 单页应用；本机回环免口令）。
@@ -66,7 +66,7 @@ java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
 （首页 / 前端资源 / 无口令 401 / 编码路径 401 / 带口令接口 / 登录 / 域名证书），任一项不符就推 QQ 告警并把流水线置红。
 
 - 生产面板：**`https://liche.cloud/`**（标准 443、Let's Encrypt 证书，浏览器绿锁）。
-- 服务器 `/opt/wechat-agent-infra`，4 个容器 `wechat-agent-{java,postgres,redis,searxng}`。
+- 服务器 `/opt/qq-agent`，4 个容器 `wechat-agent-{java,postgres,redis,searxng}`。
 - **数据卷任何情况下都不删除、不重建**。
 - Secrets、受限部署命令、验签细节见 `docs/deploy-security.md`；完整步骤与排查见 `AGENTS.md` §3/§4。
 

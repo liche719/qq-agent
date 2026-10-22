@@ -1,0 +1,132 @@
+package com.liche.qqagent.memory;
+
+import com.liche.qqagent.agent.ContextStore;
+import com.liche.qqagent.backup.MemoryBackupJob;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class MemoryForgetServiceTest {
+
+    @Test
+    void cancelsExtractionThenDeletesMemoryAndPurgesAssociatedData() {
+        MemoryService memoryService = mock(MemoryService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        ForgottenMemory forgotten = new ForgottenMemory(Memory.KIND_PROFILE, 5L, "用户的私密长期目标", "", List.of("m-5"));
+        when(memoryService.forget("u1", 5L)).thenReturn(forgotten);
+        when(contextStore.removeMemoryEvidence("u1", List.of("m-5"), "用户的私密长期目标")).thenReturn(true);
+        when(backupJob.purgeForgottenMemory("u1", Memory.KIND_PROFILE, 5L))
+                .thenReturn(new MemoryBackupJob.PurgeResult(2, true));
+        MemoryForgetService service = new MemoryForgetService(memoryService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
+
+        MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "M", 5L);
+
+        var order = inOrder(extractionScheduler, memoryService);
+        order.verify(extractionScheduler).cancelPending("u1");
+        order.verify(memoryService).forget("u1", 5L);
+        verify(contextStore).removeMemoryEvidence("u1", List.of("m-5"), "用户的私密长期目标");
+        verify(backupJob).purgeForgottenMemory("u1", Memory.KIND_PROFILE, 5L);
+        assertTrue(outcome.contextCleared());
+        assertTrue(outcome.backupsComplete());
+        assertEquals(1, outcome.removedRecordCount());
+        assertFalse(outcome.legacyContextReset());
+    }
+
+    @Test
+    void clearsShortContextWhenLegacyMemoryHasNoSourceMessageProvenance() {
+        MemoryService memoryService = mock(MemoryService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        ForgottenMemory forgotten = new ForgottenMemory(Memory.KIND_PROFILE, 6L, "旧版记忆", "", List.of());
+        when(memoryService.forget("u1", 6L)).thenReturn(forgotten);
+        when(contextStore.clearForMemoryForget("u1")).thenReturn(true);
+        when(backupJob.purgeForgottenMemory("u1", Memory.KIND_PROFILE, 6L))
+                .thenReturn(new MemoryBackupJob.PurgeResult(0, true));
+        MemoryForgetService service = new MemoryForgetService(memoryService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
+
+        MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "M", 6L);
+
+        verify(contextStore).clearForMemoryForget("u1");
+        verify(contextStore, never()).removeMemoryEvidence(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString());
+        assertTrue(outcome.legacyContextReset());
+    }
+
+    @Test
+    void purgesConversationSnapshotsAlongsideDurableEvidence() {
+        MemoryService memoryService = mock(MemoryService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        ConversationMemoryService conversations = mock(ConversationMemoryService.class);
+        ForgottenMemory forgotten = new ForgottenMemory(Memory.KIND_PROFILE, 8L, "用户的私密长期目标", "", List.of("m-8"));
+        when(memoryService.forget("u1", 8L)).thenReturn(forgotten);
+        when(contextStore.removeMemoryEvidence("u1", List.of("m-8"), "用户的私密长期目标")).thenReturn(true);
+        when(backupJob.purgeForgottenMemory("u1", Memory.KIND_PROFILE, 8L))
+                .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
+        when(backupJob.purgeForgottenConversationEvidence("u1", List.of("m-8"), "用户的私密长期目标"))
+                .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
+        MemoryForgetService service = new MemoryForgetService(memoryService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob, conversations);
+
+        MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "M", 8L);
+
+        verify(conversations).forgetSourceMessageIds("u1", List.of("m-8"));
+        verify(backupJob).purgeForgottenConversationEvidence("u1", List.of("m-8"), "用户的私密长期目标");
+        assertTrue(outcome.backupsComplete());
+    }
+
+    /** 经历（原 episode）类证据也要按来源一起清掉 */
+    @Test
+    void alsoForgetsExperienceEvidenceBackedByTheSameMessages() {
+        MemoryService memoryService = mock(MemoryService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        ForgottenMemory forgotten = new ForgottenMemory(Memory.KIND_TASK, 9L, "本周完成实验报告", "extraction",
+                List.of("m-9"));
+        when(memoryService.forget("u1", 9L)).thenReturn(forgotten);
+        when(backupJob.purgeForgottenMemory("u1", Memory.KIND_TASK, 9L))
+                .thenReturn(new MemoryBackupJob.PurgeResult(1, true));
+        MemoryForgetService service = new MemoryForgetService(memoryService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
+
+        service.forget("u1", "M", 9L);
+
+        verify(memoryService).forgetEvidence("u1", List.of("m-9"), "本周完成实验报告");
+    }
+
+    /** id 不存在 / 不属于该用户时：服务返回 null，这里必须安静收场，不能按 null 取 layer 崩掉 */
+    @Test
+    void doesNothingWhenTheMemoryIsNotOwnedByTheUser() {
+        MemoryService memoryService = mock(MemoryService.class);
+        MemoryExtractionScheduler extractionScheduler = mock(MemoryExtractionScheduler.class);
+        ContextStore contextStore = mock(ContextStore.class);
+        MemoryBackupJob backupJob = mock(MemoryBackupJob.class);
+        when(memoryService.forget("u1", 77L)).thenReturn(null);
+        MemoryForgetService service = new MemoryForgetService(memoryService,
+                extractionScheduler, contextStore, new MemoryMutationLock(), backupJob);
+
+        MemoryForgetService.ForgetOutcome outcome = service.forget("u1", "M", 77L);
+
+        assertEquals(0, outcome.removedRecordCount());
+        assertFalse(outcome.contextCleared());
+        assertFalse(outcome.legacyContextReset());
+        verify(backupJob, never()).purgeForgottenMemory(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyLong());
+    }
+}

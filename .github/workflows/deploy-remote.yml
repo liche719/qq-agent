@@ -64,7 +64,7 @@ jobs:
         with:
           context: .
           load: true
-          tags: wechat-agent:${{ github.sha }}
+          tags: qq-agent:${{ github.sha }}
           # 复用上一次构建的层（前端 npm 依赖、Maven 依赖、基础镜像），显著缩短部署时间
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -77,13 +77,13 @@ jobs:
           set -eu
           IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker tag "wechat-agent:${GITHUB_SHA}" "${IMAGE}:${GITHUB_SHA}"
+          docker tag "qq-agent:${GITHUB_SHA}" "${IMAGE}:${GITHUB_SHA}"
           docker push "${IMAGE}:${GITHUB_SHA}"
           echo "已推送 ${IMAGE}:${GITHUB_SHA}"
 
       - name: Export image（tar 模式）
         if: env.DEPLOY_MODE == 'tar'
-        run: docker save wechat-agent:${GITHUB_SHA} | gzip > wechat-agent-${GITHUB_SHA}.tar.gz
+        run: docker save qq-agent:${GITHUB_SHA} | gzip > qq-agent-${GITHUB_SHA}.tar.gz
 
       - name: Install SSH key
         env:
@@ -123,14 +123,14 @@ jobs:
           SECRET=$(printf '%s' "$DEPLOY_TAR_SECRET" | tr -d '\r\n')
           mac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}'; }
 
-          image_sha=$(sha256sum wechat-agent-${GITHUB_SHA}.tar.gz | cut -d' ' -f1)
+          image_sha=$(sha256sum qq-agent-${GITHUB_SHA}.tar.gz | cut -d' ' -f1)
 
           # **分片并行上传**（2026-09-30 改）：GitHub runner（Azure 美国）到这台服务器的国际路由上
           # 单条 TCP 会塌缩——实测同一份数据单流 31 KB/s、8 路并行 182 KB/s（快 5.85 倍），
           # 227 MB 的镜像因此从 44 秒劣化到 118 分钟。分片并发把这个瓶颈绕开。
           # 安全性不变：每片各自带 HMAC + sha256，合并后再校验**整包** sha256 才算通过；
           # 服务端只是多了两个子命令（upload-image-part / join-image），没有放宽任何校验。
-          TARBALL=wechat-agent-${GITHUB_SHA}.tar.gz
+          TARBALL=qq-agent-${GITHUB_SHA}.tar.gz
           PARTS=16
           TOTAL=$(stat -c%s "$TARBALL")
           CHUNK=$(( (TOTAL + PARTS - 1) / PARTS ))

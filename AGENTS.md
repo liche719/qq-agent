@@ -15,18 +15,18 @@
 - 汇报用结论式中文，避免长篇过程描述。
 - **先定方案再动手（2026-09-14 用户明确要求）**：动手前先把方案写出来、想清"最终效果会变成什么样、哪里会崩"再开工，不要边想边做；涉及存量数据/线上行为的改动先给方案等确认。
 - **等部署/等长任务用轮询，不许"睡一个猜的时长"（2026-10-21 用户明确要求）**：CI 部署实测 7~9 分钟且波动大，睡 9 分钟既可能在白等、也可能没等够。正确做法：轮询真实信号——
-  `docker inspect -f '{{.Config.Image}}' wechat-agent-java` 看镜像 tag 是否变成目标 sha，
+  `docker inspect -f '{{.Config.Image}}' qq-agent` 看镜像 tag 是否变成目标 sha，
   应用起来后再轮询 `curl -sk https://127.0.0.1/api/site/info` 到 200，
   最后用接口/日志验证功能。中间每次间隔 5~30 秒即可，不要固定 sleep。
 
 ## 1. 项目
 
-- 名称：**qq-agent** —— QQ 私聊长期陪伴 Agent 后端（仓库 `liche719/qq-agent`；历史名 `wechat-qq-agent` 只是仓库重定向，代码目录仍叫 `wechat-agent-java`）。
+- 名称：**qq-agent** —— QQ 私聊长期陪伴 Agent 后端（仓库 `liche719/qq-agent`；历史名 `wechat-qq-agent` 只是仓库重定向，代码目录仍叫 `qq-agent`）。
 - 技术栈：Spring Boot 3.5 / Java 21 / Maven；**PostgreSQL 16 + pgvector** + Spring Data JPA（2026-09-18 从 MySQL 8 整库迁来，见 `docs/pg-migration.md`）；Redis；Quartz(JDBC 持久化)；LangChain4j + 自研 OpenAI 兼容 ChatModel；SearX-NG 自托管搜索；QQ 官方机器人 WebSocket（默认通道）；**微信 iLink 通道 2026-09-12 已移除**。
 - 核心优先级：用户长期记忆不丢失 > 系统稳定运行 > 交互体验友好。
-- 代码目录：`C:\Users\33721\Desktop\wechat-agent\wechat-agent-java`
+- 代码目录：`C:\Users\33721\Desktop\wechat-agent\qq-agent`
 - 仓库：https://github.com/liche719/qq-agent （private，账号 liche719，主分支 main；**旧名 wechat-qq-agent 只是重定向**，ghcr 镜像名用的是真名 qq-agent）
-- 入口类：`com.liche.wechatagent.WechatAgentApplication`
+- 入口类：`com.liche.qqagent.QqAgentApplication`
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`docs/archive/code-analysis-2026-09-02/`（**2026-09-02 的旧分析，部分结论已过期**，已存档）。
@@ -37,8 +37,8 @@
 
 | 用途 | 位置 |
 |---|---|
-| 本地 LLM / QQ 凭据 | `wechat-agent-java\.env`（gitignore） |
-| 服务器容器凭据 | 服务器 `120.25.170.92:/opt/wechat-agent-infra/.env`（600） |
+| 本地 LLM / QQ 凭据 | `qq-agent\.env`（gitignore） |
+| 服务器容器凭据 | 服务器 `120.25.170.92:/opt/qq-agent/.env`（600） |
 | 运维面板登录 | 服务器 `.env` 的 `ADMIN_USERNAME`（现为 `rootlcw`）与 `ADMIN_API_KEY`（600）；明文只由用户保存 |
 | 服务器 SSH root 密码 | 由用户提供 |
 | 域名 DNS API（RAM 子账号，仅 `AliyunDNSFullAccess`） | 服务器 `/root/.acme.sh/account.conf`（600，`SAVED_Ali_Key`/`SAVED_Ali_Secret`） |
@@ -49,13 +49,13 @@
 
 ```powershell
 # 1) 基础设施（需先启动 Docker Desktop）
-cd "C:\Users\33721\Desktop\wechat-agent\wechat-agent-java"
+cd "C:\Users\33721\Desktop\wechat-agent\qq-agent"
 docker compose up -d mysql redis searxng     # 本地 compose 仍是 MySQL 3306 / Redis 6379 / SearXNG 8888，都只绑 127.0.0.1
                                              # ⚠️ 生产早就是 PostgreSQL 了，本地这份 mysql 是历史残留（见 docs/pg-migration.md）
 
 # 2) 打包与启动（.env 会自动加载）
 mvn -DskipTests package
-java -jar "target\wechat-agent-java-0.0.1-SNAPSHOT.jar"
+java -jar "target\qq-agent-0.0.1-SNAPSHOT.jar"
 ```
 
 - 凭据来源：项目根目录 `.env`（已 gitignore）。Spring 用 `spring.config.import: optional:file:.env[.properties]` 加载。
@@ -85,7 +85,7 @@ $env:QUARTZ_DELEGATE='org.quartz.impl.jdbcjobstore.PostgreSQLDelegate'
 $env:WECHAT_CHANNEL_MODE='simulator'; $env:QQ_ENABLED='false'
 $env:SERVER_PORT='18080'; $env:SERVER_SSL_ENABLED='false'
 $env:MEMORY_SELF_ENABLED='false'; $env:SCHEDULED_ENABLED='false'
-java -jar target\wechat-agent-java-0.0.1-SNAPSHOT.jar
+java -jar target\qq-agent-0.0.1-SNAPSHOT.jar
 # 另开窗口：POST http://127.0.0.1:18080/api/sim/send   {"userId":"sim-1","content":"…"}
 # 跑完：docker rm -f wv-pg wv-redis
 ```
@@ -98,12 +98,12 @@ java -jar target\wechat-agent-java-0.0.1-SNAPSHOT.jar
 ## 3. 远程部署（生产）
 
 - 服务器：`120.25.170.92`，root SSH（密码由用户提供，不写进文件）。
-- 目录 `/opt/wechat-agent-infra`：
+- 目录 `/opt/qq-agent`：
   - `docker-compose.yml` —— **2026-09-20 已改名 `docker-compose.localdev-unused.txt`**：那是 09-11 从本地开发版拷过来的残留（里面 mysql 口令还是 `root`），4 个容器其实全来自下面那份；留着它会让"不加 `-f` 的 `docker compose up -d`"用同名容器顶掉运行中的 redis/searxng。
   - `docker-compose.remote.yml` —— 含 agent 服务，CI 使用
   - `.env`（权限 600，服务器侧凭据，不入库、CI 也不传）
   - `docker/searxng/settings.yml`
-- 容器：`wechat-agent-postgres`(pgvector/pg16) / `wechat-agent-redis` / `wechat-agent-searxng` / `wechat-agent-java` —— **只有 4 个**（nginx 网关已于 2026-09-12 按用户要求拆除；mysql 已于 2026-09-20 退役）。
+- 容器：`qq-agent-postgres`(pgvector/pg16) / `qq-agent-redis` / `qq-agent-searxng` / `qq-agent` —— **只有 4 个**（nginx 网关已于 2026-09-12 按用户要求拆除；mysql 已于 2026-09-20 退役）。
 - 数据卷：`wechat-agent-infra_postgres-data` / `_redis-data` / `_searxng-data` —— **任何操作都不允许删除或重建这些卷**。旧的 `_mysql-data` 已按用户决定于 2026-09-20 删除（删前整库 dump 服务器 + 本地各留一份，见 `docs/pg-migration.md`）。
 - agent 容器用 `network_mode: host`，**直接对公网监听 `0.0.0.0:443`（HTTPS，标准端口，应用自带 TLS）**；MySQL/Redis/SearXNG 走 `127.0.0.1`。端口由 compose 的 `SERVER_PORT` 决定（默认 443；服务器 `.env` 另有一行显式覆盖）。
 - 远程排查（面板走 HTTPS，域名证书有效，本机排查可用 `-k`）：
@@ -120,7 +120,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   16 片并发、每片重试 3 次、进度看得见。**成功 2.8 分钟 vs 失败 8 分钟，期望值反而更差**。
   要再试 registry：手动触发 workflow 时选 `deploy_mode=registry`（那条路留着）。
   **改了 `deploy/server/wechat-deploy` 必须手动同步到服务器 `/usr/local/bin/`**（CI 不传它）。
-- 只重启 agent：`cd /opt/wechat-agent-infra && AGENT_IMAGE=wechat-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
+- 只重启 agent：`cd /opt/qq-agent && AGENT_IMAGE=qq-agent:<sha> docker compose -f docker-compose.remote.yml up -d --no-build agent`
 
 ### 运维面板访问方式（应用自带 HTTPS，2026-09-12 定型）
 
@@ -134,7 +134,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 ### HTTPS 证书（域名 liche.cloud，2026-09-12 已上线）
 
 - 域名 2026-09-11 在阿里云注册（到期 2027-09-11，NS = `dns31/dns32.hichina.com`）；**是 .cloud，不是 liche.online**。方案：**acme.sh + Let's Encrypt + DNS-01（`dns_ali` 插件）**——不用 80/443、不用停服、也不需要备案（HTTP-01 走不通：大陆 ECS 上未备案域名的 80/443 会被阿里云拦）。
-- 服务器已装好：`/root/.acme.sh`（v3.1.3，**从 Gitee 镜像装**；`curl https://get.acme.sh` 走 GitHub codeload 会 error 52）、LE 账号已注册、**每天 06:55 `acme.sh --cron`** 自动续期（到期前 60 天重签 → `--install-cert` 的 reloadcmd 覆盖 `docker/tls/` → `docker restart wechat-agent-java`）。**换证书必须重启容器**，Spring Boot 不热加载。自签备份在 `docker/tls/server.{crt,key}.selfsigned`，回滚＝覆盖回去 + 重启。
+- 服务器已装好：`/root/.acme.sh`（v3.1.3，**从 Gitee 镜像装**；`curl https://get.acme.sh` 走 GitHub codeload 会 error 52）、LE 账号已注册、**每天 06:55 `acme.sh --cron`** 自动续期（到期前 60 天重签 → `--install-cert` 的 reloadcmd 覆盖 `docker/tls/` → `docker restart qq-agent`）。**换证书必须重启容器**，Spring Boot 不热加载。自签备份在 `docker/tls/server.{crt,key}.selfsigned`，回滚＝覆盖回去 + 重启。
 - 云解析由服务器脚本用 **RAM 子账号 AccessKey**（只授 `AliyunDNSFullAccess`）经 API 维护；密钥只写 `/root/.acme.sh/account.conf`（600），**不入库、不进 CI、不写日志**。直接调 AliyunDNS API 要手写 HMAC-SHA1 RPC 签名（可用 Python 实现 `DescribeDomains`/`DescribeDomainRecords`/`AddDomainRecord`）。签发/安装脚本 `/root/issue-liche-cloud.sh`。
 - **当前证书**：`CN = liche.cloud`（Let's Encrypt YR2），有效期 2026-09-12 → **2026-12-11**；`curl https://liche.cloud/` 不加 `-k` 返回 200。
 - **端口**：应用监听标准 **443**（服务器 `.env` 的 `SERVER_PORT=443`），地址因此不带端口号。**备案 2026-09-20 已通过（粤ICP备2026141530号），443 上跑 `liche.cloud` 现在是完全合规的**（以前那套"未备案域名可能被拦、回滚到 8443"的说辞已作废）。LE 不给 IP 签证书，所以**只有域名访问才有绿锁**，IP 访问必然提示"证书名称不匹配"。
@@ -177,7 +177,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 > **这里不存会腐坏的数字快照。** 要看实时数据：面板 `https://liche.cloud/` 或 `/api/admin/overview`。
 
-- **4 个容器**：`wechat-agent-{java,postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
+- **4 个容器**：`qq-agent` + `qq-agent-{postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
 - **规模**：工具 **64 个 / 21 个类**、系统提示词 **30 条**（2026-10-22 压缩重写：15 并入 9，之后新增第 30 条）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
@@ -210,7 +210,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   播报**不进对话记忆**（`conversation_memory` 只有最终答复），它是过程噪音。
 - **对话的思考档位按跳分**：第一跳 `dialog_first=high`（读懂意图、决定动不动手），之后 `dialog=low`（填参数、看结果、收尾）。实测同题 high/low 的思考量只差 100~200 token（约 0.0008 元），而少一跳能省 0.007 元。
 - **改思考档位不生效？先查表**：`llm_scenario_setting` 里的面板覆盖值**优先于** yml 和 compose。
-  排查顺序：表 → 容器环境变量（`docker exec wechat-agent-java env | grep REASONING`）→ yml。
+  排查顺序：表 → 容器环境变量（`docker exec qq-agent env | grep REASONING`）→ yml。
   档位共 **8 档**：`none/minimal/low/medium/high/xhigh/ultra/max`（`none` 才是真关思考；
   `low/medium/high` 日常几乎没差别，要更聪明得用 `max`）。实测表见 `docs/llm-call-modes.md` 末节。
 - **它现在能看、能画**（2026-10-21）：
@@ -264,10 +264,10 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
   - `panel-app/` + `liche-panel-1.0.apk` —— 面板安卓壳与产物（**在这里，不在仓库里**；仓库只跟踪说明文档 `docs/panel-app.md`）
   - `video/qqagent/` —— **B 站成片的 Remotion 工程**（77 镜头；`node_modules` 占 487 MB，可随时删掉重装）。**只在本机，绝不上传 GitHub**（仓库 `.gitignore` 有 `/video/` 兜底）
   - `_archive/` —— 历史存档（迁移备份、早期笔记、本地日志、TTS 样本），索引见 `_archive/README.md`；**可以整目录删，不影响运行**
-  - `wechat-agent-java/` —— 真正的 git 仓库
+  - `qq-agent/` —— 真正的 git 仓库
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
   在 `.gitignore` 里，新增要 `git add -f`；**现役在根目录、存档在 `docs/archive/`**）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
-  `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
+  `mysql/` 历史脚本、`server/wechat-deploy`（服务端脚本名保持 `wechat-deploy`，改名需同时改 authorized_keys））/ `tools/ui-verify/`（面板验证脚本）。
 
 
 

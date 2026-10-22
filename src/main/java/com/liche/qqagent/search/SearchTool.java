@@ -1,0 +1,472 @@
+package com.liche.qqagent.search;
+
+import com.liche.qqagent.tool.ToolStatusService;
+import com.liche.qqagent.tool.ToolExecutionPolicy;
+import com.liche.qqagent.tool.ToolExecutionClass;
+import dev.langchain4j.agent.tool.Tool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.time.LocalDate;
+import java.time.ZoneId;
+
+/**
+ * 工具1：全网搜索工具。
+ * - 对接 SearX-NG；结果去重降噪，每条截取核心摘要，最多返回 Top10
+ * - 请求超时 15 秒（配置化），超时判定为失败进入重试
+ * - 调用前主动推送状态提示「我正在搜索相关资料…」
+ */
+@Component
+public class SearchTool implements com.liche.qqagent.tool.AgentToolProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(SearchTool.class);
+
+    private final SearxngClient searxngClient;
+    /** SearXNG 搜不到 / 搜跑偏时的兜底（可空；按次收费，只在需要时才调） */
+    private final DeepSeekSearchClient deepSeekSearchClient;
+    /**
+     * DS 搜索的每日配额（2026-10-20 加）。用户要求：搜索优先走 DS，但**当天一个账号最多 20 次**，
+     * 超了改用自托管 SearXNG 兜底。可空——老测试构造器走的就是「没有配额」这条路。
+     */
+    private DeepSeekSearchQuota quota;
+    private final WebPageTool webPageTool;
+    private final ToolStatusService statusService;
+    private final int timeoutSeconds;
+    private final int maxResults;
+    private final int deepReadCount;
+    private final int deepReadChars;
+    private final ZoneId timeZone;
+
+    /** 每个来源后面附一行带此标记的"标题 + 链接"，供 AgentLoop 在回复结尾统一生成"参考来源"。 */
+    public static final String SOURCE_MARK = "🔗 ";
+
+    /**
+     * **必须显式 {@code @Autowired}**：这个类有两个构造器（下面那个是给历史测试用的），
+     * 不加注解 Spring 选不出来，会去找默认构造器然后在启动时报
+     * {@code No default constructor found} —— 2026-10-17 就这么把生产打挂过一次（坑 70）。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    public SearchTool(SearxngClient searxngClient,
+                      DeepSeekSearchClient deepSeekSearchClient,
+                      WebPageTool webPageTool,
+                      ToolStatusService statusService,
+                      @Value("${searxng.timeout-seconds:15}") int timeoutSeconds,
+                      @Value("${searxng.max-results:10}") int maxResults,
+                      @Value("${searxng.deep-read-count:3}") int deepReadCount,
+                      @Value("${searxng.deep-read-chars:1200}") int deepReadChars,
+                      @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
+        this.searxngClient = searxngClient;
+        this.deepSeekSearchClient = deepSeekSearchClient;
+        this.webPageTool = webPageTool;
+        this.statusService = statusService;
+        this.timeoutSeconds = Math.max(1, Math.min(120, timeoutSeconds));
+        this.maxResults = Math.max(1, Math.min(10, maxResults));
+        this.deepReadCount = Math.max(0, Math.min(5, deepReadCount));
+        this.deepReadChars = Math.max(300, Math.min(6000, deepReadChars));
+        this.timeZone = parseZone(timeZoneId);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setQuota(DeepSeekSearchQuota quota) {
+        this.quota = quota;
+    }
+
+    /** 不带兜底的构造器（历史测试用；等价于"只走 SearXNG"） */
+    public SearchTool(SearxngClient searxngClient,
+                      WebPageTool webPageTool,
+                      ToolStatusService statusService,
+                      int timeoutSeconds,
+                      int maxResults,
+                      int deepReadCount,
+                      int deepReadChars,
+                      String timeZoneId) {
+        this(searxngClient, null, webPageTool, statusService, timeoutSeconds, maxResults,
+                deepReadCount, deepReadChars, timeZoneId);
+    }
+
+    @Tool(value = "搜索互联网获取资料，返回最相关的结果。需要查询实时信息、新闻、未知资料时使用。"
+            + "可以用 count 指定要几条（默认 6、最多 15）：查一个事实给 3–5 条，做汇总/比价或要多个来源时给 10–15 条。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public String searchWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                            @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                    required = false) Integer count) {
+        statusService.push("我正在搜索相关资料…");
+        return search(requireQuery(query), null, false, false, count);
+    }
+
+    @Tool(value = "核对当前、最新、今天、正在使用的版本、价格、活动、新闻等会随时间变化的事实。会限定近一年结果并带入当前年月。拿到结果后，必须阅读可靠来源的原文再给出明确结论。"
+            + "count 可以指定要几条（默认 6、最多 15）。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public String searchLatestWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                                  @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                          required = false) Integer count) {
+        statusService.push("我正在核对最新资料…");
+        String requestedQuery = requireQuery(query);
+        LocalDate today = LocalDate.now(timeZone);
+        String datedQuery = requestedQuery + " " + today.getYear() + "年" + today.getMonthValue() + "月";
+        return search(datedQuery, "year", true, false, count);
+    }
+
+    @Tool(value = "高可靠核验搜索：用于政策、法规、考试、医疗、价格、版本等不能仅凭单个摘要判断的事实。返回候选来源，并明确要求读取原文、比较至少两个独立发布者、检查日期和适用范围；证据不足时必须说明无法确认。"
+            + "count 可以指定要几条（默认 6、最多 15；核验一般 8–12 条）。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public String searchVerifiedWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                                    @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                            required = false) Integer count) {
+        statusService.push("我正在交叉核对多个来源…");
+        String requestedQuery = requireQuery(query);
+        LocalDate today = LocalDate.now(timeZone);
+        return search(requestedQuery + " " + today.getYear() + "年" + today.getMonthValue() + "月",
+                "year", true, true, count);
+    }
+
+    /**
+     * 兼容旧调用（单测 / 内部调用）：不指定条数，走默认 6 条。
+     *
+     * <p>这几个重载**没有 @Tool**，不会注册成模型可调的工具——加它们只是因为
+     * `mvn package` 会编译 src/test，旧调用点签名对不上就构建失败（2026-10-22 踩过）。
+     */
+    public String searchWeb(String query) {
+        return searchWeb(query, null);
+    }
+
+    public String searchLatestWeb(String query) {
+        return searchLatestWeb(query, null);
+    }
+
+    public String searchVerifiedWeb(String query) {
+        return searchVerifiedWeb(query, null);
+    }
+
+    private String search(String query, String timeRange, boolean latest) {
+        return search(query, timeRange, latest, false);
+    }
+
+    private String search(String query, String timeRange, boolean latest, boolean verified) {
+        return search(query, timeRange, latest, verified, null);
+    }
+
+    /** 默认 6 条、最多 15 条（2026-10-22 用户要求：允许模型按需要指定，但要有上限） */
+    private static final int DEFAULT_RESULT_COUNT = 6;
+    private static final int MAX_RESULT_COUNT = 15;
+    /** 原文摘录总长度上限（字符） */
+    private static final int DEEP_SECTION_MAX_CHARS = 3000;
+
+    private static int normalizeCount(Integer requested) {
+        if (requested == null || requested <= 0) {
+            return DEFAULT_RESULT_COUNT;
+        }
+        return Math.max(1, Math.min(MAX_RESULT_COUNT, requested));
+    }
+
+    private String search(String query, String timeRange, boolean latest, boolean verified, Integer requestedCount) {
+
+        // 2026-10-20 起**主路是 DeepSeek 搜索**（用户要求），SearXNG 降为兜底。
+        // 理由：DS 的摘要更干净、认 site:/after:、还带 rerank 分；大陆 IP 下 SearXNG 只剩六个引擎、不认 site:。
+        // 代价是按次收费 —— 所以配额由 DeepSeekSearchQuota 按「账号 + 当天」卡在 20 次。
+        int want = normalizeCount(requestedCount);
+        String userId = statusService.currentUserId();
+        List<SearxngClient.SearchHit> hits = List.of();
+        boolean dsTried = false;
+        String dsSkip = null;
+
+        if (deepSeekSearchClient != null && deepSeekSearchClient.enabled()) {
+            if (quota == null || quota.tryConsume(userId)) {
+                dsTried = true;
+                try {
+                    hits = dedupe(deepSeekSearchClient.search(query, publishedAfter(latest, timeRange), want));
+                } catch (Exception e) {
+                    log.warn("DS 搜索失败，转 SearXNG 兜底 query={}", query, e);
+                }
+            } else {
+                dsSkip = "今天的 DS 搜索次数用完了（" + quota.dailyLimit() + " 次/天）";
+            }
+        }
+
+        boolean searxFailed = false;
+        if (hits.isEmpty()) {
+            try {
+                List<SearxngClient.SearchHit> fallback = dedupe(searxngClient.search(query, timeoutSeconds, timeRange));
+                // 兜底引擎一次给得很多，按模型要的条数截断，别把上下文塞满
+                hits = fallback.size() > want ? new ArrayList<>(fallback.subList(0, want)) : fallback;
+            } catch (Exception e) {
+                log.warn("兜底搜索也失败 query={}", query, e);
+                searxFailed = true;
+                hits = List.of();
+            }
+        }
+
+        List<SearxngClient.SearchHit> deduped = hits.size() > want
+                ? new java.util.ArrayList<>(hits.subList(0, want))
+                : hits;
+
+        if (deduped.isEmpty()) {
+            if (searxFailed) {
+                throw new IllegalStateException(dsTried
+                        ? "搜索服务暂时不可用（DS 和兜底都没成功），没能找到相关资料"
+                        : "搜索服务暂时不可用，没能找到相关资料");
+            }
+            if (dsSkip != null) {
+                return "没有搜到相关资料（" + dsSkip + "，已改用自建搜索但也没结果），换个说法试试？";
+            }
+            return "没有搜到相关资料，换个说法试试？";
+        }
+
+        Set<String> independentHosts = new java.util.LinkedHashSet<>();
+        for (SearxngClient.SearchHit hit : deduped) {
+            String host = hostOf(hit.url());
+            if (host != null) {
+                independentHosts.add(registrableHost(host));
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (latest) {
+            sb.append("【最新事实检索】检索时间：")
+                    .append(LocalDate.now(timeZone))
+                    .append("（时区：").append(timeZone).append("）；结果范围：近一年。\n")
+                    .append("注意：搜索摘要可能过时、截断或来自聚合站。不得仅凭摘要、旧版本规律或爆料给出‘当前’结论；应优先读取官方或原始发布者页面。若无法验证，应明确说无法确认。\n\n");
+        }
+        if (verified) {
+            sb.append("【核验边界】当前仅得到搜索候选和摘要，不代表事实已核实。请读取排名靠前的原文，至少比较 ")
+                    .append(Math.min(3, independentHosts.size()))
+                    .append(" 个不同发布者，核对发布日期、适用地区/人群、版本和原文措辞；来源互相转载时只能算一个独立来源。若来源冲突或不足，不得给出确定结论。\n")
+                    .append("独立发布者域名数（粗略去重）：").append(independentHosts.size()).append("\n\n");
+        }
+        sb.append("搜索到以下资料（最多返回 ").append(deduped.size()).append(" 条）：\n");
+        int i = 1;
+        for (SearxngClient.SearchHit h : deduped) {
+            int index = i++;
+            sb.append(index).append(". ").append(blankTo(h.title(), "（无标题）")).append("\n")
+                    .append(h.url()).append(sourceDescription(h.url())).append("\n")
+                    .append(h.publishedDate() == null || h.publishedDate().isBlank()
+                            ? "发布时间：未提供\n" : "发布时间：" + h.publishedDate().trim() + "\n")
+                    .append(truncate(blankTo(h.content(), "（无摘要）"), 150)).append("\n")
+                    // 程序据此生成回复结尾的"参考来源"，不要删掉这一行
+                    .append(SOURCE_MARK).append(index).append(". ")
+                    .append(blankTo(h.title(), "（无标题）")).append(" — ").append(h.url()).append("\n\n");
+        }
+
+        // 深入读原文：只有摘要容易被聚合站带偏，抓前几条正文后回答才有依据
+        int deep = Math.min(deepReadCount, deduped.size());
+        if (deep > 0 && webPageTool != null) {
+            StringBuilder deepSection = new StringBuilder();
+            int read = 0;
+            for (int index = 0; index < deep; index++) {
+                SearxngClient.SearchHit hit = deduped.get(index);
+                String text = webPageTool.fetchTextQuietly(hit.url(), deepReadChars);
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+                read++;
+                deepSection.append("[").append(index + 1).append("] ")
+                        .append(blankTo(hit.title(), "（无标题）")).append("\n")
+                        .append(hit.url()).append("\n")
+                        .append(text).append("\n\n");
+            }
+            if (read > 0) {
+                // 原文摘录封顶（2026-10-22）：3 篇 × 每篇几千字会把搜索结果顶到 8000 字上限，
+                // 光这一条就吃掉 2–3k token；摘要已经够判断，原文留 3000 字核对即可。
+                String deepText = deepSection.toString();
+                if (deepText.length() > DEEP_SECTION_MAX_CHARS) {
+                    deepText = deepText.substring(0, DEEP_SECTION_MAX_CHARS) + "\n…（原文摘录已截断）";
+                }
+                sb.append("【原文摘录】（已抓取排名靠前的 ").append(read)
+                        .append(" 条正文，内容有截断，仅供核对事实）\n")
+                        .append(deepText).append("\n");
+            }
+        }
+
+        sb.append("【回答要求】优先依据上面的原文摘录作答；引用某条资料时在句末用 [编号] 标注（例如 [1]）；")
+                .append("参考来源列表由程序在回复结尾统一附加，正文不必自己再列一遍。")
+                // 长度约束写在工具结果里（2026-10-22）：系统提示词里的"80 字/200 字"实测压不住，
+                // 模型读到一屏搜索结果就忍不住全讲。工具结果它一定会读。
+                .append("\n【长度】只讲最要紧的 2–3 条，**200 字以内**；他没要详细报告就别逐条罗列。");
+        return sb.toString().trim();
+    }
+
+    /**
+     * SearXNG 的兜底：**只在两种"明显不行"的情况下**才花钱调 DeepSeek 搜索（2026-10-15 加）。
+     *
+     * <ol>
+     *   <li>一条结果都没有（含 SearXNG 直接报错）；</li>
+     *   <li>查询里明确带了 {@code site:xxx}，却**没有任何一条结果落在那个站点上**——这正是坑 68 的场景，
+     *       自建的六个引擎根本不认 {@code site:}，返回的全是无关站。</li>
+     * </ol>
+     *
+     * <p>**为什么不做"关键词命中率"那种模糊判定**：中文分词下"相关"很难判准，误判一次就白花一次钱、
+     * 还会把 SearXNG 给的合理结果换掉。空结果和 {@code site:} 落空都是可以**确定**的失败，判错概率接近 0。
+     *
+     * <p>兜底拿到的结果为空时，**保留 SearXNG 原来那批**（哪怕可疑也比没有强）；只有兜底真的拿到东西才替换。
+     */
+    /**
+     * DS 搜索的发布日期下限（2026-10-20）：口径与原来那套兜底一致——
+     * `latest` 或 `timeRange=year` 都按"近一年"，其余不限。
+     */
+    private LocalDate publishedAfter(boolean latest, String timeRange) {
+        if (latest || "year".equals(timeRange)) {
+            return LocalDate.now(timeZone).minusYears(1);
+        }
+        return null;
+    }
+
+    private List<SearxngClient.SearchHit> withFallback(List<SearxngClient.SearchHit> current,
+                                                       String query, String timeRange, boolean searxFailed) {
+        if (deepSeekSearchClient == null || !deepSeekSearchClient.enabled()) {
+            return current;
+        }
+        String reason = fallbackReason(current, query);
+        if (reason == null) {
+            return current;
+        }
+        LocalDate after = "year".equals(timeRange) ? LocalDate.now(timeZone).minusYears(1) : null;
+        List<SearxngClient.SearchHit> fallbackHits = dedupe(deepSeekSearchClient.search(query, after));
+        if (fallbackHits.isEmpty()) {
+            return current;
+        }
+        log.info("搜索降级到 DeepSeek query={} reason={} searxFailed={} searxHits={} fallbackHits={}",
+                query, reason, searxFailed, current.size(), fallbackHits.size());
+        return fallbackHits;
+    }
+
+    /** 返回"为什么要兜底"的短原因；不需要兜底时返回 null */
+    private String fallbackReason(List<SearxngClient.SearchHit> current, String query) {
+        if (current.isEmpty()) {
+            return "searx-empty";
+        }
+        List<String> sites = siteOperators(query);
+        if (!sites.isEmpty() && current.stream().noneMatch(hit -> hostMatches(hit.url(), sites))) {
+            return "searx-site-miss";
+        }
+        return null;
+    }
+
+    /** 取出 query 里 {@code site:} 指定的域名（支持 {@code OR} 连接多个） */
+    private List<String> siteOperators(String query) {
+        List<String> sites = new java.util.ArrayList<>();
+        if (query == null || query.isEmpty()) {
+            return sites;
+        }
+        for (String token : query.split("\\s+")) {
+            String lower = token.toLowerCase(java.util.Locale.ROOT);
+            if (!lower.startsWith("site:")) {
+                continue;
+            }
+            String host = lower.substring("site:".length()).trim();
+            // "site:a.com" 后面还可能跟着 "OR"；去重后只留像域名的
+            if (host.isEmpty() || host.contains("/") || !host.contains(".")) {
+                continue;
+            }
+            if (!sites.contains(host)) {
+                sites.add(host);
+            }
+        }
+        return sites;
+    }
+
+    private boolean hostMatches(String url, List<String> sites) {
+        String host = hostOf(url);
+        if (host == null) {
+            return false;
+        }
+        String lower = host.toLowerCase(java.util.Locale.ROOT);
+        for (String site : sites) {
+            // 允许子域：site:bilibili.com 应该认 www.bilibili.com
+            if (lower.equals(site) || lower.endsWith("." + site)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** URL 去重 + 标题归一化去重，最多 Top N */
+    private List<SearxngClient.SearchHit> dedupe(List<SearxngClient.SearchHit> hits) {
+        List<SearxngClient.SearchHit> deduped = new ArrayList<>();
+        Set<String> seenUrls = new HashSet<>();
+        Set<String> seenTitles = new HashSet<>();
+        for (SearxngClient.SearchHit h : hits) {
+            if (h.url() == null || h.url().isBlank()) {
+                continue;
+            }
+            if (!seenUrls.add(h.url())) {
+                continue;
+            }
+            String normTitle = normalize(h.title());
+            if (normTitle != null && !seenTitles.add(normTitle)) {
+                continue;
+            }
+            deduped.add(h);
+            if (deduped.size() >= maxResults) {
+                break;
+            }
+        }
+        return deduped;
+    }
+
+    /**
+     * Return observable source metadata only.  A hostname alone is not proof that
+     * a page is official, authoritative, or safe; those judgements belong to the
+     * agent after it reads the page and compares the publisher and evidence.
+     */
+    private String sourceDescription(String url) {
+        String host;
+        try {
+            host = java.net.URI.create(url).getHost();
+        } catch (Exception ignored) {
+            return "\n来源域名：未知（请核验原始发布者）";
+        }
+        return host == null || host.isBlank()
+                ? "\n来源域名：未知（请核验原始发布者）"
+                : "\n来源域名：" + host + "（域名本身不代表权威性，请核验原始发布者并交叉验证）";
+    }
+
+    private String hostOf(String url) {
+        try {
+            return java.net.URI.create(url).getHost();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String registrableHost(String host) {
+        String normalized = host.toLowerCase(java.util.Locale.ROOT);
+        String[] labels = normalized.split("\\.");
+        return labels.length < 2 ? normalized : labels[labels.length - 2] + "." + labels[labels.length - 1];
+    }
+
+    private String normalize(String title) {
+        if (title == null || title.isBlank()) {
+            return null;
+        }
+        return title.replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private String blankTo(String s, String fallback) {
+        return (s == null || s.isBlank()) ? fallback : s.trim();
+    }
+
+    private String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    private String requireQuery(String query) {
+        if (query == null || query.isBlank()) {
+            throw new IllegalArgumentException("搜索关键词不能为空");
+        }
+        return query.strip();
+    }
+
+    private ZoneId parseZone(String value) {
+        try {
+            return ZoneId.of(value);
+        } catch (RuntimeException ignored) {
+            return ZoneId.of("Asia/Shanghai");
+        }
+    }
+}

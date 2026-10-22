@@ -25,7 +25,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: wechat-agent-redis
+    container_name: qq-agent-redis
     restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
@@ -35,7 +35,7 @@ services:
 
   searxng:
     image: searxng/searxng:latest
-    container_name: wechat-agent-searxng
+    container_name: qq-agent-searxng
     restart: unless-stopped
     environment:
       SEARXNG_BASE_URL: http://localhost:8888

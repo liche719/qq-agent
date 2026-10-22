@@ -47,7 +47,7 @@ wechat-deploy alert-notify                                # stdin = KEY=... / MS
 - 内容与声明不符 → 拒绝；
 - 光有私钥、没有密钥 → 一个字节都写不进去。
 
-**额外校验**：`upload-compose` 会先 `docker compose config -q`（在 `/opt/wechat-agent-infra` 里跑，
+**额外校验**：`upload-compose` 会先 `docker compose config -q`（在 `/opt/qq-agent` 里跑，
 保证相对挂载路径解析正确），非法 compose 不进线上；`upload-settings` 拒绝任何带值的 `secret_key`
 （"密钥不进仓库"这条约束由服务端兜底）。
 
@@ -101,7 +101,7 @@ image id、只是各带一个 tag**（实测 `wechat-agent:6c16fd2…` 与 `wech
 - **没加 `from=`**：GitHub 托管 runner 的出口 IP 是 6980 条 CIDR（5436 IPv4 + 1544 IPv6）且会变，
   写进 authorized_keys 既臃肿又会"变一次就静默部署失败"；而 HMAC 已经堵死了"泄露私钥 → 推自己的镜像"这条路，
   `from=` 收益很小。真要做，得配一个每天拉 `api.github.com/meta` 刷新的定时任务。
-- **`DEPLOY_USER` 仍是 root**：应用要写 `/opt/wechat-agent-infra`、要调 docker，
+- **`DEPLOY_USER` 仍是 root**：应用要写 `/opt/qq-agent`、要调 docker，
   而 docker 组成员本来就等价于 root；再加一层 `sudo NOPASSWD` 只是多一个会坏的零件。
   真正的收窄在"这把钥匙只能跑一个脚本"，已经拿到。
 - 拿到私钥的人仍能：**重放**一次已授权过的上传（需要那份文件的原始字节，而它用完即删）、

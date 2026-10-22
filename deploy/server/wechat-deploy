@@ -19,7 +19,7 @@ BASE=/var/lib/wechat-deploy
 INCOMING=$BASE/incoming
 # 分片落在整包旁边（save_stdin 本来就用 $INCOMING 做 mktemp 的目录，所以这个目录一定存在）
 PARTS_DIR=$INCOMING
-COMPOSE_DIR=/opt/wechat-agent-infra
+COMPOSE_DIR=/opt/qq-agent
 COMPOSE_FILE=$COMPOSE_DIR/docker-compose.remote.yml
 SETTINGS_FILE=$COMPOSE_DIR/docker/searxng/settings.yml
 LOG=/var/log/wechat-deploy.log
@@ -77,8 +77,8 @@ save_stdin() { # $1=目标路径 $2=期望 sha256
 cmd_upload_image() { # $1=git-sha $2=sha256 $3=hmac
   is_git_sha "$1" || die "git sha 格式不对"
   check_mac "$2" "$3" image
-  save_stdin "$INCOMING/wechat-agent-$1.tar.gz" "$2"
-  log "upload-image ok sha=$1 bytes=$(stat -c%s "$INCOMING/wechat-agent-$1.tar.gz")"
+  save_stdin "$INCOMING/qq-agent-$1.tar.gz" "$2"
+  log "upload-image ok sha=$1 bytes=$(stat -c%s "$INCOMING/qq-agent-$1.tar.gz")"
 }
 
 # 分片上传（2026-09-30 加）：**为什么需要它** —— GitHub runner（Azure 美国）到这台机器
@@ -98,7 +98,7 @@ cmd_join_image() { # $1=git-sha $2=分片数 $3=整包 sha256 $4=hmac
   case "$2" in ''|*[!0-9]*) die "分片数必须是非负整数";; esac
   [ "$2" -ge 1 ] && [ "$2" -le 512 ] || die "分片数不在 1..512"
   check_mac "$3" "$4" image-join
-  local target="$INCOMING/wechat-agent-$1.tar.gz" got i part
+  local target="$INCOMING/qq-agent-$1.tar.gz" got i part
   rm -f "$target"
   i=0
   while [ "$i" -lt "$2" ]; do
@@ -160,27 +160,29 @@ cmd_upload_settings() { # $1=sha256 $2=hmac
 
 cmd_deploy() { # $1=git-sha
   is_git_sha "$1" || die "git sha 格式不对"
-  local tar=$INCOMING/wechat-agent-$1.tar.gz
+  local tar=$INCOMING/qq-agent-$1.tar.gz
   [ -s "$tar" ] || die "镜像包还没上传：$tar"
   "$DOCKER" load -i "$tar" >/dev/null
   cd "$COMPOSE_DIR"
-  AGENT_IMAGE=wechat-agent:"$1" "$DOCKER" compose -f "$COMPOSE_FILE" up -d --no-build agent
+  # 2026-10-22 项目改名：旧容器名 wechat-agent-java 占着 443，先移除再起新容器（卷不动）
+  "$DOCKER" rm -f wechat-agent-java >/dev/null 2>&1 || true
+  AGENT_IMAGE=qq-agent:"$1" "$DOCKER" compose -f "$COMPOSE_FILE" up -d --no-build agent
   # searxng 的 settings.yml 是挂载进去的，不热加载
-  "$DOCKER" restart wechat-agent-searxng >/dev/null
+  "$DOCKER" restart qq-agent-searxng >/dev/null
   "$DOCKER" image prune -f >/dev/null
   # 只保留「当前容器镜像 + 次新镜像」的全部 tag（按 image id 数，不能按 tag 行数——同内容重建会让新 tag 被误删）
   local cur prev
-  cur=$("$DOCKER" inspect wechat-agent-java -f '{{.Image}}' 2>/dev/null || true)
-  prev=$("$DOCKER" images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter 'reference=wechat-agent:*' \
+  cur=$("$DOCKER" inspect qq-agent -f '{{.Image}}' 2>/dev/null || true)
+  prev=$("$DOCKER" images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter 'reference=qq-agent:*' \
     | awk -F'|' -v cur="$cur" '$1!=cur' | sort -r -t'|' -k2 | head -1 | cut -d'|' -f1 || true)
-  "$DOCKER" images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*' \
+  "$DOCKER" images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter 'reference=qq-agent:*' \
     | awk -F'|' -v cur="$cur" -v prev="$prev" '$1!=cur && $1!=prev {print $2}' \
     | xargs -r "$DOCKER" rmi -f >/dev/null 2>&1 || true
   rm -f "$tar"
   # 顺手清掉上传目录里超过一天的残留（被取消的流水线会留下半截包）
   find "$INCOMING" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null || true
   "$DOCKER" compose -f "$COMPOSE_FILE" ps agent
-  "$DOCKER" images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=wechat-agent:*'
+  "$DOCKER" images --format '{{.Repository}}:{{.Tag}}' --filter 'reference=qq-agent:*'
   log "deploy ok sha=$1"
 }
 
@@ -198,11 +200,11 @@ cmd_pull_deploy() { # $1=git-sha
   cd "$COMPOSE_DIR"
   AGENT_IMAGE="$image" "$DOCKER" compose -f "$COMPOSE_FILE" up -d --no-build agent
   # searxng 的 settings.yml 是挂载进去的，不热加载
-  "$DOCKER" restart wechat-agent-searxng >/dev/null
+  "$DOCKER" restart qq-agent-searxng >/dev/null
   "$DOCKER" image prune -f >/dev/null
   # 只保留「当前 + 次新」两代（按 image id 数，不按 tag 行数）
   local cur prev
-  cur=$("$DOCKER" inspect wechat-agent-java -f '{{.Image}}' 2>/dev/null || true)
+  cur=$("$DOCKER" inspect qq-agent -f '{{.Image}}' 2>/dev/null || true)
   prev=$("$DOCKER" images --no-trunc --format '{{.ID}}|{{.CreatedAt}}' --filter "reference=$GHCR_IMAGE:*" \
     | awk -F'|' -v cur="$cur" '$1!=cur' | sort -r -t'|' -k2 | head -1 | cut -d'|' -f1 || true)
   "$DOCKER" images --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' --filter "reference=$GHCR_IMAGE:*" \
@@ -215,7 +217,7 @@ cmd_pull_deploy() { # $1=git-sha
   # 但 CI 复用构建缓存时几个镜像的 CreatedAt 完全一样，排序不稳定，结果把**刚拉下来的
   # 那个**当成旧的删了标签——容器还在用（image 没删），但 `docker images` 里看不到它。
   local cur_tag
-  cur_tag=$("$DOCKER" inspect wechat-agent-java -f '{{.Config.Image}}' 2>/dev/null || true)
+  cur_tag=$("$DOCKER" inspect qq-agent -f '{{.Config.Image}}' 2>/dev/null || true)
   "$DOCKER" images --format '{{.Repository}}:{{.Tag}}|{{.CreatedAt}}' --filter "reference=$GHCR_IMAGE:*" \
     | grep -v -F "${cur_tag}|" \
     | sort -r -t'|' -k2 | tail -n +2 | cut -d'|' -f1 \

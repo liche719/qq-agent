@@ -1,7 +1,11 @@
+# 钉住 compose 项目名：数据卷是 wechat-agent-infra_* 命名的，
+# 服务器目录从 wechat-agent-infra 改名成 qq-agent 后，不钉住就会新建空卷（=丢数据）。
+name: wechat-agent-infra
+
 services:
   agent:
-    image: ${AGENT_IMAGE:-wechat-agent:latest}
-    container_name: wechat-agent-java
+    image: ${AGENT_IMAGE:-qq-agent:latest}
+    container_name: qq-agent
     restart: unless-stopped
     # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机。
     # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外监听标准端口 443，
@@ -33,7 +37,9 @@ services:
       TZ: Asia/Shanghai
       # 通道模式：disabled（只跑 QQ）/ simulator（本地或排障用的假通道，可调 /api/sim/*）。
       # 注意 compose 只传 environment 里列出的变量——以前没有这一行，改服务器 .env 根本进不了容器。
-      WECHAT_CHANNEL_MODE: ${WECHAT_CHANNEL_MODE:-disabled}
+      AGENT_CHANNEL_MODE: ${AGENT_CHANNEL_MODE:-qq}
+      # 旧变量名保留兼容（Spring 侧也认它作兜底）
+      WECHAT_CHANNEL_MODE: ${WECHAT_CHANNEL_MODE:-qq}
       MYSQL_HOST: 127.0.0.1
       MYSQL_PORT: 3306
       MYSQL_DB: ${MYSQL_DB:-wechat_agent}
@@ -330,7 +336,7 @@ services:
   redis:
     # 钉 digest（这一层实测跑的是 Redis 7.4.11）；`redis:7-alpine` 这种浮动 minor 会跟着上游走
     image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
-    container_name: wechat-agent-redis
+    container_name: qq-agent-redis
     restart: unless-stopped
     logging:
       driver: json-file
@@ -348,7 +354,7 @@ services:
     # 2026-09-17 加：迁 pg 的并行环境（先只建库、迁数据、冒烟；切换=把 agent 的 DB_URL 指过来）。
     # 钉 digest（同 mysql/redis 的纪律）：pgvector 版，记忆事实层将来要用向量列。
     image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
-    container_name: wechat-agent-postgres
+    container_name: qq-agent-postgres
     restart: unless-stopped
     logging:
       driver: json-file
@@ -378,7 +384,7 @@ services:
     # `docker image inspect searxng/searxng:latest -f '{{index .RepoDigests 0}}'` 取新 digest 再改这里。
     # 注意 compose 文件由 CI 每次 scp 覆盖，所以**只能改仓库里的这份**，改服务器上的会被冲掉。
     image: searxng/searxng@sha256:6c9da4d4d236672a1b722f597d643de2202410a2281b7aa4d98fccca3a8f3732
-    container_name: wechat-agent-searxng
+    container_name: qq-agent-searxng
     restart: unless-stopped
     logging:
       driver: json-file

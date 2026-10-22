@@ -11,9 +11,9 @@
     </parent>
 
     <groupId>com.liche</groupId>
-    <artifactId>wechat-agent-java</artifactId>
+    <artifactId>qq-agent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>wechat-agent-java</name>
+    <name>qq-agent</name>
     <description>多用户微信智能 Agent 后端（一期）：三层记忆 + 定时提醒 + 全网搜索 + 多租户隔离</description>
 
     <properties>

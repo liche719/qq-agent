@@ -56,7 +56,7 @@ backup/
 ## 恢复怎么做
 
 ```bash
-cd /opt/wechat-agent-infra
+cd /opt/qq-agent
 unzip -o backup/20260913.zip -d /tmp/restore-20260913      # 解出 user-*/state.json
 # 媒体本体在 backup/media/ 下，用 state.json 里 mediaArtifacts[].path 对回去
 ```

@@ -28,6 +28,6 @@ ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client default-mysql-client ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /workspace/target/wechat-agent-java-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY --from=build /workspace/target/qq-agent-0.0.1-SNAPSHOT.jar /app/app.jar
 EXPOSE 443
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

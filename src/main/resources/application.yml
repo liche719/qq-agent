@@ -371,9 +371,10 @@ qq:
   # 主动消息每天最多发多少条（0 = 不限，只记账并在面板显示）；超限后放弃发送并记 WARN
   proactive-daily-limit: ${QQ_PROACTIVE_DAILY_LIMIT:0}
 
-wechat:
+agent:
   channel:
-    mode: ${WECHAT_CHANNEL_MODE:disabled}   # QQ 项目默认不启动微信通道；本地调试可显式设 simulator
+    # 通道模式：qq（默认）/ simulator（本地调试）/ disabled。旧变量名 WECHAT_CHANNEL_MODE 仍然认
+    mode: ${AGENT_CHANNEL_MODE:${WECHAT_CHANNEL_MODE:disabled}}
 
 # 向量模型（记忆事实层的语义召回，2026-09-18）：OpenAI 兼容的 /embeddings，默认走阿里云百炼。
 # 模型用 **qwen3.7-text-embedding-flash**（官方文档：支持 256/512/768/1024 维、默认 1024 维，
@@ -637,7 +638,7 @@ logging:
     path: logs
   level:
     root: INFO
-    com.liche.wechatagent: INFO
+    com.liche.qqagent: INFO
     org.quartz: WARN
 
 conversation:

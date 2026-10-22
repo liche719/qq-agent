@@ -1,0 +1,404 @@
+package com.liche.qqagent.config;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.liche.qqagent.alert.LlmHealthState;
+import com.liche.qqagent.exception.LlmUnavailableException;
+import com.liche.qqagent.metrics.RuntimeMetrics;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.TokenUsage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+/** 流式 OpenAI 兼容 StreamingChatModel（SSE 逐段解析，用于对话回复的「打字机」体验） */
+public class OpenAiCompatStreamingChatModel implements StreamingChatModel {
+
+    private static final int DEFAULT_CONNECT_TIMEOUT_SECONDS = 5;
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatStreamingChatModel.class);
+
+    /**
+     * 上游明确"我现在不行"时的重试次数（2026-10-15 加）。
+     *
+     * <p>起因：2026-10-15 上午 DeepSeek 连抖三次 503 {@code Service is too busy}，每次都**直接变成用户可见的报错**
+     * ——因为原来这里一次失败就放弃。而这类失败是**在响应头就返回的**：一个字都还没吐给用户，
+     * 重试绝不会造成重复输出，是最划算的补救。
+     *
+     * <p>只重试上游语义上"过一会儿再来"的状态；**401/402 不重试**（密钥/余额的问题重试到天亮也没用，
+     * 见 {@link com.liche.qqagent.exception.LlmUnavailableException}）。
+     */
+    private static final int MAX_RETRIES = 2;
+    /** 退避：第 1 次重试等 1 秒、第 2 次等 3 秒 —— 够躲开瞬时抖动，又不至于让用户等太久 */
+    private static final long[] RETRY_BACKOFF_MS = {1_000L, 3_000L};
+
+    private final OkHttpClient client;
+    private final String baseUrl;
+    private final String apiKey;
+    private final String model;
+    private final double temperature;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 场景档位（关思考 / 温度）；可为 null（单测直接构造时不需要） */
+    private final LlmScenarioSettings scenarioSettings;
+    /** 指标采集，可为 null（单元测试直接构造时不需要） */
+    private final RuntimeMetrics metrics;
+    /** 用量接收端（setter 注入，单测直接 new 时为空——那时不记账）。**模型层不认识钱**。 */
+    private List<LlmUsageSink> usageSinks = List.of();
+    /** 调用事件接收端（**落库审计**用：场景/成败/耗时/用量；2026-09-21 加，见 {@link LlmCallSink}） */
+    private List<LlmCallSink> callSinks = List.of();
+    /** 「上游明确拒绝我们」的状态记录点（余额/密钥）；可为 null（单测直接 new 时不需要） */
+    private LlmHealthState healthState;
+
+    @Autowired(required = false)
+    public void setUsageSinks(List<LlmUsageSink> usageSinks) {
+        this.usageSinks = usageSinks == null ? List.of() : usageSinks;
+    }
+
+    @Autowired(required = false)
+    public void setCallSinks(List<LlmCallSink> callSinks) {
+        this.callSinks = callSinks == null ? List.of() : callSinks;
+    }
+
+    @Autowired(required = false)
+    public void setHealthState(LlmHealthState healthState) {
+        this.healthState = healthState;
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
+                                          double temperature, int timeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, DEFAULT_CONNECT_TIMEOUT_SECONDS, null);
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model,
+                                          double temperature, int timeoutSeconds, int connectTimeoutSeconds) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, connectTimeoutSeconds, null);
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model, double temperature,
+                                          int timeoutSeconds, int connectTimeoutSeconds, RuntimeMetrics metrics) {
+        this(baseUrl, apiKey, model, temperature, timeoutSeconds, connectTimeoutSeconds, metrics, null);
+    }
+
+    public OpenAiCompatStreamingChatModel(String baseUrl, String apiKey, String model, double temperature,
+                                          int timeoutSeconds, int connectTimeoutSeconds, RuntimeMetrics metrics,
+                                          LlmScenarioSettings scenarioSettings) {
+        this.baseUrl = baseUrl;
+        this.apiKey = apiKey;
+        this.model = model;
+        this.temperature = temperature;
+        this.scenarioSettings = scenarioSettings;
+        this.metrics = metrics;
+        this.client = new OkHttpClient.Builder()
+                .connectTimeout(Math.max(1, Math.min(300, connectTimeoutSeconds)), TimeUnit.SECONDS)
+                .readTimeout(Math.max(1, Math.min(600, timeoutSeconds)), TimeUnit.SECONDS)
+                .build();
+    }
+
+    @Override
+    public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
+        long started = System.nanoTime();
+        LlmScenario scenario = LlmScenario.current();
+        double effectiveTemperature = temperatureFor(scenario);
+        int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
+        String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);
+        int reasoningChars = 0;
+        // 实测（2026-09-14）：这个接口的流式响应**本来就带 usage**（不需要 stream_options.include_usage），
+        // 所以对话这几档的 token 也能照实记账，面板「按场景」表格不再恒为 0。取最后一个非空 usage。
+        int[] tokens = new int[3]; // prompt / completion / reasoning
+        int[] cachedTokens = new int[1]; // 缓存命中的输入（计价关键；服务端没给就是 0）
+        try {
+            Request req = new Request.Builder()
+                    .url(baseUrl + "/chat/completions")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .post(RequestBody.create(
+                            OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, true,
+                                    maxTokens, reasoningEffort).toString(),
+                            MediaType.parse("application/json; charset=utf-8")))
+                    .build();
+            Response response = null;
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    response = client.newCall(req).execute();
+                } catch (IOException io) {
+                    // 连不上/被重置/读超时也算"过一会儿再来"（同样是一个字都还没吐出去）
+                    if (attempt < MAX_RETRIES) {
+                        log.warn("LLM 流式请求异常（第 {} 次尝试，{}ms 后重试）：{}",
+                                attempt + 1, RETRY_BACKOFF_MS[attempt], io.toString());
+                        if (!sleepBeforeRetry(attempt)) {
+                            throw io;
+                        }
+                        continue;
+                    }
+                    throw io;
+                }
+                if (response.isSuccessful() && response.body() != null) {
+                    break;
+                }
+                // 原来只记一句 "HTTP 400"，服务端说的原因被整个丢掉——排"问时间就 400"那次
+                // 只能靠猜。把响应体打出来，以后所有 4xx/5xx 都能一眼看到上游怎么说。
+                String detail = "";
+                try {
+                    detail = response.body() == null ? "" : response.body().string();
+                } catch (Exception ignored) {
+                    // 读不出来就算了，不能因为记日志把请求本身弄挂
+                }
+                int status = response.code();
+                response.close();
+                if (detail.length() > 800) {
+                    detail = detail.substring(0, 800) + "…";
+                }
+                if (retryableStatus(status) && attempt < MAX_RETRIES) {
+                    log.warn("LLM 流式请求被拒 HTTP {}（第 {} 次尝试，{}ms 后重试）body={}",
+                            status, attempt + 1, RETRY_BACKOFF_MS[attempt], detail);
+                    if (sleepBeforeRetry(attempt)) {
+                        continue;
+                    }
+                    // 被中断：不再重试，按最后一次失败处理
+                }
+                log.warn("LLM 流式请求被拒 HTTP {} body={}", status, detail);
+                record(false, started, "HTTP " + status, scenario, effectiveTemperature, maxTokens, 0, 0,
+                        tokens, cachedTokens, reasoningEffort);
+                // 401/402 是**我们这边要有人去处理**的问题（密钥/余额），单独抛、带一句人话；
+                // 其余（含重试用尽的 5xx）维持原样，由上层兜底成"稍后再试"。
+                if (status == 401 || status == 402) {
+                    if (healthState != null) {
+                        healthState.recordRejection(status, detail);
+                    }
+                    handler.onError(new LlmUnavailableException(status, rejectMessage(status)));
+                } else {
+                    handler.onError(new RuntimeException("LLM 流式请求失败 HTTP " + status));
+                }
+                return;
+            }
+            try (Response ignored = response) {
+                StringBuilder content = new StringBuilder();
+                Map<Integer, StringBuilder> toolArgs = new LinkedHashMap<>();
+                Map<Integer, String> toolNames = new LinkedHashMap<>();
+                Map<Integer, String> toolIds = new LinkedHashMap<>();
+                List<JsonNode> rawToolCalls = new ArrayList<>();
+
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        response.body().byteStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (!line.startsWith("data:")) {
+                            continue;
+                        }
+                        String data = line.substring(5).trim();
+                        if (data.isEmpty()) {
+                            continue;
+                        }
+                        if ("[DONE]".equals(data)) {
+                            break;
+                        }
+                        JsonNode node = objectMapper.readTree(data);
+                        JsonNode usageNode = node.path("usage");
+                        if (usageNode.isObject() && !usageNode.isEmpty()) {
+                            tokens[0] = usageNode.path("prompt_tokens").asInt(tokens[0]);
+                            tokens[1] = usageNode.path("completion_tokens").asInt(tokens[1]);
+                            tokens[2] = usageNode.path("completion_tokens_details").path("reasoning_tokens")
+                                    .asInt(tokens[2]);
+                            // 缓存命中的输入：**优先 OpenAI 标准的嵌套字段**，回退 DeepSeek 的平铺字段。
+                            // 两个都没有就是 0——记账方按"全部未命中"算（宁高估不低估）。
+                            JsonNode details = usageNode.path("prompt_tokens_details");
+                            if (details.isObject() && details.has("cached_tokens")) {
+                                cachedTokens[0] = details.path("cached_tokens").asInt(0);
+                            } else {
+                                cachedTokens[0] = usageNode.path("prompt_cache_hit_tokens")
+                                        .asInt(cachedTokens[0]);
+                            }
+                        }
+                        JsonNode delta = node.path("choices").path(0).path("delta");
+                        // 这个模型默认就带思考：思考走 delta.reasoning_content（不推给用户，只用来记账）
+                        JsonNode reasoningDelta = delta.path("reasoning_content");
+                        if (reasoningDelta.isTextual()) {
+                            reasoningChars += reasoningDelta.asText().length();
+                        }
+                        String partial = delta.path("content").asText(null);
+                        if (partial != null && !partial.isEmpty()) {
+                            content.append(partial);
+                            handler.onPartialResponse(partial);
+                        }
+                        for (JsonNode tc : delta.path("tool_calls")) {
+                            int idx = tc.path("index").asInt(0);
+                            if (tc.path("id").isTextual()) {
+                                toolIds.put(idx, tc.path("id").asText());
+                            }
+                            if (tc.path("function").path("name").isTextual()) {
+                                toolNames.put(idx, tc.path("function").path("name").asText());
+                            }
+                            String argFrag = tc.path("function").path("arguments").asText("");
+                            if (!argFrag.isEmpty()) {
+                                toolArgs.computeIfAbsent(idx, k -> new StringBuilder()).append(argFrag);
+                            }
+                            rawToolCalls.add(tc);
+                        }
+                    }
+                }
+
+                List<ToolExecutionRequest> toolRequests = new ArrayList<>();
+                for (int idx : toolArgs.keySet()) {
+                    toolRequests.add(ToolExecutionRequest.builder()
+                            .id(toolIds.getOrDefault(idx, "call_" + idx))
+                            .name(toolNames.getOrDefault(idx, ""))
+                            .arguments(toolArgs.get(idx).toString())
+                            .build());
+                }
+                if (toolRequests.isEmpty() && !rawToolCalls.isEmpty()) {
+                    for (JsonNode tc : rawToolCalls) {
+                        String name = tc.path("function").path("name").asText("");
+                        if (!name.isBlank()) {
+                            toolRequests.add(ToolExecutionRequest.builder()
+                                    .id(tc.path("id").asText("call"))
+                                    .name(name)
+                                    .arguments(tc.path("function").path("arguments").asText(""))
+                                    .build());
+                        }
+                    }
+                }
+
+                String fullText = content.toString();
+                AiMessage aiMessage = toolRequests.isEmpty()
+                        ? AiMessage.from(fullText)
+                        : (fullText.isEmpty() ? AiMessage.from(toolRequests) : AiMessage.from(fullText, toolRequests));
+                // usage 已经解析出来了（见上面的实测说明），顺手塞进 ChatResponse：
+                // 否则只有 metrics 拿得到 token，调用链/诊断视图只能显示 0（2026-09-15）
+                handler.onCompleteResponse(ChatResponse.builder().aiMessage(aiMessage)
+                        .tokenUsage(new TokenUsage(tokens[0], tokens[1])).build());
+                publishUsage(cachedTokens, tokens);
+                if (healthState != null) {
+                    // 只要调通了就清掉"余额/密钥被拒"的故障状态（让告警自己发一条"已恢复"）
+                    healthState.recordSuccess();
+                }
+                record(true, started, null, scenario, effectiveTemperature, maxTokens, reasoningChars, fullText.length(),
+                        tokens, cachedTokens, reasoningEffort);
+            }
+        } catch (Exception e) {
+            record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, reasoningChars, 0, tokens,
+                    cachedTokens, reasoningEffort);
+            handler.onError(e);
+        }
+    }
+
+    private double temperatureFor(LlmScenario scenario) {
+        Double override = scenarioSettings == null ? null : scenarioSettings.temperatureOverride(scenario);
+        return override == null ? temperature : override;
+    }
+
+    /**
+     * 哪些状态值得重试：上游语义上"过一会儿再来"，且**不是**我们这边的问题。
+     * 429 限流算在内；401/402 明确排除（重试无用，见 {@link LlmUnavailableException}）。
+     */
+    private static boolean retryableStatus(int status) {
+        return status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
+    }
+
+    /** 退避等待；被中断时返回 false（调用方按"不再重试"处理，中断标志已恢复） */
+    private static boolean sleepBeforeRetry(int attempt) {
+        long wait = RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
+        try {
+            Thread.sleep(wait);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** 401/402 时给用户看的话（**说得清是什么事**，而不是"出了点小问题"） */
+    private static String rejectMessage(int status) {
+        if (status == 402) {
+            return "模型账户余额不足了，我暂时答不了——等他充上钱我就能继续。"
+                    + "（这条也会推给管理员。）";
+        }
+        return "我的模型密钥被上游拒了，暂时答不了——需要管理员处理一下。";
+    }
+
+    /**
+     * 把这一次的用量交给所有接收端（2026-09-15 解耦后：**模型层不认识钱**）。
+     *
+     * <p>字段名映射只在这里做（标准字段优先、厂商字段回退），谁要拿它做什么
+     * （记账、按钱熔断、写审计）由 {@link LlmUsageSink} 的实现决定。换模型实现时，
+     * 只要它也把用量归一化后广播出去，计费一行都不用改。
+     */
+    private void publishUsage(int[] cachedTokens, int[] tokens) {
+        if (usageSinks.isEmpty()) {
+            return;
+        }
+        LlmUsage usage = new LlmUsage(Math.max(0, tokens[0]), Math.max(0, tokens[1]),
+                Math.max(0, tokens[2]), Math.max(0, cachedTokens[0]));
+        for (LlmUsageSink sink : usageSinks) {
+            try {
+                sink.accept(usage);
+            } catch (RuntimeException exception) {
+                // 记账失败不能把模型调用带崩（约定见 LlmUsageSink）
+                log.warn("用量接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 把这一次调用的事实（场景 / 成败 / 耗时 / 用量）广播给审计接收端。
+     *
+     * <p>与 {@link #publishUsage} 的区别：那个只管 token（进程内计数、按钱熔断），
+     * 这个带上场景与成败，专门给**落库**用——"哪一类调用在烧钱、失败的调用烧了多少"都要靠它。
+     */
+    private void publishCall(LlmScenario scenario, boolean streaming, boolean ok, long millis,
+                             int[] tokens, int[] cachedTokens, String error) {
+        if (callSinks.isEmpty()) {
+            return;
+        }
+        LlmCallEvent event = new LlmCallEvent(scenario.label(), streaming, ok, millis,
+                new LlmUsage(Math.max(0, tokens[0]), Math.max(0, tokens[1]),
+                        Math.max(0, tokens[2]), Math.max(0, cachedTokens[0])),
+                error);
+        for (LlmCallSink sink : callSinks) {
+            try {
+                sink.acceptCall(event);
+            } catch (RuntimeException exception) {
+                log.warn("调用审计接收端出错（已忽略）：{}", exception.getMessage());
+            }
+        }
+    }
+
+    private void record(boolean ok, long startedNanos, String error, LlmScenario scenario,
+                        double effectiveTemperature, int maxTokens, int reasoningChars, int contentChars,
+                        int[] tokens, int[] cachedTokens, String reasoningEffort) {
+        long millis = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
+        if (metrics != null) {
+            // usage 直接来自流式响应（见 chat 里的实测说明）；拿不到时是 0，日志里另有字符数兜底
+            metrics.recordLlm(true, ok, millis, error, scenario.label(), tokens[0], tokens[1], tokens[2]);
+        }
+        // 落库审计（含失败调用）：失败也有成本——思考与输入照样计费，只记成功的会漏钱
+        publishCall(scenario, true, ok, millis, tokens, cachedTokens, error);
+        if (ok) {
+            log.info("LLM 流式调用 scenario={} ms={} temperature={} maxTokens={} reasoningEffort={}"
+                            + " 正文={}字 思考={}字 promptTokens={} completionTokens={} reasoningTokens={}",
+                    scenario.label(), millis, effectiveTemperature, maxTokens,
+                    reasoningEffort == null ? "(默认)" : reasoningEffort,
+                    contentChars, reasoningChars, tokens[0], tokens[1], tokens[2]);
+        } else {
+            log.warn("LLM 流式调用失败 scenario={} ms={} error={}", scenario.label(), millis, error);
+        }
+    }
+}

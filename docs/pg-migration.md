@@ -61,7 +61,7 @@
 `/root`（`wechat-agent-backup-20260912015146.sql.gz`、`-clockfix-…`、`-baseline-202609142104.sql.gz`、
 以及 `backup/20260917.sql.gz`）；③ 全库 pg dump 每天在跑，另有一份自包含导出包。
 
-**顺带封存了一个雷**：服务器 `/opt/wechat-agent-infra/docker-compose.yml` 是 09-11 从本地开发版拷过去的
+**顺带封存了一个雷**：服务器 `/opt/qq-agent/docker-compose.yml` 是 09-11 从本地开发版拷过去的
 残留（里面的 `mysql` 口令还是 `root`），4 个容器其实全来自 `docker-compose.remote.yml`。谁要是**不加 `-f`**
 在那个目录跑一次 `docker compose up -d`，它会去建同名容器，把正在跑的 redis（丢 `--requirepass`）、
 searxng（丢调好的 settings 挂载）一起换掉，还会凭空重建一个 mysql 卷。已改名为
@@ -70,7 +70,7 @@ searxng（丢调好的 settings 挂载）一起换掉，还会凭空重建一个
 （以下为历史回滚步骤，卷删除后已失效，留作参考）
 
 ```
-cd /opt/wechat-agent-infra
+cd /opt/qq-agent
 sed -i '/^DB_URL=/d;/^DB_DRIVER=/d;/^DB_USER=/d;/^DB_PASSWORD=/d;/^QUARTZ_DELEGATE=/d' .env
 AGENT_IMAGE=$(docker inspect wechat-agent-java -f '{{.Config.Image}}') \
   docker compose -f docker-compose.remote.yml up -d --no-build agent
