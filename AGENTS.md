@@ -264,7 +264,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
   - `panel-app/` + `liche-panel-1.0.apk` —— 面板安卓壳与产物（**在这里，不在仓库里**；仓库只跟踪说明文档 `docs/panel-app.md`）
   - `wechat-agent-java/` —— 真正的 git 仓库
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
-  在 `.gitignore` 里，新增要 `git add -f`）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
+  在 `.gitignore` 里，新增要 `git add -f`；**现役在根目录、存档在 `docs/archive/`**）/ `web/`（面板前端独立工程）/ `deploy/`（`postgres/` 迁移脚本、
   `mysql/` 历史脚本、`server/wechat-deploy`）/ `tools/ui-verify/`（面板验证脚本）。
 
 
