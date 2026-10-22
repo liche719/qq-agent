@@ -50,6 +50,8 @@ public class AdminBalanceController {
     private final com.liche.wechatagent.metrics.PanelCache panelCache;
     private final String searchApiKey;
     private final String searchBalanceUrl;
+    /** 场景 → 模型名的映射（审计表里只有场景，模型是按配置推出来的） */
+    private final java.util.Map<String, String> modelByScenario;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(8))
@@ -57,8 +59,13 @@ public class AdminBalanceController {
 
     public AdminBalanceController(LlmCallAuditRecorder audit,
                                   com.liche.wechatagent.metrics.PanelCache panelCache,
+                                  @Value("${llm.model:}") String dialogModel,
+                                  @Value("${llm.video-model:}") String videoModel,
+                                  @Value("${llm.image-model:}") String imageModel,
+                                  @Value("${voice.tts.model:}") String voiceModel,
                                   @Value("${deepseek.search.api-key:}") String searchApiKey,
                                   @Value("${deepseek.search.base-url:https://api.deepseek.com}") String searchBaseUrl) {
+        this.modelByScenario = buildModelMap(dialogModel, videoModel, imageModel, voiceModel);
         this.audit = audit;
         this.panelCache = panelCache;
         this.searchApiKey = searchApiKey == null ? "" : searchApiKey.trim();
@@ -164,7 +171,7 @@ public class AdminBalanceController {
             out.put("todayYuan", audit.todayYuan().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
             out.put("rangeYuan", audit.totalYuanLastDays(bounded)
                     .setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
-            out.put("scenarios", audit.byScenario(bounded));
+            out.put("scenarios", withModels(audit.byScenario(bounded)));
             out.put("daily", audit.byDay(bounded));
         } catch (RuntimeException exception) {
             log.warn("统计用量明细失败：{}", exception.toString());
@@ -175,6 +182,37 @@ public class AdminBalanceController {
         out.put("checkedAt", Instant.now().toString());
         panelCache.put(cacheKey, out);
         return out;
+    }
+
+    /**
+     * 给每个场景补上"用的是哪个模型"（2026-10-22 用户反馈：花费页看不到刷视频用的模型）。
+     *
+     * <p>审计表里只存场景、不存模型——模型是按配置推的，所以这里按场景映射，
+     * 换模型时只要改配置，不用改库、也不用重算历史。
+     */
+    private java.util.List<Map<String, Object>> withModels(java.util.List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return rows == null ? java.util.List.of() : rows;
+        }
+        for (Map<String, Object> row : rows) {
+            String scenario = String.valueOf(row.get("scenario"));
+            row.put("model", modelByScenario.getOrDefault(scenario, ""));
+        }
+        return rows;
+    }
+
+    private static java.util.Map<String, String> buildModelMap(String dialogModel, String videoModel,
+                                                               String imageModel, String voiceModel) {
+        java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+        String dialog = dialogModel == null ? "" : dialogModel.trim();
+        for (String scenario : java.util.List.of("dialog", "dialog_first", "extract", "reflect",
+                "self_comment", "reminder_parse", "schedule_parse", "unknown")) {
+            map.put(scenario, dialog);
+        }
+        map.put("video", videoModel == null ? "" : videoModel.trim());
+        map.put("image", imageModel == null ? "" : imageModel.trim());
+        map.put("voice", voiceModel == null ? "" : voiceModel.trim());
+        return map;
     }
 
     /** 查 DeepSeek 官方余额；查不到返回 null（不污染主结果） */

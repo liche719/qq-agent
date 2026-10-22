@@ -171,7 +171,7 @@ public class QqChannel implements WeChatChannel {
                      @Value("${qq.api-read-timeout-seconds:15}") long apiReadTimeoutSeconds,
                      @Value("${qq.websocket-connect-timeout-seconds:10}") long websocketConnectTimeoutSeconds,
                      @Value("${qq.passive-window-ms:3600000}") long passiveWindowMillis,
-                     @Value("${qq.typing-keepalive-ms:50000}") long typingKeepaliveMillis,
+                     @Value("${qq.typing-keepalive-ms:30000}") long typingKeepaliveMillis,
                      @Value("${qq.ephemeral-cache-ttl-ms:1800000}") long ephemeralCacheTtlMillis,
                      @Value("${qq.stream-state-ttl-ms:600000}") long streamStateTtlMillis,
                      @Value("${qq.max-conversation-cache-entries:2048}") int maxConversationCacheEntries,
@@ -209,7 +209,7 @@ public class QqChannel implements WeChatChannel {
         this.websocketConnectTimeoutSeconds = bounded(websocketConnectTimeoutSeconds, 1, 120,
                 10);
         this.passiveWindowMillis = bounded(passiveWindowMillis, 1_000, 3_600_000, 60 * 60 * 1000L);
-        this.typingKeepaliveMillis = bounded(typingKeepaliveMillis, 1_000, 60_000, 50_000L);
+        this.typingKeepaliveMillis = bounded(typingKeepaliveMillis, 1_000, 60_000, 30_000L);
         this.ephemeralCacheTtlMillis = bounded(ephemeralCacheTtlMillis, 1_000, 86_400_000,
                 30 * 60 * 1000L);
         this.streamStateTtlMillis = bounded(streamStateTtlMillis, 1_000, 86_400_000,

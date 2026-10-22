@@ -462,7 +462,7 @@ public class AgentLoop {
                                 // 每个工具第一次跑时先报一句进度（2026-10-22 用户要求"每个工具都能看到说明"）；
                                 // 同一轮同一个工具只报一次，避免连续调用刷屏
                                 if (announcedTools.add(request.name())) {
-                                    TurnProgress.hint(toolDisplayNames.getOrDefault(request.name(), request.name()));
+                                    TurnProgress.hint(progressLabel(request));
                                 }
                                 ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
                                         ? executeTool(request, userId)
@@ -713,6 +713,44 @@ public class AgentLoop {
                     "工具执行抛出异常：" + exception.getClass().getSimpleName());
             throw exception;
         }
+    }
+
+    /**
+     * 进度条上的那一行：工具名 + 对象摘要（2026-10-22 用户要求）。
+     *
+     * <p>只显示工具名的话，他知道"在看视频"但不知道"看哪条"；从调用参数里挑一个最有信息量的字段
+     * （标题 / 查询词 / 链接 / 正文），截到 24 字。取不到就只显示工具名——宁缺毋滥。
+     */
+    private String progressLabel(ToolExecutionRequest request) {
+        String display = toolDisplayNames.getOrDefault(request.name(), request.name());
+        String detail = progressDetail(request.arguments());
+        return detail == null ? display : display + "：" + detail;
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper PROGRESS_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static String progressDetail(String arguments) {
+        if (arguments == null || arguments.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = PROGRESS_JSON.readTree(arguments);
+            for (String field : new String[]{"title", "query", "bvid", "url", "text", "content", "keyword", "name"}) {
+                String value = node.path(field).asText("");
+                if (value.isBlank()) {
+                    continue;
+                }
+                String cleaned = value.replaceFirst("^https?://", "").replaceAll("\\s+", " ").trim();
+                if (cleaned.isEmpty()) {
+                    continue;
+                }
+                return cleaned.length() <= 24 ? cleaned : cleaned.substring(0, 24) + "…";
+            }
+        } catch (Exception ignored) {
+            // 参数不是 JSON 或结构不同：只显示工具名
+        }
+        return null;
     }
 
     private void recordToolEvent(String userId, String traceId, String phase, String toolName, String payload) {

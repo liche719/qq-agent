@@ -72,6 +72,7 @@ const summaryRows = computed(() => {
 
 const scenarioColumns = [
   { label: '场景', value: row => zh('scenario', row.scenario) },
+  { label: '模型', value: row => row.model || '—' },
   { label: '次数', value: row => fmtNum(row.calls) },
   { label: '输入 token', value: row => fmtNum(row.promptTokens) },
   { label: '输出 token', value: row => fmtNum(row.completionTokens) },
