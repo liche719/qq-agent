@@ -36,6 +36,10 @@ application-local.yml
 *.dump
 !deploy/**/*.sql
 
+# 视频工程（Remotion 成片项目，642 MB，**只在本地，绝不上传**）
+/video/
+/video-qqagent/
+
 # 前端工程（Vue 3 + Vite）
 /web/node_modules/
 /web/dist/
