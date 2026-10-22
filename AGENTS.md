@@ -29,7 +29,7 @@
 - 入口类：`com.liche.wechatagent.WechatAgentApplication`
 - 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
-- 代码分析报告：`.agents/code-analyzer/technical/module-analysis/REPORT.md`（**2026-09-02 的旧分析，部分结论已过期**）。
+- 代码分析报告：`docs/archive/code-analysis-2026-09-02/`（**2026-09-02 的旧分析，部分结论已过期**，已存档）。
 - **规模现状**：工具 **64 个 / 21 个类**（2026-10-22 生产启动日志 `21 个类 / 64 个工具`；新增 `DiscoverToolsTool`）、系统提示词 **30 条**（编号 1–30，**15 已并入 9、20 空号**；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
