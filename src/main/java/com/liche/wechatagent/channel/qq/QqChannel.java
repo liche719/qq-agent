@@ -1309,6 +1309,10 @@ public class QqChannel implements WeChatChannel {
         }
         synchronized (session) {
             session.replyToMsgId = replyToMsgId;
+            // 心跳会往同一行里补"还在…"，总行数封顶，别让进度条变成流水账
+            if (session.text.length() > 0 && session.text.toString().split("\n").length >= 12) {
+                return;
+            }
             if (session.text.length() > 0) {
                 session.text.append('\n');
             }
