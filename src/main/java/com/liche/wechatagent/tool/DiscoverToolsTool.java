@@ -22,10 +22,14 @@ public class DiscoverToolsTool implements AgentToolProvider {
     private static final Logger log = LoggerFactory.getLogger(DiscoverToolsTool.class);
     private static final int MAX_RESULTS = 12;
 
-    private final ToolRegistry registry;
+    private final org.springframework.beans.factory.ObjectProvider<ToolRegistry> registryProvider;
 
-    public DiscoverToolsTool(ToolRegistry registry) {
-        this.registry = registry;
+    /**
+     * 用 {@link org.springframework.beans.factory.ObjectProvider} 延迟取：ToolRegistry 构造时要收集
+     * 所有 AgentToolProvider（包括本工具），直接注入 ToolRegistry 会形成循环依赖，应用起不来。
+     */
+    public DiscoverToolsTool(org.springframework.beans.factory.ObjectProvider<ToolRegistry> registryProvider) {
+        this.registryProvider = registryProvider;
     }
 
     @Tool(value = "当你要做的事需要一个当前没有的工具时调用：按关键词搜索更多能力"
@@ -34,7 +38,7 @@ public class DiscoverToolsTool implements AgentToolProvider {
             + "如果搜不到，就如实告诉用户这个能力暂时没有，别硬编。")
     public ToolBusinessResult discoverTools(
             @dev.langchain4j.agent.tool.P("要做什么，用自然语言几个词，例如「面试陪练」「定时任务」") String query) {
-        List<ToolRegistry.ToolMeta> hits = registry.allMetadata().stream()
+        List<ToolRegistry.ToolMeta> hits = registryProvider.getObject().allMetadata().stream()
                 // 只搜"默认不常驻"的，避免把已经在手上的工具又列一遍
                 .filter(meta -> !ToolCatalog.isCore(meta.providerClass())
                         || ToolCatalog.DISCOVER_TOOL.equals(meta.name()))
