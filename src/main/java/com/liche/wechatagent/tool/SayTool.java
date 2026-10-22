@@ -26,7 +26,7 @@ public class SayTool implements AgentToolProvider {
             + "中途有阶段性结果再补一句，最后再给完整答复。"
             + "**不要用在这些时候**：一问一答的闲聊、查个天气、记个提醒、说个晚安——那些本来就快，说了是添乱。"
             + "一句话就够，别超过 60 字，像跟人说话，不要「正在处理中」「请稍候」这种机器腔。"
-            + "一轮最多说 3 次（QQ 那边有条数限制），说多了会被拒。")
+            + "一轮最多说 2 次（和程序自动发的「正在看视频…」共用 QQ 的被动回复额度），说多了会被拒。")
     public ToolBusinessResult sayToUser(
             @P("要说给他听的那句话，像平时聊天，别超过 60 字") String text) {
         String outcome = TurnProgress.emit(text);

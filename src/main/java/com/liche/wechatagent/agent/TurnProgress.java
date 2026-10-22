@@ -26,11 +26,13 @@ public final class TurnProgress {
     private static final Logger log = LoggerFactory.getLogger(TurnProgress.class);
 
     /** 默认每轮最多播报几次（最终回复还要占一次，QQ 一条消息总共只认 5 次） */
-    private static final int DEFAULT_MAX = 3;
+    private static final int DEFAULT_MAX = 2;
     /** 两次播报之间至少隔这么久，防刷屏 */
     private static final long MIN_GAP_MILLIS = 3000;
     /** 单条最长（长了不像"顺口说一句"，而且浪费被动额度） */
     private static final int MAX_CHARS = 200;
+    /** 工具进度提示更短：它只是一句"我在干嘛" */
+    private static final int HINT_MAX_CHARS = 40;
 
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
@@ -71,6 +73,43 @@ public final class TurnProgress {
 
     public static void clear() {
         CURRENT.remove();
+    }
+
+    /**
+     * 工具进度提示（2026-10-22）——**程序自动发**，不是模型决定。
+     *
+     * <p>用户的原话：<i>「笨鱼在做什么我不知道，所以不能靠看到它在做什么来动态调整」</i>。
+     * 所以在慢工具（看视频、翻网页、搜索）开始前，先发一句「正在看视频…」，
+     * 让他知道进度，也能据此决定要不要补一句话。
+     *
+     * <p>和 {@link #emit} 共用同一份额度，所以最多也就 2 条；间隔不够、额度用完都静默跳过
+     * ——进度提示是锦上添花，不能因为它把最终回复的额度吃掉。
+     */
+    public static void hint(String text) {
+        State state = CURRENT.get();
+        if (state == null || text == null || text.isBlank()) {
+            return;
+        }
+        String message = text.trim();
+        if (message.length() > HINT_MAX_CHARS) {
+            message = message.substring(0, HINT_MAX_CHARS - 1) + "…";
+        }
+        if (state.sent.get() >= state.max) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long last = state.lastAt.get();
+        if (last > 0 && now - last < MIN_GAP_MILLIS) {
+            return;
+        }
+        try {
+            state.sender.accept(message);
+            state.sent.incrementAndGet();
+            state.lastAt.set(now);
+            log.info("工具进度提示（第 {} 次）：{}", state.sent.get(), message);
+        } catch (RuntimeException exception) {
+            log.warn("工具进度提示发送失败：{}", exception.getMessage());
+        }
     }
 
     /**

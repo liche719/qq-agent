@@ -456,11 +456,17 @@ public class AgentLoop {
                         if (ai.hasToolExecutionRequests()) {
                             hasTools.set(true);
                             for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
+                                ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
+                                // 慢工具先给一句进度（2026-10-22）：他能看到"正在看视频…"，
+                                // 才知道要不要再补一句；预算与 sayToUser 共享，最多 2 条。
+                                if (executionClass == ToolExecutionClass.SLOW_EXTERNAL) {
+                                    TurnProgress.hint("正在"
+                                            + toolDisplayNames.getOrDefault(request.name(), request.name()) + "…");
+                                }
                                 ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
                                         ? executeTool(request, userId)
                                         : ToolExecutionOutcome.failure(
                                                 "这个工具不在当前作用域里，换一个：" + request.name(), 0);
-                                ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
                                 log.debug("工具策略 name={} class={} user={}", request.name(), executionClass, userId);
                                 if (outcome.successful()) {
                                     successfulTools.add(request.name());
