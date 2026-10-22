@@ -40,7 +40,7 @@ public class DeepSeekSearchClient {
     private static final Logger log = LoggerFactory.getLogger(DeepSeekSearchClient.class);
     private static final int DEFAULT_TIMEOUT_SECONDS = 20;
     /** 官方单次最多 50 条；我们最多也就展示 10 条，多要既慢又没意义 */
-    private static final int MAX_COUNT = 10;
+    private static final int MAX_COUNT = 15;
     /**
      * 没有 {@code site:} 限定时的相关性门槛：官方说 ≥1.5 算优质，但 1.5 太严会砍掉有用的；
      * 实测无意义查询的分都在 1 以下，1.0 能把"瞎搜回来的噪声"挡在外面（见 {@code parse} 的说明）。
@@ -60,7 +60,7 @@ public class DeepSeekSearchClient {
                                 @Value("${llm.api-key:}") String llmApiKey,
                                 @Value("${deepseek.search.enabled:true}") boolean enabled,
                                 @Value("${deepseek.search.timeout-seconds:20}") int timeoutSeconds,
-                                @Value("${deepseek.search.count:10}") int count,
+                                @Value("${deepseek.search.count:6}") int count,
                                 @Value("${searxng.language:zh-CN}") String language) {
         this.baseUrl = trimSlash(baseUrl);
         String key = apiKey == null || apiKey.isBlank() ? llmApiKey : apiKey;
@@ -82,15 +82,24 @@ public class DeepSeekSearchClient {
      * @param publishedAfter 只要这个日期之后发布的网页（近一年检索用）；null 表示不限制
      */
     public List<SearxngClient.SearchHit> search(String query, LocalDate publishedAfter) {
+        return search(query, publishedAfter, count);
+    }
+
+    /**
+     * @param requestedCount 本次要几条（1–{@value #MAX_COUNT}）。模型可以按需要指定：
+     *                       查单个事实 3–5 条就够，做汇总/比价才值得要到 10 条以上。
+     */
+    public List<SearxngClient.SearchHit> search(String query, LocalDate publishedAfter, int requestedCount) {
         if (!enabled || query == null || query.isBlank()) {
             return List.of();
         }
+        int effectiveCount = Math.max(1, Math.min(MAX_COUNT, requestedCount));
         String effectiveQuery = applyFilters(query.trim(), publishedAfter);
         long started = System.nanoTime();
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("query", clampQuery(effectiveQuery));
-            payload.put("count", count);
+            payload.put("count", effectiveCount);
             // need_content=false：正文我们自己用 WebPageTool 抓（那边有白名单/去噪），这里只要摘要
             payload.put("need_content", false);
 

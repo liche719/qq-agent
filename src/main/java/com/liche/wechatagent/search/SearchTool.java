@@ -90,31 +90,40 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
                 deepReadCount, deepReadChars, timeZoneId);
     }
 
-    @Tool(value = "搜索互联网获取资料，返回按部署配置限制数量的最相关结果。需要查询实时信息、新闻、未知资料时使用。")
+    @Tool(value = "搜索互联网获取资料，返回最相关的结果。需要查询实时信息、新闻、未知资料时使用。"
+            + "可以用 count 指定要几条（默认 6、最多 15）：查一个事实给 3–5 条，做汇总/比价或要多个来源时给 10–15 条。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public String searchWeb(String query) {
+    public String searchWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                            @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                    required = false) Integer count) {
         statusService.push("我正在搜索相关资料…");
-        return search(requireQuery(query), null, false);
+        return search(requireQuery(query), null, false, false, count);
     }
 
-    @Tool(value = "核对当前、最新、今天、正在使用的版本、价格、活动、新闻等会随时间变化的事实。会限定近一年结果并带入当前年月。拿到结果后，必须阅读可靠来源的原文再给出明确结论。")
+    @Tool(value = "核对当前、最新、今天、正在使用的版本、价格、活动、新闻等会随时间变化的事实。会限定近一年结果并带入当前年月。拿到结果后，必须阅读可靠来源的原文再给出明确结论。"
+            + "count 可以指定要几条（默认 6、最多 15）。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public String searchLatestWeb(String query) {
+    public String searchLatestWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                                  @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                          required = false) Integer count) {
         statusService.push("我正在核对最新资料…");
         String requestedQuery = requireQuery(query);
         LocalDate today = LocalDate.now(timeZone);
         String datedQuery = requestedQuery + " " + today.getYear() + "年" + today.getMonthValue() + "月";
-        return search(datedQuery, "year", true);
+        return search(datedQuery, "year", true, false, count);
     }
 
-    @Tool(value = "高可靠核验搜索：用于政策、法规、考试、医疗、价格、版本等不能仅凭单个摘要判断的事实。返回最多十条候选来源，并明确要求读取原文、比较至少两个独立发布者、检查日期和适用范围；证据不足时必须说明无法确认。")
+    @Tool(value = "高可靠核验搜索：用于政策、法规、考试、医疗、价格、版本等不能仅凭单个摘要判断的事实。返回候选来源，并明确要求读取原文、比较至少两个独立发布者、检查日期和适用范围；证据不足时必须说明无法确认。"
+            + "count 可以指定要几条（默认 6、最多 15；核验一般 8–12 条）。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public String searchVerifiedWeb(String query) {
+    public String searchVerifiedWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
+                                    @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
+                                            required = false) Integer count) {
         statusService.push("我正在交叉核对多个来源…");
         String requestedQuery = requireQuery(query);
         LocalDate today = LocalDate.now(timeZone);
         return search(requestedQuery + " " + today.getYear() + "年" + today.getMonthValue() + "月",
-                "year", true, true);
+                "year", true, true, count);
     }
 
     private String search(String query, String timeRange, boolean latest) {
@@ -122,10 +131,28 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
     }
 
     private String search(String query, String timeRange, boolean latest, boolean verified) {
+        return search(query, timeRange, latest, verified, null);
+    }
+
+    /** 默认 6 条、最多 15 条（2026-10-22 用户要求：允许模型按需要指定，但要有上限） */
+    private static final int DEFAULT_RESULT_COUNT = 6;
+    private static final int MAX_RESULT_COUNT = 15;
+    /** 原文摘录总长度上限（字符） */
+    private static final int DEEP_SECTION_MAX_CHARS = 3000;
+
+    private static int normalizeCount(Integer requested) {
+        if (requested == null || requested <= 0) {
+            return DEFAULT_RESULT_COUNT;
+        }
+        return Math.max(1, Math.min(MAX_RESULT_COUNT, requested));
+    }
+
+    private String search(String query, String timeRange, boolean latest, boolean verified, Integer requestedCount) {
 
         // 2026-10-20 起**主路是 DeepSeek 搜索**（用户要求），SearXNG 降为兜底。
         // 理由：DS 的摘要更干净、认 site:/after:、还带 rerank 分；大陆 IP 下 SearXNG 只剩六个引擎、不认 site:。
         // 代价是按次收费 —— 所以配额由 DeepSeekSearchQuota 按「账号 + 当天」卡在 20 次。
+        int want = normalizeCount(requestedCount);
         String userId = statusService.currentUserId();
         List<SearxngClient.SearchHit> hits = List.of();
         boolean dsTried = false;
@@ -135,7 +162,7 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
             if (quota == null || quota.tryConsume(userId)) {
                 dsTried = true;
                 try {
-                    hits = dedupe(deepSeekSearchClient.search(query, publishedAfter(latest, timeRange)));
+                    hits = dedupe(deepSeekSearchClient.search(query, publishedAfter(latest, timeRange), want));
                 } catch (Exception e) {
                     log.warn("DS 搜索失败，转 SearXNG 兜底 query={}", query, e);
                 }
@@ -147,7 +174,9 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
         boolean searxFailed = false;
         if (hits.isEmpty()) {
             try {
-                hits = dedupe(searxngClient.search(query, timeoutSeconds, timeRange));
+                List<SearxngClient.SearchHit> fallback = dedupe(searxngClient.search(query, timeoutSeconds, timeRange));
+                // 兜底引擎一次给得很多，按模型要的条数截断，别把上下文塞满
+                hits = fallback.size() > want ? new ArrayList<>(fallback.subList(0, want)) : fallback;
             } catch (Exception e) {
                 log.warn("兜底搜索也失败 query={}", query, e);
                 searxFailed = true;
@@ -155,7 +184,9 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
             }
         }
 
-        List<SearxngClient.SearchHit> deduped = hits;
+        List<SearxngClient.SearchHit> deduped = hits.size() > want
+                ? new java.util.ArrayList<>(hits.subList(0, want))
+                : hits;
 
         if (deduped.isEmpty()) {
             if (searxFailed) {
@@ -222,9 +253,15 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
                         .append(text).append("\n\n");
             }
             if (read > 0) {
+                // 原文摘录封顶（2026-10-22）：3 篇 × 每篇几千字会把搜索结果顶到 8000 字上限，
+                // 光这一条就吃掉 2–3k token；摘要已经够判断，原文留 3000 字核对即可。
+                String deepText = deepSection.toString();
+                if (deepText.length() > DEEP_SECTION_MAX_CHARS) {
+                    deepText = deepText.substring(0, DEEP_SECTION_MAX_CHARS) + "\n…（原文摘录已截断）";
+                }
                 sb.append("【原文摘录】（已抓取排名靠前的 ").append(read)
                         .append(" 条正文，内容有截断，仅供核对事实）\n")
-                        .append(deepSection).append("\n");
+                        .append(deepText).append("\n");
             }
         }
 
