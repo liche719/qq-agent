@@ -1,4 +1,4 @@
-# wechat-qq-agent
+# qq-agent
 
 多用户 QQ 私聊长期陪伴 Agent 后端。Spring Boot 3.5 + LangChain4j + **PostgreSQL 16 (pgvector)** + Redis + Quartz(JDBC)。
 

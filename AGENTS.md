@@ -1,4 +1,4 @@
-# wechat-qq-agent · AI Agent 记忆与操作手册
+# qq-agent · AI Agent 记忆与操作手册
 
 > 本文件是给 AI 编码代理（Codex / DeepSeek harness / Claude Code 等）的项目记忆。
 > 换 harness 时，把本文件内容作为项目规则或系统提示加载，即可继承全部上下文。
@@ -21,7 +21,7 @@
 
 ## 1. 项目
 
-- 名称：wechat-qq-agent —— QQ 私聊长期陪伴 Agent 后端。
+- 名称：**qq-agent** —— QQ 私聊长期陪伴 Agent 后端（仓库 `liche719/qq-agent`；历史名 `wechat-qq-agent` 只是仓库重定向，代码目录仍叫 `wechat-agent-java`）。
 - 技术栈：Spring Boot 3.5 / Java 21 / Maven；**PostgreSQL 16 + pgvector** + Spring Data JPA（2026-09-18 从 MySQL 8 整库迁来，见 `docs/pg-migration.md`）；Redis；Quartz(JDBC 持久化)；LangChain4j + 自研 OpenAI 兼容 ChatModel；SearX-NG 自托管搜索；QQ 官方机器人 WebSocket（默认通道）；**微信 iLink 通道 2026-09-12 已移除**。
 - 核心优先级：用户长期记忆不丢失 > 系统稳定运行 > 交互体验友好。
 - 代码目录：`C:\Users\33721\Desktop\wechat-agent\wechat-agent-java`
