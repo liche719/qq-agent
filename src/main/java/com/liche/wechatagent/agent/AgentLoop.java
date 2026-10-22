@@ -134,6 +134,13 @@ public class AgentLoop {
 
     @Value("${app.time-zone:Asia/Shanghai}")
     private String timeZoneId = "Asia/Shanghai";
+
+    /**
+     * 渐进式工具披露（2026-10-22）：普通对话只发核心工具，缺了再 {@code discoverTools} 解锁。
+     * 关掉就退回"63 个全发"的旧行为。
+     */
+    @Value("${agent.tools.progressive:true}")
+    private boolean progressiveTools = true;
     private final Map<String, String> toolDisplayNames;
     private final ConversationMemoryService conversationMemoryService;
     /** 按用户状态裁剪工具集 */
@@ -297,6 +304,8 @@ public class AgentLoop {
                                Map<String, ToolExecutionOutcome> failedTools,
                                Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink,
                                TurnScope scope) {
+        // 每轮清空"按需解锁"的工具（2026-10-22）：上一轮解锁的不能漂到下一轮
+        com.liche.wechatagent.tool.ToolDiscovery.reset();
         List<ToolSpecification> specifications = trimmedSpecifications(userId, scope);
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();
@@ -376,7 +385,40 @@ public class AgentLoop {
     /** 按模块自己声明的规则裁剪工具集（2026-10-09 起只剩这一件事，考试那套关键词裁剪已删除） */
     private List<ToolSpecification> trimmedSpecifications(String userId, TurnScope scope) {
         List<ToolSpecification> all = toolRegistry.specificationsOf(scope);
-        return toolSetTrimmer == null ? all : toolSetTrimmer.trim(all, userId).specifications();
+        List<ToolSpecification> visible = all;
+        // 渐进式披露（2026-10-22）：普通对话只发核心工具，63 个 schema 约 5–6k token，
+        // 砍掉一半能让第一跳快不少；缺工具时模型调 discoverTools 解锁。
+        // 作用域调用（"它自己的时间"）不裁：那边本来就只有一小撮工具。
+        boolean scoped = scope != null && scope.isScoped();
+        if (progressiveTools && !scoped) {
+            java.util.Map<String, String> providerByName = new java.util.HashMap<>();
+            for (ToolRegistry.ToolMeta meta : toolRegistry.allMetadata()) {
+                providerByName.put(meta.name(), meta.providerClass());
+            }
+            visible = all.stream()
+                    .filter(spec -> com.liche.wechatagent.tool.ToolCatalog
+                            .isCore(providerByName.get(spec.name())))
+                    .toList();
+            log.info("渐进式工具：本轮带 {} 个 / 共 {} 个（其余用 discoverTools 解锁）",
+                    visible.size(), all.size());
+        }
+        List<ToolSpecification> base = toolSetTrimmer == null ? visible : toolSetTrimmer.trim(visible, userId).specifications();
+        // 本轮通过 discoverTools 解锁的工具并进来（同一轮立即可用）
+        var unlocked = com.liche.wechatagent.tool.ToolDiscovery.unlocked();
+        if (unlocked.isEmpty()) {
+            return base;
+        }
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        List<ToolSpecification> merged = new ArrayList<>(base);
+        for (ToolSpecification spec : base) {
+            names.add(spec.name());
+        }
+        for (ToolSpecification spec : all) {
+            if (unlocked.contains(spec.name()) && names.add(spec.name())) {
+                merged.add(spec);
+            }
+        }
+        return merged;
     }
 
     /** 升档后允许更多工具轮：判断放在循环里，所以升档当轮立即生效 */

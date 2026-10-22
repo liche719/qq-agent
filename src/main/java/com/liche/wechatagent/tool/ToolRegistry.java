@@ -114,6 +114,23 @@ public class ToolRegistry {
     }
 
     /**
+     * 工具元信息（2026-10-22）：给 {@code discoverTools} 做"按需解锁"用。
+     *
+     * @param providerClass 提供方类名——{@link ToolCatalog} 靠它归类，不靠工具名硬编码
+     */
+    public record ToolMeta(String name, String description, String providerClass) {
+    }
+
+    public List<ToolMeta> allMetadata() {
+        List<ToolMeta> list = new ArrayList<>(entries.size());
+        for (ToolEntry entry : entries.values()) {
+            list.add(new ToolMeta(entry.name(), entry.spec().description(),
+                    entry.tool().getClass().getSimpleName()));
+        }
+        return list;
+    }
+
+    /**
      * 只保留作用域允许的工具（三期领域②："它自己的时间"）。
      *
      * @param scope 作用域；null 或未限定 = 全量，行为不变
