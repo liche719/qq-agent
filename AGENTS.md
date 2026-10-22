@@ -170,7 +170,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/deploy-security.md` | 部署安全（受限命令、HMAC 验签、CI 供应链） |
 | `docs/pg-migration.md` | MySQL → PostgreSQL 整库迁移 |
 | `docs/panel-app.md` | 面板安卓壳（APK） |
-| `docs/ICP备案指南.md` | 备案流程记录 |
+| `docs/icp-filing.md` | 备案流程记录 |
 | `README.md` | 项目对外说明（快速开始、功能对照、目录结构） |
 
 ## 7. 当前状态

@@ -26,7 +26,7 @@
 | 动数据库结构 / 迁移 | [`pg-migration.md`](pg-migration.md) + `AGENTS.md` §5 硬约定 |
 | 动面板前端 | `AGENTS.md` §3「运维面板前端」 |
 | 面板安卓壳（APK） | [`panel-app.md`](panel-app.md) |
-| 备案相关 | [`ICP备案指南.md`](ICP备案指南.md) |
+| 备案相关 | [`icp-filing.md`](icp-filing.md) |
 
 ## 现役文档（16 篇）
 
@@ -50,7 +50,7 @@
 | [`deploy-security.md`](deploy-security.md) | 受限部署命令、HMAC 验签、CI 供应链、**分片上传** | 2026-10-10 | 2026-09-13 ~ 09-30 |
 | [`pg-migration.md`](pg-migration.md) | MySQL → PostgreSQL 整库迁移全过程（历史事件，结论仍有效） | 2026-10-10 | 2026-09-17 ~ 09-20 |
 | [`panel-app.md`](panel-app.md) | 面板安卓壳 `liche-panel-1.0.apk`（产物在**工作区根**，不在仓库） | 2026-10-10 | 2026-09-29 |
-| [`ICP备案指南.md`](ICP备案指南.md) | 备案流程记录（**已通过**：粤ICP备2026141530号-1） | 2026-10-10 | 2026-09-12 |
+| [`icp-filing.md`](icp-filing.md) | 备案流程记录（**已通过**：粤ICP备2026141530号-1） | 2026-10-10 | 2026-09-12 |
 | [`ai-abilities.md`](ai-abilities.md) | 看视频 / 画图 / B站评论带图 / 长任务后台跑 | 2026-10-21 | 2026-10-21 |
 
 ## 存档（不再维护，仅追溯用）
