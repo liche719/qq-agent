@@ -159,10 +159,10 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
 | `docs/memory-extraction.md` | 记忆提取：触发、窗口、落库埋点、成本 |
-| `docs/memory-hybrid-plan.md` | 早期混合检索方案（**已被 vector 方案取代，存档**） |
+| `docs/archive/memory-hybrid-plan.md` | 早期混合检索方案（**已被 vector 方案取代，存档**） |
 | `docs/llm-call-modes.md` | LLM 调用档位、思考模式、缓存计价 |
 | `docs/self-layer-plan.md` | 自主模块「它自己」的设计与实测（**主文档**） |
-| `docs/self-layer-spec.md`、`docs/self-layer.md` | 同上，早期规格与说明（**存档**） |
+| `docs/archive/self-layer-spec.md`、`docs/archive/self-layer.md` | 同上，早期规格与说明（**存档**） |
 | `docs/backup.md` | 备份改版与恢复步骤 |
 | `docs/media-memory.md` | 媒体记忆三件套 |
 | `docs/ai-abilities.md` | **看视频 / 画图 / B站评论带图 / 长任务后台跑**（2026-10-21 那批） |

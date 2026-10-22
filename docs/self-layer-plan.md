@@ -5,9 +5,9 @@
 > 最新进展、实测与踩到的坑看本文 **§7.1 ~ §7.6**（含"它有嘴"、按钱算预算、独立作用域 `__self__`）。
 > 代码入口 `self/` 包：`SelfCoreService`（归属/证据门/事件）、`SelfStanceService`（判断与倾向）、
 > `SelfLessonService`（教训）、`SelfQuestStore`（它自己的作业与"口"）、`SelfReflectionService`（反思）。
-> 配套的 `self-layer.md`、`self-layer-spec.md` 是**早期的纸面方案，已归档**，只在追溯设计动机时看。
+> 配套的 `archive/self-layer.md`、`archive/self-layer-spec.md` 是**早期的纸面方案，已归档**，只在追溯设计动机时看。
 
-> 配套：`self-layer.md`（骨架与决策）、`self-layer-spec.md`（细则）。
+> 配套：`archive/self-layer.md`（骨架与决策）、`archive/self-layer-spec.md`（细则）。
 > 本文件只覆盖**一期**：`spec §1`（表）、`§2`（工具）、`§3`（注入顺序）、`§8`（时间感）+ **只读面板最小集**。
 > **不碰**：反思流程（§4）、判断→倾向（§5）、FSRS 复查调度、领域/产出（§9）——那些是二期/三期。
 > 2026-09-14 · **一期已实现 + 本地端到端验证通过**；~~分支 `next`，未部署~~ **（2026-10-10 现状：一期 ~ 三期② 全部已上线，tag `v1.1.0` / `v1.2.0` / `v1.3.1`，见 §7.6。）**
@@ -460,8 +460,8 @@ LLM/工具步骤是这一轮中途才产生的，收尾必须放到整轮结束�
 
 | 文件 | 装什么 |
 |---|---|
-| `self-layer.md` | 骨架、边表、图、判据、算法清单 |
-| `self-layer-spec.md` | 表 / 工具 / 注入 / 反思 / 倾向 / 分歧 / 产出 / 面板 / 算法逐条 |
+| `archive/self-layer.md` | 骨架、边表、图、判据、算法清单 |
+| `archive/self-layer-spec.md` | 表 / 工具 / 注入 / 反思 / 倾向 / 分歧 / 产出 / 面板 / 算法逐条 |
 | `self-layer-plan.md`（本文） | 一期施工图 |
 | `deploy/mysql/V5__…sql` | **已写**：`V5__create_agent_self_tables.sql`（4 张表，纯新增，回滚＝drop）——**2026-10-10 现状：`V5` 里后来还加了 `agent_stance`，另有 `agent_lesson`（V6）、`agent_quest{,_note,_run}`（V7）、`agent_self_utterance`（V8）与 `agent_quest_run.cost_yuan`（V9），见 §7.2 ~ §7.6** |
 | `src/main/java/…/self/` | 已写：4 实体 + 4 仓库 + `SelfService` + `SelfLoader` + `AgentSelfTool`（10 工具）——**2026-10-10 现状：`SelfService` 已按 §7.2/§7.3 拆成 `SelfCoreService` / `SelfStanceService` / `SelfLessonService` / `SelfQuestStore` / `SelfReflectionService`，实体与仓库也远不止 4 个** |

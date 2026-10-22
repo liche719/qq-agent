@@ -7,7 +7,7 @@
 
 > 2026-09-17 起草，来源：用户《记忆机制优化.txt》+ 我的核对与建议。
 > **状态：待用户拍板（文末 6 个问题），未开工改代码。**
-> 前置：`docs/memory-extraction.md`（现状）、`docs/memory-hybrid-plan.md`（步 1/2 已上线的审计与事务型跳过）。
+> 前置：`docs/memory-extraction.md`（现状）、`docs/archive/memory-hybrid-plan.md`（步 1/2 已上线的审计与事务型跳过）。
 
 ## 0. 一句话
 
