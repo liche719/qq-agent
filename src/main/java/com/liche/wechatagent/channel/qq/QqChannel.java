@@ -1261,6 +1261,8 @@ public class QqChannel implements WeChatChannel {
         int index;
         final StringBuilder text = new StringBuilder();
         volatile String messageId;
+        /** 这条进度消息回的是哪条入站消息——收尾帧和撤回都要用它 */
+        volatile String replyToMsgId;
 
         ProgressSession(int msgSeq) {
             this.msgSeq = msgSeq;
@@ -1278,6 +1280,7 @@ public class QqChannel implements WeChatChannel {
         ProgressSession session = progressSessions.computeIfAbsent(userId,
                 ignored -> new ProgressSession(messageSequence.next()));
         synchronized (session) {
+            session.replyToMsgId = replyToMsgId;
             if (session.text.length() > 0) {
                 session.text.append('\n');
             }
@@ -1292,20 +1295,24 @@ public class QqChannel implements WeChatChannel {
         if (session == null) {
             return;
         }
-        if (recall) {
-            String messageId = session.messageId;
-            if (messageId != null && !messageId.isBlank()) {
-                try {
-                    deleteMessage(botId, userId, messageId);
-                    log.info("[qq] progress recalled user={} lines={}", userId, session.index);
-                } catch (RuntimeException exception) {
-                    log.warn("[qq] progress recall failed user={}: {}", userId, exception.getMessage());
-                }
-            }
+        // **先收尾再撤回**：生成中（input_state=1）的流式消息直接删会被拒，
+        // 必须先发一帧 state=10 把它变成正常消息（2026-10-22 实测"出现了但没消失"）。
+        synchronized (session) {
+            sendProgressFrame(userId, session.replyToMsgId, session, 10);
+        }
+        if (!recall) {
             return;
         }
-        synchronized (session) {
-            sendProgressFrame(userId, null, session, 10);
+        String messageId = session.messageId;
+        if (messageId == null || messageId.isBlank()) {
+            log.warn("[qq] progress has no message id, cannot recall user={}", userId);
+            return;
+        }
+        boolean deleted = deleteMessage(botId, userId, messageId);
+        if (deleted) {
+            log.info("[qq] progress recalled user={} lines={}", userId, session.index);
+        } else {
+            log.warn("[qq] progress recall rejected user={} messageId={}", userId, messageId);
         }
     }
 
