@@ -88,8 +88,22 @@ public final class ToolCatalog {
         String needle = name == null ? "" : name.toLowerCase(Locale.ROOT);
         String desc = description == null ? "" : description.toLowerCase(Locale.ROOT);
         String cat = category == null ? "" : category.toLowerCase(Locale.ROOT);
-        // 中文没空格分词，按整串包含判断；英文按词也能命中
-        return needle.contains(q) || desc.contains(q) || cat.contains(q)
-                || q.contains(needle) || q.contains(cat);
+        // 整串先试（英文名、精确短语）
+        if (needle.contains(q) || desc.contains(q) || cat.contains(q)
+                || q.contains(needle) || q.contains(cat)) {
+            return true;
+        }
+        // 中文没有空格切词，模型又爱写整句（「看一看我自己工作区里的文件列表」），
+        // 整串比不中就按片段试：3–4 字窗口命中任意一处就算（2026-10-22 修）
+        int maxLen = Math.min(4, q.length());
+        for (int len = maxLen; len >= 3; len--) {
+            for (int start = 0; start + len <= q.length(); start++) {
+                String piece = q.substring(start, start + len);
+                if (needle.contains(piece) || desc.contains(piece) || cat.contains(piece)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

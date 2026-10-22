@@ -58,9 +58,11 @@ public class SendVoiceTool implements AgentToolProvider {
             + "**他想听你的声音**、让你「说一句」「念出来」「发条语音」，或者你觉得这件事用声音说更合适时调用。"
             + "text 是要念出来的那句话：口语、简短（默认不超过 120 字）、不要 emoji、不要链接、不要 markdown；"
             + "**只放要念的内容**，不要把整段文字回复再重复一遍。"
-            + "**发送时机由 atEnd 决定**：默认（false）调用这一刻就发出去；只有他说「最后再发语音」「等你说完再发」"
-            + "这类要求时才传 atEnd=true，那这条语音会排在本轮文字之后。"
-            + "**说了什么就要做什么**：跟他说「这就发」就别传 atEnd，说「最后发」就必须传 atEnd=true。"
+            + "**发送时机由 atEnd 决定**："
+            + "他说「先发语音」「马上发」「现在就发」→ **省略 atEnd**（调用这一刻就发）；"
+            + "他说「最后再发」「等你说完再发」「排在文字后面」→ 传 atEnd=true；"
+            + "没说时机也省略。**不确定就省略**——延后比提前更容易让他等错。"
+            + "**说了什么就要做什么**：说「这就发」就别传 atEnd；说「最后发」才传 true。"
             + "返回是否发出去；没发出去就如实说，不要假装发了。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult sendVoice(
