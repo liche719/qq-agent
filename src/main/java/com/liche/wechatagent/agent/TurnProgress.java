@@ -33,8 +33,8 @@ public final class TurnProgress {
     private static final int MAX_CHARS = 200;
     /** 工具进度提示更短：它只是一句"我在干嘛" */
     private static final int HINT_MAX_CHARS = 40;
-    /** 一条进度消息里最多追加几行（再多就成流水账了）；改成普通消息后每条各占额度，所以只留 2 */
-    private static final int MAX_HINT_LINES = 2;
+    /** 一条进度消息里最多追加几行（流式消息只算 1 条额度，所以可以多行，但别成流水账） */
+    private static final int MAX_HINT_LINES = 8;
 
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 

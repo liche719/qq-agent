@@ -239,7 +239,8 @@ public class AgentOrchestrator {
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
                 // 播报次数要在清掉 ThreadLocal 之前抓下来，发送阶段要拿它算还能发几个气泡
                 progressBubbles = TurnProgress.sentCount();
-                progressMessages = TurnProgress.progressLineCount();
+                // 进度是**一条**流式消息（多行只算 1 条额度），所以有就扣 1
+                progressMessages = TurnProgress.progressLineCount() > 0 ? 1 : 0;
                 TurnProgress.clear();
                 // 工具进度消息**不撤回**（2026-10-22 用户决定：撤回不退还额度，不如留着当工作记录）
                 WeChatChannel progressChannelToClose = channelFor(batch.channel());

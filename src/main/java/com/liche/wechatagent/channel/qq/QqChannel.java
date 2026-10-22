@@ -1253,15 +1253,25 @@ public class QqChannel implements WeChatChannel {
     }
 
     /**
-     * 工具进度（2026-10-22 实测改版）：**普通消息**，每轮最多 2 条，答完统一撤回。
+     * 工具进度（2026-10-22 用户定稿版）：**一条流式消息，往后叠加多行，最后不撤回**。
      *
-     * <p>为什么不继续用流式消息：QQ 的流式消息 id（UUID）不能调撤回接口——
-     * 实测 `DELETE /messages/{id}` 返回 `40061001 请求参数无效`；而普通消息的
-     * `ROBOT1.0_…` id 撤回返回 200。代价是"不能再原地追加"，只能一条新消息一行。
+     * <p>为什么是流式消息：普通消息只能一条一行，几条就占几次被动回复；流式消息更新多少次
+     * 都只算 1 条，所以能把「刷B站 / 先跟你说一句 / 看B站视频 / 记视频笔记」叠在同一个气泡里
+     * （截图里就是那样）。
+     *
+     * <p>为什么不撤回：撤回不退还发送时已扣的额度，撤了只是把信息藏起来；
+     * 留着当作"这一轮干了什么"的工作记录。
      */
     private static final class ProgressSession {
-        final java.util.List<String> messageIds = new java.util.ArrayList<>();
+        final int msgSeq;
+        int index;
+        final StringBuilder text = new StringBuilder();
+        volatile String messageId;
         volatile String replyToMsgId;
+
+        ProgressSession(int msgSeq) {
+            this.msgSeq = msgSeq;
+        }
     }
 
     private final java.util.Map<String, ProgressSession> progressSessions = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1272,13 +1282,15 @@ public class QqChannel implements WeChatChannel {
                 || replyToMsgId == null || replyToMsgId.isBlank()) {
             return;
         }
-        ProgressSession session = progressSessions.computeIfAbsent(userId, ignored -> new ProgressSession());
-        session.replyToMsgId = replyToMsgId;
-        String messageId = sendProgressMessage(userId, replyToMsgId, "· " + line.trim());
-        if (messageId != null && !messageId.isBlank()) {
-            synchronized (session) {
-                session.messageIds.add(messageId);
+        ProgressSession session = progressSessions.computeIfAbsent(userId,
+                ignored -> new ProgressSession(messageSequence.next()));
+        synchronized (session) {
+            session.replyToMsgId = replyToMsgId;
+            if (session.text.length() > 0) {
+                session.text.append('\n');
             }
+            session.text.append("· ").append(line.trim());
+            sendProgressFrame(userId, replyToMsgId, session, 1);
         }
     }
 
@@ -1288,45 +1300,52 @@ public class QqChannel implements WeChatChannel {
         if (session == null) {
             return;
         }
-        // 2026-10-22 用户决定：**不撤回了**。撤回不退还被动回复额度（发送时就扣了），
-        // 所以撤掉只是把信息藏起来，不如留着当工作记录。要恢复撤回把 recall 传 true。
-        if (!recall) {
-            return;
-        }
-        java.util.List<String> ids;
+        // 收尾（state=10）把它定格成普通消息；**不撤回**，留作工作记录
         synchronized (session) {
-            ids = new java.util.ArrayList<>(session.messageIds);
+            sendProgressFrame(userId, session.replyToMsgId, session, 10);
         }
-        int removed = 0;
-        for (String messageId : ids) {
-            if (deleteMessage(botId, userId, messageId)) {
-                removed++;
+        if (recall) {
+            // 保留能力：真要撤回时（普通消息才撤得掉），流式消息 id 会被平台拒绝，
+            // 这里只打日志，不影响主流程。
+            String messageId = session.messageId;
+            if (messageId != null && !messageId.isBlank() && deleteMessage(botId, userId, messageId)) {
+                log.info("[qq] progress recalled user={}", userId);
             } else {
-                log.warn("[qq] progress recall rejected user={} messageId={}", userId, messageId);
+                log.warn("[qq] progress recall unsupported user={} messageId={}", userId, messageId);
             }
         }
-        log.info("[qq] progress recalled user={} removed={}/{}", userId, removed, ids.size());
     }
 
-    /** 发一条进度消息（普通消息，带被动回复 msg_id），返回平台消息 id 供撤回 */
-    private String sendProgressMessage(String userId, String replyToMsgId, String text) {
+    private void sendProgressFrame(String userId, String replyToMsgId, ProgressSession session, int inputState) {
         try {
             ensureToken();
             RestClient client = buildRestClient(apiBase);
             ObjectNode body = objectMapper.createObjectNode();
-            body.put("content", text);
-            body.put("msg_type", 0);
-            body.put("msg_id", replyToMsgId);
-            body.put("msg_seq", messageSequence.next());
-            String response = client.post().uri("/v2/users/{openid}/messages", userId)
+            body.put("input_mode", "replace");
+            body.put("input_state", inputState);
+            body.put("content_type", "markdown");
+            body.put("content_raw", session.text.toString());
+            if (replyToMsgId != null && !replyToMsgId.isBlank()) {
+                body.put("msg_id", replyToMsgId);
+            }
+            body.put("msg_seq", session.msgSeq);
+            body.put("index", session.index++);
+            if (session.messageId != null) {
+                body.put("stream_msg_id", session.messageId);
+            }
+            String response = client.post().uri("/v2/users/{openid}/stream_messages", userId)
                     .header("Authorization", "QQBot " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body.toString())
                     .retrieve().body(String.class);
-            return objectMapper.readTree(response == null ? "{}" : response).path("id").asText("");
+            if (session.messageId == null && response != null) {
+                String id = objectMapper.readTree(response).path("id").asText("");
+                if (!id.isBlank()) {
+                    session.messageId = id;
+                }
+            }
         } catch (Exception exception) {
-            log.warn("[qq] progress message failed user={}: {}", userId, exception.getMessage());
-            return "";
+            log.warn("[qq] progress frame failed user={}: {}", userId, exception.getMessage());
         }
     }
 
