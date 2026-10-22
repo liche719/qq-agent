@@ -167,6 +167,8 @@ public class AgentOrchestrator {
 
     /** 异步入口：真实通道 / 模拟器 POST 使用，回复通过 channel 推送 */
     public void onInbound(InboundMessage msg) {
+        // 入口三段耗时（2026-10-22）：出现过"消息到了、17 秒后才建批"的情况，这里分段埋点
+        long t0 = System.currentTimeMillis();
         idempotency.bindDeliveryScope(msg.channel(), msg.botId());
         try {
             if (!idempotency.tryAcquire(msg.userId(), msg.msgId())) {
@@ -176,9 +178,17 @@ public class AgentOrchestrator {
         } finally {
             idempotency.clearDeliveryScope();
         }
+        long t1 = System.currentTimeMillis();
         userService.getOrCreate(msg.userId());
+        long t2 = System.currentTimeMillis();
         userService.touchDelivery(msg.userId(), msg.botId(), msg.channel());
+        long t3 = System.currentTimeMillis();
         messageBatcher.submit(msg, this::enqueueBatch);
+        long total = System.currentTimeMillis() - t0;
+        if (total > 500) {
+            log.warn("入站处理偏慢 user={} total={}ms idempotency={}ms getUser={}ms touch={}ms",
+                    msg.userId(), total, t1 - t0, t2 - t1, t3 - t2);
+        }
     }
 
     private void enqueueBatch(InboundMessageBatch batch) {
@@ -193,6 +203,7 @@ public class AgentOrchestrator {
         }
         boolean accepted = perUserExecutors.execute(batch.userId(), () -> {
             TurnSteering.enter(batch.userId());
+            VoiceOutbox.clear(); // 防御：线程复用时不带上一条残留的语音
             try {
             String reply = null;
             StreamReplySink sink = null;
@@ -267,7 +278,9 @@ public class AgentOrchestrator {
                 if (c != null && !(sink != null && sink.isDone())) {
                     // 多气泡（2026-10-21）：像人一样分 1~3 条发。QQ 对同一条用户消息只认 5 次被动回复，
                     // 所以要扣掉途中已经播报掉的条数；切不动的长文本会由 ReplySplitter 并回一条。
-                    int budget = Math.max(1, 5 - progressBubbles - progressMessages);
+                    // 有语音待发时再扣 1 条（2026-10-22：语音排在最后）。
+                    int budget = Math.max(1, 5 - progressBubbles - progressMessages
+                            - (VoiceOutbox.has() ? 1 : 0));
                     List<String> bubbles = replySplitter == null
                             ? List.<String>of(reply)
                             : replySplitter.split(reply, budget);
@@ -306,6 +319,17 @@ public class AgentOrchestrator {
                     if (allSent && taskStateStore != null) {
                         taskStateStore.markReplySent(taskId);
                     }
+                }
+            }
+            // 语音排在最后一条（2026-10-22）：不管这一轮有没有文字，都在文字之后发
+            String pendingVoice = VoiceOutbox.drain();
+            if (pendingVoice != null) {
+                WeChatChannel voiceChannel = channelFor(batch.channel());
+                if (voiceChannel != null) {
+                    boolean voiceSent = voiceChannel.sendVoiceReplyFrom(batch.botId(), batch.userId(),
+                            batch.replyToMsgId(), pendingVoice);
+                    log.info("语音最后发送 user={} sent={} replyTo={}", batch.userId(), voiceSent,
+                            batch.replyToMsgId());
                 }
             }
             } finally {

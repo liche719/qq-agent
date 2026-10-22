@@ -81,21 +81,18 @@ public class SendVoiceTool implements AgentToolProvider {
         if (!speech.ok()) {
             return ToolBusinessResult.failure("没合成出来：" + speech.url() + "。用文字回他，别说发了语音。");
         }
-        boolean sent = statusService.sendVoice(speech.url());
-        if (!sent) {
-            return ToolBusinessResult.failure("语音合成好了，但发送通道没送出去。"
-                    + "如实跟他说：这次语音没发成，用文字说了。");
-        }
+        // 先暂存，等这一轮文字发完再发（2026-10-22 用户要求：语音必须排在最后一条）
+        com.liche.wechatagent.agent.VoiceOutbox.put(speech.url());
         if (SelfTurnMark.active()) {
             countSelfUse();
         }
         recordCost(speakable, speech);
-        log.info("语音已发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
+        log.info("语音已合成，等待本轮最后发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
                 speakable.length(), speech.costMs());
-        return ToolBusinessResult.success("语音发出去了（" + ttsClient.voice()
-                + " 音色）。他听得到，**别再把这句话用文字重复一遍**，用一句别的接住就行。"
-                + "如果确实还有要紧的补充，**最多两句、60 字以内**；不要发长篇总结——"
-                + "要讲的长内容刚才就该放进语音里。");
+        return ToolBusinessResult.success("语音合成好了（" + ttsClient.voice()
+                + " 音色），**会在这一轮结束时作为最后一条发出去**。"
+                + "你还可以把要说的文字先说完整——文字会先发、语音最后发。"
+                + "**别再把语音里那句话说一遍**。");
     }
 
     /**
