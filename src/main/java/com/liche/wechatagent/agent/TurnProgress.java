@@ -33,8 +33,8 @@ public final class TurnProgress {
     private static final int MAX_CHARS = 200;
     /** 工具进度提示更短：它只是一句"我在干嘛" */
     private static final int HINT_MAX_CHARS = 40;
-    /** 一条进度消息里最多追加几行（再多就成流水账了） */
-    private static final int MAX_HINT_LINES = 8;
+    /** 一条进度消息里最多追加几行（再多就成流水账了）；改成普通消息后每条各占额度，所以只留 2 */
+    private static final int MAX_HINT_LINES = 2;
 
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
@@ -90,6 +90,12 @@ public final class TurnProgress {
     public static boolean progressStarted() {
         State state = CURRENT.get();
         return state != null && state.progressLines.get() > 0;
+    }
+
+    /** 这一轮发了几条进度消息（每条各占 1 次被动回复，算最终气泡时要扣掉） */
+    public static int progressLineCount() {
+        State state = CURRENT.get();
+        return state == null ? 0 : state.progressLines.get();
     }
 
     public static void clear() {
