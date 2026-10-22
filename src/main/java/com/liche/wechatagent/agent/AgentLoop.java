@@ -548,10 +548,19 @@ public class AgentLoop {
                                 if (!SILENT_TOOLS.contains(request.name()) && announcedTools.add(request.name())) {
                                     TurnProgress.hint(progressLabel(request));
                                 }
-                                ToolExecutionOutcome outcome = toolRegistry.isProvidedBy(request.name(), scope)
-                                        ? executeTool(request, userId)
-                                        : ToolExecutionOutcome.failure(
-                                                "这个工具不在当前作用域里，换一个：" + request.name(), 0);
+                                ToolExecutionOutcome outcome;
+                                java.util.concurrent.ScheduledFuture<?> heartbeat =
+                                        startProgressHeartbeat(request, executionClass);
+                                try {
+                                    outcome = toolRegistry.isProvidedBy(request.name(), scope)
+                                            ? executeTool(request, userId)
+                                            : ToolExecutionOutcome.failure(
+                                                    "这个工具不在当前作用域里，换一个：" + request.name(), 0);
+                                } finally {
+                                    if (heartbeat != null) {
+                                        heartbeat.cancel(false);
+                                    }
+                                }
                                 log.debug("工具策略 name={} class={} user={}", request.name(), executionClass, userId);
                                 if (outcome.successful()) {
                                     successfulTools.add(request.name());
@@ -834,6 +843,37 @@ public class AgentLoop {
      * <p>只显示工具名的话，他知道"在看视频"但不知道"看哪条"；从调用参数里挑一个最有信息量的字段
      * （标题 / 查询词 / 链接 / 正文），截到 24 字。取不到就只显示工具名——宁缺毋滥。
      */
+    /** 进度条心跳（2026-10-22）：慢工具跑超过 30 秒还没回来，就在进度条上补一句"还在…" */
+    private static final java.util.concurrent.ScheduledExecutorService HEARTBEAT =
+            java.util.concurrent.Executors.newScheduledThreadPool(2, runnable -> {
+                Thread thread = new Thread(runnable, "tool-progress-heartbeat");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    private java.util.concurrent.ScheduledFuture<?> startProgressHeartbeat(ToolExecutionRequest request,
+                                                                         ToolExecutionClass executionClass) {
+        if (executionClass != ToolExecutionClass.SLOW_EXTERNAL) {
+            return null;
+        }
+        java.util.function.Consumer<String> sender = TurnProgress.progressSender();
+        if (sender == null) {
+            return null;
+        }
+        String display = toolDisplayNames.getOrDefault(request.name(), request.name());
+        java.util.concurrent.atomic.AtomicInteger beats = new java.util.concurrent.atomic.AtomicInteger();
+        return HEARTBEAT.scheduleAtFixedRate(() -> {
+            if (beats.incrementAndGet() > 3) {
+                return;
+            }
+            try {
+                sender.accept("还在" + display + "…");
+            } catch (RuntimeException ignored) {
+                // 进度是尽力而为，发不出去不能影响工具
+            }
+        }, 30, 30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
     private String progressLabel(ToolExecutionRequest request) {
         String display = toolDisplayNames.getOrDefault(request.name(), request.name());
         String detail = progressDetail(request.arguments());

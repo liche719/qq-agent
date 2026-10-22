@@ -103,6 +103,17 @@ public final class TurnProgress {
     }
 
     /**
+     * 进度条专用通道（2026-10-22）：给"工具跑太久、进度条一动不动"时的心跳用。
+     *
+     * <p>心跳在**另一个线程**上发，ThreadLocal 拿不到，所以要把通道本身取出去，
+     * 由调用方在自己的定时任务里用。
+     */
+    public static Consumer<String> progressSender() {
+        State state = CURRENT.get();
+        return state == null ? null : state.progressSender;
+    }
+
+    /**
      * 工具进度提示（2026-10-22）——**程序自动发**，不是模型决定。
      *
      * <p>用户的原话：<i>「笨鱼在做什么我不知道，所以不能靠看到它在做什么来动态调整」</i>。

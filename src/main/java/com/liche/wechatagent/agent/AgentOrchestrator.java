@@ -201,6 +201,9 @@ public class AgentOrchestrator {
                 return;
             }
         }
+        // 排队耗时只算"派发 → 真正开始"这一段（2026-10-22）：原来用消息时间戳，
+        // 那是**平台发送时间**，会把 QQ 投递延迟（实测 0.8–5 秒）也算成我们在排队。
+        long enqueuedAt = System.currentTimeMillis();
         boolean accepted = perUserExecutors.execute(batch.userId(), () -> {
             TurnSteering.enter(batch.userId());
             VoiceOutbox.clear(); // 防御：线程复用时不带上一条残留的语音
@@ -229,7 +232,7 @@ public class AgentOrchestrator {
                         batch.userId(), batch.channel(), batch.messages().size(), batch.replyToMsgId(),
                         batch.images().size() + batch.attachments().size(),
                         batch.quotedImages().size() + batch.quotedAttachments().size(),
-                        Math.max(0, System.currentTimeMillis() - batch.firstReceivedAt()));
+                        Math.max(0, System.currentTimeMillis() - enqueuedAt));
                 conversationTraceLogger.inbound(batch.replyAnchor());
                 HandledReply handled = handleSafely(batch, taskId);
                 reply = handled.text();
