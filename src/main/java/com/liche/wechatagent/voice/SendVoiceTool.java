@@ -58,9 +58,15 @@ public class SendVoiceTool implements AgentToolProvider {
             + "**他想听你的声音**、让你「说一句」「念出来」「发条语音」，或者你觉得这件事用声音说更合适时调用。"
             + "text 是要念出来的那句话：口语、简短（默认不超过 120 字）、不要 emoji、不要链接、不要 markdown；"
             + "**只放要念的内容**，不要把整段文字回复再重复一遍。"
+            + "**发送时机由 atEnd 决定**：默认（false）调用这一刻就发出去；只有他说「最后再发语音」「等你说完再发」"
+            + "这类要求时才传 atEnd=true，那这条语音会排在本轮文字之后。"
+            + "**说了什么就要做什么**：跟他说「这就发」就别传 atEnd，说「最后发」就必须传 atEnd=true。"
             + "返回是否发出去；没发出去就如实说，不要假装发了。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public ToolBusinessResult sendVoice(String text) {
+    public ToolBusinessResult sendVoice(
+            @dev.langchain4j.agent.tool.P("要念出来的那一两句话") String text,
+            @dev.langchain4j.agent.tool.P(value = "是否排到本轮文字之后再发；他说「最后发语音」时传 true，否则省略",
+                    required = false) Boolean atEnd) {
         if (!ttsClient.enabled()) {
             return ToolBusinessResult.failure("语音能力没配置，发不了。跟他说一声，用文字回。");
         }
@@ -81,18 +87,31 @@ public class SendVoiceTool implements AgentToolProvider {
         if (!speech.ok()) {
             return ToolBusinessResult.failure("没合成出来：" + speech.url() + "。用文字回他，别说发了语音。");
         }
-        // 先暂存，等这一轮文字发完再发（2026-10-22 用户要求：语音必须排在最后一条）
-        com.liche.wechatagent.agent.VoiceOutbox.put(speech.url());
         if (SelfTurnMark.active()) {
             countSelfUse();
         }
         recordCost(speakable, speech);
-        log.info("语音已合成，等待本轮最后发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
+
+        // 发送时机由模型自己决定（2026-10-22 用户澄清：语音不必排最后，但**不能言不由衷**）：
+        // 默认调用即发；只有它显式说"最后再发"时，才暂存到本轮文字之后。
+        if (Boolean.TRUE.equals(atEnd)) {
+            com.liche.wechatagent.agent.VoiceOutbox.put(speech.url());
+            log.info("语音已合成，排在本轮最后 voice={} 字数={} 用时={}ms", ttsClient.voice(),
+                    speakable.length(), speech.costMs());
+            return ToolBusinessResult.success("语音合成好了（" + ttsClient.voice()
+                    + " 音色），**会在这一轮的文字之后发出去**。"
+                    + "你刚才要是说了「最后发」，这样就对得上；一句话都不必再解释。");
+        }
+        boolean sent = statusService.sendVoice(speech.url());
+        if (!sent) {
+            return ToolBusinessResult.failure("语音合成好了，但发送通道没送出去。"
+                    + "如实跟他说：这次语音没发成，用文字说了。");
+        }
+        log.info("语音已发送 voice={} 字数={} 用时={}ms", ttsClient.voice(),
                 speakable.length(), speech.costMs());
-        return ToolBusinessResult.success("语音合成好了（" + ttsClient.voice()
-                + " 音色），**会在这一轮结束时作为最后一条发出去**。"
-                + "你还可以把要说的文字先说完整——文字会先发、语音最后发。"
-                + "**别再把语音里那句话说一遍**。");
+        return ToolBusinessResult.success("语音已经发出去了（" + ttsClient.voice()
+                + " 音色），**就是现在**。别再补一句「稍后/最后发你」——那样会和他看到的时间对不上。"
+                + "真要再补话，最多一两句（≤60 字），别把语音内容重复一遍。");
     }
 
     /**
