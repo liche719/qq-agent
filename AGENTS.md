@@ -262,7 +262,7 @@ Codex 原始会话在 `C:\Users\33721\.codex\sessions\`（其他 harness 读不�
   - `DS-HARNESS-PROMPT.md` —— 给新 harness 的引导提示词（2026-10-10 清空重写成"去哪读权威信息"，不再存快照）
   - `.git-ca/` —— 导出的系统根证书，**push 依赖它，不能删**（坑 52 上面那条）
   - `panel-app/` + `liche-panel-1.0.apk` —— 面板安卓壳与产物（**在这里，不在仓库里**；仓库只跟踪说明文档 `docs/panel-app.md`）
-  - `video/qqagent/` —— **B 站成片的 Remotion 工程**（77 镜头；`node_modules` 占 487 MB，可随时删掉重装）
+  - `video/qqagent/` —— **B 站成片的 Remotion 工程**（77 镜头；`node_modules` 占 487 MB，可随时删掉重装）。**只在本机，绝不上传 GitHub**（仓库 `.gitignore` 有 `/video/` 兜底）
   - `_archive/` —— 历史存档（迁移备份、早期笔记、本地日志、TTS 样本），索引见 `_archive/README.md`；**可以整目录删，不影响运行**
   - `wechat-agent-java/` —— 真正的 git 仓库
 - 仓库内：`AGENTS.md`（本文件）/ `README.md`（对外说明）/ `docs/`（**细节文档，索引见 `docs/README.md`**；
