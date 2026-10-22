@@ -54,6 +54,13 @@ public class ScheduledTaskService {
     private final ScheduledTaskRepository repository;
     private final ScheduledTaskParseService parseService;
     /**
+     * 执行时用的通道名（2026-10-22）：合成消息以前写死 "simulator"，生产没有这个通道，
+     * 于是工具里所有"发出去"的动作（语音、播报）都在 channelFor() 那步静默失败。
+     * 现在按真实部署的通道绑定，语音发不出去时才能走到"主动消息重投"那条路。
+     */
+    @org.springframework.beans.factory.annotation.Value("${wechat.channel.mode:qq}")
+    private String channelMode = "qq";
+    /**
      * 用 ObjectProvider 延迟取 AgentOrchestrator：它间接依赖命令注册表（/schedules），
      * 而命令处理器又依赖本服务，直接注入会形成 Bean 循环依赖。
      */
@@ -296,7 +303,8 @@ public class ScheduledTaskService {
                 throw new IllegalStateException("Agent 运行时不可用");
             }
             String messageId = "scheduled-" + current.getId() + "-" + UUID.randomUUID();
-            String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId, current.getInstruction()));
+            String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId,
+                    current.getInstruction(), null, channelMode));
             String text = reply == null || reply.isBlank() ? "（这次没有拿到结果）" : reply.strip();
             // 省略号也要算进 lastResult 的 2000 字符列宽里，否则 MySQL 严格模式会拒绝这条 update（任务会卡在 RUNNING）
             String clipped = text.length() <= resultMaxChars
