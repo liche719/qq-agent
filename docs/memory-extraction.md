@@ -239,7 +239,7 @@ memory_change_log:
 四条结论：
 1. **改写而不是新增平行行** —— 同一 subject + 同一 predicate 被正确取代。
 2. **旧行保留**、`superseded_by` 指向新行 —— 能回溯"以前是什么"。
-3. **由主调用判定**（提示词第 15 条那套 fact cards + relation/targetSubject），
+3. **由主调用判定**（提示词里那套 fact cards + relation/targetSubject；2026-10-22 起规则重排，原「第 15 条」已并入第 9 条），
    **没有退回**"向量召回 + 每次一条小判定"的兜底路径 —— 说明那条省钱的设计也真的在工作。
 4. **相似度阈值（0.72）没有把它误判成 duplicates** 而干脆不写。
 
