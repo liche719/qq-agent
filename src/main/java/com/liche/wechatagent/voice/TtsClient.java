@@ -51,7 +51,7 @@ public class TtsClient {
             @Value("${voice.tts.voice:Bella}") String voice,
             @Value("${voice.tts.language-type:Chinese}") String languageType,
             @Value("${voice.tts.max-chars:120}") int maxChars,
-            @Value("${voice.tts.timeout-seconds:30}") int timeoutSeconds) {
+            @Value("${voice.tts.timeout-seconds:45}") int timeoutSeconds) {
         this.enabled = enabled;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.apiKey = apiKey == null ? "" : apiKey.trim();
@@ -114,8 +114,24 @@ public class TtsClient {
                     .build();
 
             long started = System.currentTimeMillis();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            // 超时重试一次（2026-10-22）：阿里云 TTS 实测偶尔 30 秒不返回，
+            // 一次失败就整条语音没了；重试命中率高，代价只是多等一会儿。
+            HttpResponse<String> response = null;
+            for (int attempt = 1; attempt <= 2; attempt++) {
+                try {
+                    response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                    break;
+                } catch (java.net.http.HttpTimeoutException timeout) {
+                    if (attempt == 2) {
+                        throw timeout;
+                    }
+                    log.warn("语音合成超时，重试一次 model={} timeout={}s", model, timeoutSeconds);
+                }
+            }
             long costMs = System.currentTimeMillis() - started;
+            if (response == null) {
+                return Result.failed("语音合成没拿到响应。");
+            }
 
             if (response.statusCode() != 200) {
                 // 错误体可能回显请求，只留前 200 字便于定位
