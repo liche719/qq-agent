@@ -299,8 +299,24 @@ public class AgentLoop {
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
         Set<String> announcedTools = new LinkedHashSet<>();
+        // 轮内注入次数（用户在它干活时又发来的消息，最多注入 2 次）
+        int injections = 0;
         try {
             for (int round = 0; round < maxRounds; round++) {
+                // 轮内注入（2026-10-22）：用户在你干活时又发来的消息，先收尾手上的工具、
+                // 下一轮调模型之前塞进上下文，让它按最新的话调整后续。
+                if (!scoped && injections < 2) {
+                    List<String> injected = TurnSteering.drainTexts(userId);
+                    if (!injected.isEmpty()) {
+                        injections++;
+                        messages.add(UserMessage.from("（你干活时他又发来：" + String.join("；", injected)
+                                + "。先把手上这步收尾，再按他的话调整；已经做过的不要重复。）"));
+                        for (String text : injected) {
+                            recordSteeredUserMessage(userId, text);
+                        }
+                        log.info("轮内注入第 {} 次 user={} count={}", injections, userId, injected.size());
+                    }
+                }
                 // 按**钱**熔断（作用域调用专用）：轮数不是钱的代理——每轮 prompt 大小差很多
                 double spent = spendMeter == null ? 0 : spendMeter.totalYuan() - spentAtStart;
                 boolean budgetOut = budgetYuan > 0 && spent >= budgetYuan;
@@ -751,6 +767,24 @@ public class AgentLoop {
             // 参数不是 JSON 或结构不同：只显示工具名
         }
         return null;
+    }
+
+    /**
+     * 把注入进来的用户消息也记进对话记忆（2026-10-22）。
+     *
+     * <p>不记的话，"他中途补的那句"在记忆里就是空白——第二天翻记录、提取偏好都会漏。
+     * 用独立的 event_key，避免和这一轮的主消息撞去重键。
+     */
+    private void recordSteeredUserMessage(String userId, String text) {
+        if (conversationMemoryService == null || text == null || text.isBlank()) {
+            return;
+        }
+        try {
+            conversationMemoryService.record(userId, "user", "steer:" + UUID.randomUUID() + ":user",
+                    text, List.of(), null);
+        } catch (RuntimeException exception) {
+            log.warn("轮内注入的消息写入对话记忆失败（忽略）user={} reason={}", userId, exception.getMessage());
+        }
     }
 
     private void recordToolEvent(String userId, String traceId, String phase, String toolName, String payload) {

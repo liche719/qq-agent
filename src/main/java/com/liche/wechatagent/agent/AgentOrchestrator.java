@@ -182,7 +182,18 @@ public class AgentOrchestrator {
     }
 
     private void enqueueBatch(InboundMessageBatch batch) {
+        // 这一轮还在跑：把消息塞进去，让模型下一次调模型前看到，而不是另起一轮（2026-10-22）
+        if (TurnSteering.busy(batch.userId())) {
+            boolean queued = TurnSteering.push(batch);
+            log.info("消息并入进行中的一轮 user={} count={} queued={}", batch.userId(),
+                    batch.messages().size(), queued);
+            if (queued) {
+                return;
+            }
+        }
         boolean accepted = perUserExecutors.execute(batch.userId(), () -> {
+            TurnSteering.enter(batch.userId());
+            try {
             String reply = null;
             StreamReplySink sink = null;
             boolean processingFailed = false;
@@ -297,6 +308,11 @@ public class AgentOrchestrator {
                     }
                 }
             }
+            } finally {
+                TurnSteering.leave(batch.userId());
+                // 轮末还有没赶上的消息：合并成下一轮继续处理，别丢
+                resumePendingBatches(batch.userId());
+            }
         });
         if (!accepted) {
             log.warn("消息队列已满，暂时无法处理 user={} replyTo={}", batch.userId(), batch.replyToMsgId());
@@ -305,6 +321,29 @@ public class AgentOrchestrator {
                 channel.sendTextReplyFrom(batch.botId(), batch.userId(), batch.replyToMsgId(), "现在消息有点多，请稍后再试一次。");
             }
         }
+    }
+
+    /**
+     * 轮末补跑：把没赶上注入的消息合并成一轮再处理（2026-10-22）。
+     *
+     * <p>只有在"消息到达时这一轮已经给出最终答复"的情况下才会走到这里；
+     * 大多数情况它们已经在 {@link TurnSteering#drainTexts} 里被这一轮消费掉了。
+     */
+    private void resumePendingBatches(String userId) {
+        java.util.List<InboundMessageBatch> pending = TurnSteering.drainBatches(userId);
+        if (pending.isEmpty()) {
+            return;
+        }
+        java.util.List<com.liche.wechatagent.channel.InboundMessage> merged = new java.util.ArrayList<>();
+        for (InboundMessageBatch item : pending) {
+            merged.addAll(item.messages());
+        }
+        if (merged.isEmpty()) {
+            return;
+        }
+        String anchor = pending.get(pending.size() - 1).replyToMsgId();
+        log.info("上一轮结束后继续处理积压消息 user={} count={}", userId, merged.size());
+        enqueueBatch(new InboundMessageBatch(merged, anchor));
     }
 
     private void markReplyDeliveryFailed(String taskId, InboundMessageBatch batch, String reason) {

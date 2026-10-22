@@ -184,7 +184,7 @@ agent:
   user-queue-idle-minutes: ${AGENT_USER_QUEUE_IDLE_MINUTES:30}
   # 连发合并（2026-10-21 用户要求）：窗口内再来一条就重新计时，像人等你把话说完。
   # 窗口 2.5 秒、最长 8 秒——再久就不像即时回复了。
-  message-batch-window-millis: ${AGENT_MESSAGE_BATCH_WINDOW_MILLIS:2500}
+  message-batch-window-millis: ${AGENT_MESSAGE_BATCH_WINDOW_MILLIS:300}
   message-batch-max-window-millis: ${AGENT_MESSAGE_BATCH_MAX_WINDOW_MILLIS:8000}
   # true = 窗口内任何非命令消息都并成一轮（文字/图片/视频混着发也只回一次）；
   # false = 退回旧行为（只有带媒体/引用的消息能并、纯文字连发各回各的）。
