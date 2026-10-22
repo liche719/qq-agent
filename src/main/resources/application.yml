@@ -207,8 +207,9 @@ agent:
   # 每轮被动回复总上限是 5 条，途中播报会先占掉额度，这里会按剩余额度收敛。
   reply-split:
     enabled: ${AGENT_REPLY_SPLIT_ENABLED:true}
-    # 开了拆分就不走流式（QQ 的 stream_messages 只能产出一条消息，跟多气泡冲突）
-    disable-stream: ${AGENT_REPLY_SPLIT_DISABLE_STREAM:true}
+    # 流式与多气泡的折中（2026-10-22）：默认**走流式**，第一条气泡流式回放、后面的再补发；
+    # 设 true 则完全关流式（所有气泡都等生成完一次性发）——只在流式出问题时当回滚开关用。
+    disable-stream: ${AGENT_REPLY_SPLIT_DISABLE_STREAM:false}
     max-bubbles: ${AGENT_REPLY_SPLIT_MAX_BUBBLES:3}
     max-chars-per-bubble: ${AGENT_REPLY_SPLIT_MAX_CHARS:70}
     split-threshold: ${AGENT_REPLY_SPLIT_THRESHOLD:60}

@@ -46,7 +46,7 @@ public class ReplySplitter {
     private final long delayMillis;
 
     public ReplySplitter(@Value("${agent.reply-split.enabled:true}") boolean enabled,
-                         @Value("${agent.reply-split.disable-stream:true}") boolean disableStream,
+                         @Value("${agent.reply-split.disable-stream:false}") boolean disableStream,
                          @Value("${agent.reply-split.max-bubbles:3}") int maxBubbles,
                          @Value("${agent.reply-split.max-chars-per-bubble:70}") int maxCharsPerBubble,
                          @Value("${agent.reply-split.split-threshold:60}") int splitThreshold,

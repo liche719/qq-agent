@@ -126,6 +126,19 @@ public class QqChannel implements WeChatChannel {
     private long maxOutboundMediaBytes;
     @Value("${qq.max-message-chars:4000}")
     private int maxMessageChars;
+    /** 第一段气泡最少多少字才定稿（到句末才真定，见 shouldFreezeFirstBubble） */
+    @Value("${agent.reply-split.stream-freeze-min-chars:60}")
+    private int streamFreezeMinChars = 60;
+    /** 一轮最多几个气泡（含流式的第一条） */
+    @Value("${agent.reply-split.max-bubbles:3}")
+    private int splitMaxBubbles = 3;
+    /** 后续气泡怎么切（和普通发送共用一套规则；测试里可以为 null） */
+    private com.liche.wechatagent.agent.ReplySplitter replySplitter;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReplySplitter(com.liche.wechatagent.agent.ReplySplitter replySplitter) {
+        this.replySplitter = replySplitter;
+    }
     private final QqWebSocketClient gatewayClient;
     private final QqChunkedMediaUploader chunkedMediaUploader;
     private volatile ScheduledExecutorService heartbeatExecutor;
@@ -1570,6 +1583,12 @@ public class QqChannel implements WeChatChannel {
         volatile boolean failed;
         /** 某一帧是"结果未知"地失败的（超时/连接中断/5xx）：可能已经在 QQ 侧留下半截消息 */
         volatile boolean deliveryUncertain;
+        /** 累计收到的全文（replace 模式下每帧发的是它） */
+        final StringBuilder buffered = new StringBuilder();
+        /** 第一段气泡是否已经定稿（定稿后只累计、不再发流式帧） */
+        volatile boolean frozen;
+        /** 第一段气泡的原文——必须与最终全文的前缀逐字一致，否则退回单条发送 */
+        volatile String frozenText;
         StreamSessionState(int msgSeq) { this.msgSeq = msgSeq; }
     }
     private final ConcurrentMap<String, StreamSessionState> streamStates = new ConcurrentHashMap<>();
@@ -1596,8 +1615,22 @@ public class QqChannel implements WeChatChannel {
         return new StreamReplySink() {
             @Override
             public void onPartial(String partial) {
-                if (partial == null || partial.isBlank()) return;
-                if (sendStreamFrame(userId, passiveMsgId, state, partial, 1)) { // GENERATING
+                if (partial == null || partial.isBlank() || state.done) return;
+                state.buffered.append(partial);
+                if (state.frozen) return; // 第一段已定稿，剩下的只累计、等 onDone 补发
+                String text = state.buffered.toString();
+                // 到第一个句末再定稿：这样第一条气泡是完整的一两句，不会半句断开
+                if (shouldFreezeFirstBubble(text)) {
+                    String prefix = cutAtSentenceBoundary(text);
+                    if (prefix != null && sendStreamFrame(userId, passiveMsgId, state, prefix, 1)) {
+                        state.hasPartialContent = true;
+                        state.frozen = true;
+                        state.frozenText = prefix;
+                        log.info("[qq] stream first bubble frozen user={} chars={}", userId, prefix.length());
+                        return;
+                    }
+                }
+                if (sendStreamFrame(userId, passiveMsgId, state, text, 1)) { // GENERATING
                     state.hasPartialContent = true;
                 }
             }
@@ -1606,6 +1639,23 @@ public class QqChannel implements WeChatChannel {
             public void onDone(String fullText) {
                 if (state.done) return;
                 String finalContent = fullText == null ? "" : fullText;
+                // 第一段已经流式显示过：用定稿文本收尾，剩下的再补 1~2 条气泡
+                if (state.frozen && state.frozenText != null
+                        && finalContent.startsWith(state.frozenText)) {
+                    String rest = finalContent.substring(state.frozenText.length()).trim();
+                    log.info("[qq] stream finalize first bubble user={} firstLen={} restLen={}", userId,
+                            state.frozenText.length(), rest.length());
+                    long startedFrozen = System.nanoTime();
+                    boolean frozenSent = recordTextSend(startedFrozen,
+                            sendStreamFrame(userId, passiveMsgId, state, state.frozenText, 10));
+                    state.failed = !frozenSent;
+                    state.done = frozenSent;
+                    streamStates.remove(userId);
+                    if (frozenSent && !rest.isEmpty()) {
+                        sendFollowUpBubbles(userId, passiveMsgId, rest);
+                    }
+                    return;
+                }
                 boolean toolFooter = finalContent.contains("\n\n> _调用工具：");
                 if (toolFooter && !state.hasPartialContent) {
                     log.info("[qq] sending tool footer through standard markdown user={}", userId);
@@ -1704,7 +1754,10 @@ public class QqChannel implements WeChatChannel {
     // Builds one append-mode payload for a QQ streaming reply.
     private ObjectNode buildStreamBody(String msgId, StreamSessionState state, String contentRaw, int inputState) {
         ObjectNode body = objectMapper.createObjectNode();
-        body.put("input_mode", "append");
+        // 2026-10-22 改 replace：每帧发**累计全文**。官方文档要求 replace 模式下 content_raw 以上游
+        // 已下发前缀开头（我们天然满足），而且已下发前缀不可改（40007）——append 模式如果中途定稿
+        // 第一段再补，前缀就对不上了。
+        body.put("input_mode", "replace");
         body.put("input_state", inputState);
         body.put("content_type", "markdown");
         body.put("content_raw", contentRaw);
@@ -1715,6 +1768,56 @@ public class QqChannel implements WeChatChannel {
             body.put("stream_msg_id", state.streamMsgId);
         }
         return body;
+    }
+
+    /** 第一段气泡够长、且落在句末时定稿——否则继续流式 */
+    private boolean shouldFreezeFirstBubble(String text) {
+        if (text == null || text.length() < streamFreezeMinChars) {
+            return false;
+        }
+        char last = text.charAt(text.length() - 1);
+        if ("。！？!?…\n".indexOf(last) >= 0) {
+            return true;
+        }
+        // 一直没有句末（长句/英文）：到两倍阈值也硬定一次，别让第一条气泡无限长
+        return text.length() >= streamFreezeMinChars * 2;
+    }
+
+    /** 取"到最后一个句末为止"的前缀；没有句末返回 null */
+    private static String cutAtSentenceBoundary(String text) {
+        for (int i = text.length() - 1; i >= 0; i--) {
+            char c = text.charAt(i);
+            if (c == '。' || c == '！' || c == '？' || c == '!' || c == '?' || c == '…') {
+                String prefix = text.substring(0, i + 1).trim();
+                return prefix.isEmpty() ? null : prefix;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 第一段之外的后续气泡（2026-10-22）：最多补 {@code max-bubbles - 1} 条，
+     * 间隔与拆分规则交给 {@link ReplySplitter}，这样流式和普通发送的分法保持一致。
+     */
+    private void sendFollowUpBubbles(String userId, String replyToMsgId, String rest) {
+        java.util.List<String> bubbles = replySplitter == null
+                ? java.util.List.of(rest)
+                : replySplitter.split(rest, Math.max(1, splitMaxBubbles - 1));
+        for (int i = 0; i < bubbles.size(); i++) {
+            if (i > 0) {
+                try {
+                    Thread.sleep(replySplitter == null ? 900L : replySplitter.delayMillis());
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            boolean ok = recordTextSend(System.nanoTime(),
+                    sendWithPassiveFirst(userId, replyToMsgId, bubbles.get(i)));
+            if (!ok) {
+                log.warn("[qq] follow-up bubble failed user={} index={}", userId, i);
+                return;
+            }
+        }
     }
 
     // Stores the stream identifier returned by QQ after the first successful frame.
