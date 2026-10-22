@@ -47,14 +47,14 @@ public class ReplySplitter {
 
     public ReplySplitter(@Value("${agent.reply-split.enabled:true}") boolean enabled,
                          @Value("${agent.reply-split.disable-stream:false}") boolean disableStream,
-                         @Value("${agent.reply-split.max-bubbles:3}") int maxBubbles,
+                         @Value("${agent.reply-split.max-bubbles:4}") int maxBubbles,
                          @Value("${agent.reply-split.max-chars-per-bubble:70}") int maxCharsPerBubble,
                          @Value("${agent.reply-split.split-threshold:60}") int splitThreshold,
                          @Value("${agent.reply-split.min-chars-per-bubble:4}") int minCharsPerBubble,
                          @Value("${agent.reply-split.delay-ms:900}") long delayMillis) {
         this.enabled = enabled;
         this.disableStream = disableStream;
-        this.maxBubbles = Math.max(1, Math.min(3, maxBubbles));
+        this.maxBubbles = Math.max(1, Math.min(4, maxBubbles));
         this.maxCharsPerBubble = Math.max(40, Math.min(500, maxCharsPerBubble));
         this.splitThreshold = Math.max(0, splitThreshold);
         this.minCharsPerBubble = Math.max(1, minCharsPerBubble);

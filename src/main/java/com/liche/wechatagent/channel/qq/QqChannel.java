@@ -1897,8 +1897,16 @@ public class QqChannel implements WeChatChannel {
      * 间隔与拆分规则交给 {@link ReplySplitter}，这样流式和普通发送的分法保持一致。
      */
     private void sendFollowUpBubbles(String userId, String replyToMsgId, String rest) {
-        // 发过进度消息就只剩 1 条气泡的额度（5 = sayToUser 2 + 进度 1 + 答案 2），否则最多补 2 条
-        int room = progressSessions.containsKey(userId) ? 1 : Math.max(1, splitMaxBubbles - 1);
+        // 5 条被动回复：扣掉途中播报（sayToUser）和进度（1 条），再扣掉已经发出去的这条流式答案，
+        // 剩下的才是补发额度（2026-10-22 用户要求：有进度时答案也应有最多 4 条）
+        int used = com.liche.wechatagent.agent.TurnProgress.sentCount()
+                + (com.liche.wechatagent.agent.TurnProgress.progressLineCount() > 0 ? 1 : 0);
+        int room = Math.max(0, 4 - used);
+        room = Math.min(room, Math.max(1, splitMaxBubbles - 1));
+        if (room <= 0) {
+            log.warn("[qq] no follow-up room left user={} used={}", userId, used);
+            return;
+        }
         java.util.List<String> bubbles = replySplitter == null
                 ? java.util.List.of(rest)
                 : replySplitter.split(rest, room);
