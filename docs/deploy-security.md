@@ -189,7 +189,7 @@ cd ..; mvn -q -DskipTests package
 服务器侧**用当前镜像做底、只换 jar**（不用装 Maven/Node，也不用重新拉基础镜像）：
 
 ```bash
-printf 'FROM %s\nCOPY app.jar /app/app.jar\n' "$(docker inspect wechat-agent-java -f '{{.Config.Image}}')" > Dockerfile
+printf 'FROM %s\nCOPY app.jar /app/app.jar\n' "$(docker inspect qq-agent -f '{{.Config.Image}}')" > Dockerfile
 docker build -t "wechat-agent:manual-<短sha>" .
 AGENT_IMAGE="wechat-agent:manual-<短sha>" docker compose -f docker-compose.remote.yml up -d --no-build agent
 ```

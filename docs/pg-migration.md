@@ -72,7 +72,7 @@ searxng（丢调好的 settings 挂载）一起换掉，还会凭空重建一个
 ```
 cd /opt/qq-agent
 sed -i '/^DB_URL=/d;/^DB_DRIVER=/d;/^DB_USER=/d;/^DB_PASSWORD=/d;/^QUARTZ_DELEGATE=/d' .env
-AGENT_IMAGE=$(docker inspect wechat-agent-java -f '{{.Config.Image}}') \
+AGENT_IMAGE=$(docker inspect qq-agent -f '{{.Config.Image}}') \
   docker compose -f docker-compose.remote.yml up -d --no-build agent
 ```
 **注意**：切换之后写的数据只在 pg 里，回滚会丢这部分——所以回滚要在发现问题时马上做。

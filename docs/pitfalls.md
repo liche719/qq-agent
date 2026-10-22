@@ -112,7 +112,7 @@
 
 55. **定时任务的执行结果不能整行 save（2026-09-13 修）**：`execute()` 原来是「执行前读整行 → 跑一分钟 Agent → `save()`」，而项目没有 `@DynamicUpdate`，save 是 **merge + 全列 UPDATE** → 执行期间用户在面板点「暂停」（写库 `enabled=false` 并删掉 Quartz job）会被执行前那份旧快照覆盖回 `enabled=true`：面板显示"已启用 + 有下次时间"，实际 job 已经删了、**任务从此永远不会再跑**（只有下次重启 resync 才自愈）；执行期间改标题/指令/cron 同理会被回滚。现在只写「执行拥有的那几列」（`ScheduledTaskRepository.updateRunResult`：status/lastRunAt/lastResult/lastError/runCount/nextRunAt/updatedAt），行被删时 UPDATE 影响 0 行，天然等价于原来"删了就别写回"的保护。**实测**：`runNow` → 3 秒后 toggle 成暂停 → 执行结束后库里仍 `enabled=0 status=SUCCESS run_count=1`（旧代码会变回 1）。`setEnabled` 还是整行 save（窗口只有毫秒级），暂未改。
 
-56. **GitHub Actions 抽风：push 到了却不建流水线，`workflow_dispatch` 回 500/502**（2026-09-13，约 10 分钟自愈；状态页显示正常）。排查第一步是 `gh run list --commit <sha>` **核对看的是不是自己那条运行**（我第一次盯错了上一个 commit 的运行，同坑 32）；PushEvent 有 + `gh workflow view` 能列 = push 与 workflow 都没坏 → 等几分钟重试。**期间别改代码**，用 `docker inspect wechat-agent-java -f '{{.Config.Image}}'` 核实镜像 tag，而不是看有没有新运行。
+56. **GitHub Actions 抽风：push 到了却不建流水线，`workflow_dispatch` 回 500/502**（2026-09-13，约 10 分钟自愈；状态页显示正常）。排查第一步是 `gh run list --commit <sha>` **核对看的是不是自己那条运行**（我第一次盯错了上一个 commit 的运行，同坑 32）；PushEvent 有 + `gh workflow view` 能列 = push 与 workflow 都没坏 → 等几分钟重试。**期间别改代码**，用 `docker inspect qq-agent -f '{{.Config.Image}}'` 核实镜像 tag，而不是看有没有新运行。
 
 57. **面板"每次刷新一闪一闪"不是整页刷新，是描述式面板把区块状态清空了（2026-09-13 修，用户报的）**：`DescriptorPanel.load()` 原来每次都把每个区块重置成 `{loading:true, data:null}`，模板 `v-if="view.loading"` 就把表格/表单**整个拆掉换成「加载中…」再重建**，每 10 秒一次。**先判定再改**：真实 Chromium 里量 `performance.timeOrigin`＋ MutationObserver 数「加载中…」与表格/表单被移除的次数。修法：刷新时**沿用上一次的状态**（只有第一次显示加载态），失败时**保留旧数据** + 一行「这次刷新失败，显示的是上一次的数据」。**顺带修掉更烦的**：`formValues` 被反复回写，**用户正在编辑的表单每 10 秒被冲一次**→ 加 `formTouched`（`@input`/`@change` 置位、提交后清位），与 `MaimemoPanel` 一致。8 个手写页签本来就不闪——**新写 tick 面板照抄这条**。
 
@@ -301,7 +301,7 @@
 - `Remove-Item` 常被安全策略拒绝；删除文件用 `cmd /c del /f "绝对路径"`。
 - `apply_patch` 的 `.bat` 包装器会丢换行，多行补丁不可靠：可改为用 `[IO.File]::WriteAllText` + `String.Replace` 直接改写，或直接调用 `codex.exe --codex-run-as-apply-patch $patch`（路径见 `Get-Command apply_patch` 指向的 .bat）。
 - 写文件统一用 LF 换行，避免 git 警告与补丁解析失败。
-- 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `wechat-agent-java`，注意路径。
+- 命令默认工作目录是 workspace 根 `C:\Users\33721\Desktop\wechat-agent`，而 git 仓库在子目录 `qq-agent`，注意路径。
 - **本机 HTTPS 被 SteamTools 中间拦截**（系统根证书里有 `SteamTools Certificate / BeyondDimension`，系统代理 `127.0.0.1:3067`）：`schannel` 后端报 `SEC_E_NO_CREDENTIALS (0x8009030e)`，`OpenSSL` 后端又不认它的根证书。已在**仓库本地** `.git/config`（未入库）设 `http.sslBackend=openssl` + `http.sslCAInfo=C:/Users/33721/Desktop/wechat-agent/.git-ca/windows-roots.pem`（Windows 证书库导出，150 张根证书），**删了就无法 push**。`git push` 还需要凭据管理器 + 允许创建命名管道（否则 `couldn't create signal pipe, Win32 error 5`）；SSH 走不通（密钥未注册且 22/443 都是 `Permission denied (publickey)`）。
 - **Playwright 可用但需管道权限**：`D:\soft\JetBrains\Python\python\python.exe` 已装 playwright + Chromium，但启动浏览器要创建命名管道，受限沙箱下会 `PermissionError: [WinError 5]`；Node 在 `D:\soft\Node.js\node.exe`（可用 `node --check` 校验前端 JS 语法）。
 
