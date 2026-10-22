@@ -126,6 +126,24 @@ public class SearchTool implements com.liche.wechatagent.tool.AgentToolProvider 
                 "year", true, true, count);
     }
 
+    /**
+     * 兼容旧调用（单测 / 内部调用）：不指定条数，走默认 6 条。
+     *
+     * <p>这几个重载**没有 @Tool**，不会注册成模型可调的工具——加它们只是因为
+     * `mvn package` 会编译 src/test，旧调用点签名对不上就构建失败（2026-10-22 踩过）。
+     */
+    public String searchWeb(String query) {
+        return searchWeb(query, null);
+    }
+
+    public String searchLatestWeb(String query) {
+        return searchLatestWeb(query, null);
+    }
+
+    public String searchVerifiedWeb(String query) {
+        return searchVerifiedWeb(query, null);
+    }
+
     private String search(String query, String timeRange, boolean latest) {
         return search(query, timeRange, latest, false);
     }
