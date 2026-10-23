@@ -13,7 +13,7 @@
 | 组件 | 选型 | 说明 |
 |---|---|---|
 | 框架 | Spring Boot 3.5 / Java 21 / Maven | |
-| AI | LangChain4j + 自研 OpenAI 兼容 ChatModel（流式 + 非流式） | 任意兼容接口；当前默认 `deepseek-flash` |
+| AI | LangChain4j + 自研 OpenAI 兼容 ChatModel（流式 + 非流式） | 任意兼容接口；当前默认 `deepseek-v4.1-flash-1017` |
 | 存储 | **PostgreSQL 16 + pgvector** + Spring Data JPA | 2026-09-18 从 MySQL 8 整库迁来，见 `docs/pg-migration.md` |
 | 缓存 | Redis | 上下文回退、消息幂等、主动消息日额度、任务状态 |
 | 调度 | Quartz JDBC 持久化 | 提醒 / 定时任务重启自动恢复 |

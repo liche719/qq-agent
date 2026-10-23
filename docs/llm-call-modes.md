@@ -31,8 +31,8 @@
 | `reasoning_effort:"none"` | 也能关，但在极简问题上出现过只输出 1 token 的退化，**不用** |
 | `thinking:{"type":"enabled"}` | 200，正常（本来也默认开） |
 | 流式 `stream:true` | SSE 的 delta 字段 = `[role, content, reasoning_content]`；一次实测里思考 57 字、正文只有 7 字 |
-| `GET /v1/models` | 只列 `deepseek-flash`、`deepseek-v4-pro`；**在用的 exp 别名不在列表里**，别顺手"规范化" |
-| `deepseek-flash` 直连 | **也是默认思考** → 换模型省不掉思考，开关才是杠杆 |
+| `GET /v1/models` | 列出一批模型（含 `deepseek-flash` 与钉死版 `deepseek-v4.1-flash-1017`）；**别名会漂，生产用钉死版** |
+| `deepseek-v4.1-flash-1017` 直连 | **也是默认思考** → 换模型省不掉思考，开关才是杠杆 |
 
 计费口径：**思考 token 计入 `completion_tokens`**（见 `usage.completion_tokens_details.reasoning_tokens`）。
 

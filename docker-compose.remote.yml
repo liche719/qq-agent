@@ -83,7 +83,7 @@ services:
       # 2026-10-21：生图。她自己主动画一天 5 张；用户让她画的不占额度（靠 SelfTurnMark 区分）。
       LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-qwen-image-2.0}
       LLM_IMAGE_SELF_DAILY_LIMIT: ${LLM_IMAGE_SELF_DAILY_LIMIT:-5}
-      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-v4.1-flash-1017}
       LLM_API_KEY: ${LLM_API_KEY:-}
       # 漏一个就"改了 .env 不生效且不报错"（坑 36）：温度/超时以前根本没透传，改了也没用
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.7}
