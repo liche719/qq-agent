@@ -50,15 +50,71 @@ public class DrawPictureTool implements AgentToolProvider {
     /** 审计出口：生图没有 token，但也要留一条记录，面板才能数出今天画了几张 */
     private final com.liche.qqagent.config.LlmCallSink auditSink;
 
+    /** 一轮最多画几张（2026-10-24）：他"没让你画"的时候连着画了 4 张，用硬上限兜住 */
+    private final int maxPerTurn;
+    /** 先把要求改写成规范提示词，再交给生图（2026-10-24 用户要求） */
+    private final boolean designPrompt;
+    /** 笨鱼自己的固定形象：写死在配置里，画"你自己"时自动带上，省得每次瞎编 */
+    private final String persona;
+    private final dev.langchain4j.model.chat.ChatModel chatModel;
+
     public DrawPictureTool(ImageGenClient imageClient,
                            ToolStatusService statusService,
                            @Value("${llm.image-self-daily-limit:5}") int selfDailyLimit,
+                           @Value("${llm.image-max-per-turn:1}") int maxPerTurn,
+                           @Value("${llm.image-prompt-design:true}") boolean designPrompt,
+                           @Value("${llm.image-persona:}") String persona,
+                           dev.langchain4j.model.chat.ChatModel chatModel,
                            org.springframework.beans.factory.ObjectProvider<com.liche.qqagent.config.LlmCallSink> auditSink) {
         this.imageClient = imageClient;
         this.statusService = statusService;
         this.selfDailyLimit = Math.max(0, selfDailyLimit);
+        this.maxPerTurn = Math.max(1, Math.min(3, maxPerTurn));
+        this.designPrompt = designPrompt;
+        this.persona = persona == null ? "" : persona.trim();
+        this.chatModel = chatModel;
         this.auditSink = auditSink.getIfAvailable();
         this.downloader = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+    }
+
+    /**
+     * 两段式（2026-10-24）：先把用户的大白话改写成画图模型能用的规范提示词。
+     *
+     * <p>为什么加：用户说"按你这个形象画你在逗猫"，模型只拿到一句话就得凭空补全形象，
+     * 结果三张都不是那个样子。现在先让文字模型补全（形象、动作、场景、构图、光线），
+     * 再交给生图；成本约 0.01 元/次。
+     */
+    private String design(String raw) {
+        if (!designPrompt) {
+            return raw;
+        }
+        try {
+            String ask = "把下面这个画图要求，改写成一段给画图模型用的中文提示词。\n"
+                    + "要求：主体与外观细节、动作、场景、构图/视角、光线、风格都要写清楚；80~150 字；"
+                    + "只输出提示词本身，不要解释、不要引号、不要分点。\n"
+                    + (persona.isBlank() ? "" : "如果画的是「笨鱼」自己，固定形象是：" + persona + "\n")
+                    + "用户要求：" + raw;
+            String designed = com.liche.qqagent.config.LlmScenario.run(
+                    com.liche.qqagent.config.LlmScenario.DIALOG, () -> chatModel.chat(ask));
+            if (designed == null || designed.isBlank()) {
+                return raw;
+            }
+            String cleaned = designed.strip().replaceAll("^[\"「”']+|[\"」”']+$", "").strip();
+            if (cleaned.length() < 10) {
+                return raw;
+            }
+            return cleaned.length() > 400 ? cleaned.substring(0, 400) : cleaned;
+        } catch (RuntimeException exception) {
+            log.warn("提示词设计失败，退回原文：{}", exception.getMessage());
+            return raw;
+        }
+    }
+
+    private static String clip(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "…";
     }
 
     /** 只有**自主画**才受额度限制；用户明确让它画的一律放行（2026-10-21 用户要求） */
@@ -87,13 +143,19 @@ public class DrawPictureTool implements AgentToolProvider {
         if (prompt == null || prompt.isBlank()) {
             return ToolBusinessResult.failure("没说要画什么。问他要画什么。");
         }
+        if (!com.liche.qqagent.media.DrawBudget.tryConsume(maxPerTurn)) {
+            return ToolBusinessResult.failure("这一轮已经画过 " + maxPerTurn
+                    + " 张了，不要自己接着画。要是他觉得不对，先问清楚哪里不对再画下一张。");
+        }
         if (quotaExceeded()) {
             return ToolBusinessResult.failure("今天你自己主动画的张数到上限了（" + selfDailyLimit
                     + " 张/天）。**他要你画的不受影响**——这一轮就别画了，或者跟他说一声"
                     + "\"今天我自己画满了，你要我画就说\"。");
         }
 
-        ImageGenClient.Result result = imageClient.generate(prompt.trim());
+        String finalPrompt = design(prompt.trim());
+        log.info("画图提示词 原文={} → 设计后={}", clip(prompt.trim(), 40), clip(finalPrompt, 60));
+        ImageGenClient.Result result = imageClient.generate(finalPrompt);
         if (!result.ok()) {
             return ToolBusinessResult.failure("没画成：" + result.url() + "。跟他说清楚没画出来。");
         }

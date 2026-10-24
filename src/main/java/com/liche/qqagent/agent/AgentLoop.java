@@ -310,6 +310,7 @@ public class AgentLoop {
                                TurnScope scope) {
         // 每轮清空"按需解锁"的工具（2026-10-22）：上一轮解锁的不能漂到下一轮
         com.liche.qqagent.tool.ToolDiscovery.reset();
+        com.liche.qqagent.media.DrawBudget.reset(); // 每轮重置画图额度（2026-10-24）
         List<ToolSpecification> specifications = trimmedSpecifications(userId, scope);
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();

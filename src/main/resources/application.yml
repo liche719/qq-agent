@@ -81,6 +81,11 @@ llm:
   # 留空 = 不启用（工具会如实说画不了）。
   image-model: ${LLM_IMAGE_MODEL:qwen-image-2.0}
   image-timeout-seconds: ${LLM_IMAGE_TIMEOUT_SECONDS:120}
+  # 生图（2026-10-24 用户要求）：先用文字模型把要求改写成规范提示词，再交给生图模型；
+  # 一轮最多画 1 张（他"没让你画"的时候连着画过 4 张）；画"你自己"时带上固定形象，省得每次瞎编。
+  image-prompt-design: ${LLM_IMAGE_PROMPT_DESIGN:true}
+  image-max-per-turn: ${LLM_IMAGE_MAX_PER_TURN:1}
+  image-persona: ${LLM_IMAGE_PERSONA:一条圆滚滚的蓝色小鲸鱼玩偶风格女孩，蓝色齐刘海短发、奶白色圆润身体、深蓝色女仆裙、白色荷叶边围裙（围裙上有小鱼图案），Q版比例，圆眼睛}
   # **她自己主动画**的每日额度（0 = 不限）。2026-10-21 用户定：5 张/天，约 1 元。
   # **用户让她画的不占这个额度**——区分靠 SelfTurnMark（自主轮在跑时为 true）。
   image-self-daily-limit: ${LLM_IMAGE_SELF_DAILY_LIMIT:5}
