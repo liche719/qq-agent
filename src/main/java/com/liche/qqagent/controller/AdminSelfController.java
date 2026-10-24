@@ -56,6 +56,10 @@ public class AdminSelfController {
     private final SelfLessonService selfLessons;
     private final SelfQuestStore selfQuests;
     private final SelfReflectionService reflectionService;
+
+    /** 运行时开关（2026-10-24）：面板关掉后，手动按钮也不该继续动 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
     private final SelfQuestService questService;
     private final SelfSpeakService speakService;
     private final TurnTraceStore turnTraceStore;
@@ -141,6 +145,9 @@ public class AdminSelfController {
      */
     @PostMapping("/reflect")
     public Map<String, Object> reflectNow() {
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            return Map.of("message", "自主模块已关闭（面板开关），先在面板里打开再试");
+        }
         String owner = selfCore.owner();
         if (owner == null) {
             return Map.of("message", "自主模块未工作（" + selfCore.inactiveReason() + "）");
@@ -540,6 +547,10 @@ public class AdminSelfController {
     /** 手动叫它动一次（排障入口；预算与防抖仍然生效，不是绕过）。 */
     @PostMapping("/quest/run")
     public Map<String, Object> runQuestNow() {
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            return Map.of("ran", false, "reason", "自主模块已关闭（面板开关）", "runId", "",
+                    "summary", "", "tokens", "0/0", "cost", "0.0000 元", "produced", "没动");
+        }
         SelfQuestService.Outcome outcome = questService.run("manual");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ran", outcome.ran());
