@@ -27,6 +27,10 @@ import java.util.stream.Collectors;
 @Component
 @ConditionalOnProperty(name = "memory.self-enabled", havingValue = "true", matchIfMissing = true)
 public class SelfLoader implements PromptSectionProvider {
+    /** 运行时开关（2026-10-24 面板可关）：@ConditionalOnProperty 只管启动期，这里管"点一下就停"。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
+
 
     /** 用户记忆是 0；负数放到它前面 */
     public static final int ORDER = -10;
@@ -84,6 +88,9 @@ public class SelfLoader implements PromptSectionProvider {
     }
 
     private PromptSection build(String userId, String userMessage) {
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            return null; // 自主模块关着就不往提示词里塞"它自己"
+        }
         if (!selfCore.isOwner(userId)) {
             return null;
         }

@@ -142,6 +142,10 @@ public class AgentLoop {
     @Value("${agent.tools.progressive:true}")
     private boolean progressiveTools = true;
     private final Map<String, String> toolDisplayNames;
+
+    /** 自主模块运行时开关（2026-10-24）：关掉后模型看不到 self* 工具 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
     private final ConversationMemoryService conversationMemoryService;
     /** 按用户状态裁剪工具集 */
     private final ToolSetTrimmer toolSetTrimmer;
@@ -401,6 +405,18 @@ public class AgentLoop {
                     .toList();
             log.info("渐进式工具：本轮带 {} 个 / 共 {} 个（其余用 discoverTools 解锁）",
                     visible.size(), all.size());
+        }
+        // 自主模块关掉后，连工具都不给它看（2026-10-24）
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            java.util.Set<String> selfProviders = java.util.Set.of(
+                    "AgentSelfTool", "AgentQuestTool", "AgentSeedTool", "SelfWorkspaceTool", "SelfSpeakTool");
+            java.util.Map<String, String> providerByName = new java.util.HashMap<>();
+            for (ToolRegistry.ToolMeta meta : toolRegistry.allMetadata()) {
+                providerByName.put(meta.name(), meta.providerClass());
+            }
+            visible = visible.stream()
+                    .filter(spec -> !selfProviders.contains(providerByName.get(spec.name())))
+                    .toList();
         }
         List<ToolSpecification> base = toolSetTrimmer == null ? visible : toolSetTrimmer.trim(visible, userId).specifications();
         // 本轮通过 discoverTools 解锁的工具并进来（同一轮立即可用）

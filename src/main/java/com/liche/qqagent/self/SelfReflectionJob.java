@@ -27,6 +27,10 @@ import java.time.Duration;
 @Component
 @ConditionalOnProperty(name = "memory.self-enabled", havingValue = "true", matchIfMissing = true)
 public class SelfReflectionJob {
+    /** 运行时开关（2026-10-24 面板可关）：@ConditionalOnProperty 只管启动期，这里管"点一下就停"。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
+
 
     private static final Logger log = LoggerFactory.getLogger(SelfReflectionJob.class);
 
@@ -69,6 +73,9 @@ public class SelfReflectionJob {
 
     @Scheduled(cron = "${memory.self-reflect-check-cron:0 */10 * * * *}")
     public void tick() {
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            return; // 面板关掉了自主模块
+        }
         if (MODE_OFF.equals(mode)) {
             return;
         }

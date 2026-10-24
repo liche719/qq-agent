@@ -27,6 +27,10 @@ import java.util.List;
 @Component
 @ConditionalOnProperty(name = "memory.self-enabled", havingValue = "true", matchIfMissing = true)
 public class SelfActivityJob {
+    /** 运行时开关（2026-10-24 面板可关）：@ConditionalOnProperty 只管启动期，这里管"点一下就停"。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
+
 
     private static final Logger log = LoggerFactory.getLogger(SelfActivityJob.class);
     private static final String MODE_DAILY = "daily";
@@ -65,6 +69,9 @@ public class SelfActivityJob {
     // 10 分钟一次纯属白问；真正决定干不干活的是各个活动的 due()。
     @Scheduled(cron = "${memory.self-quest-check-cron:0 0 */2 * * *}")
     public void tick() {
+        if (selfSwitch != null && !selfSwitch.enabled()) {
+            return; // 面板关掉了自主模块
+        }
         if (!MODE_DAILY.equals(mode)) {
             return;
         }

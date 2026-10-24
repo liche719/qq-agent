@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import ChartBars from '../components/ChartBars.vue'
 import InfoGrid from '../components/InfoGrid.vue'
+import SelfSwitchCard from '../components/SelfSwitchCard.vue'
 import JsonBlock from '../components/JsonBlock.vue'
 import { fmtBytes, fmtNum, fmtTime } from '../labels'
 
@@ -63,6 +64,8 @@ const dependencies = computed(() => ({
         <InfoGrid :rows="countRows"></InfoGrid>
       </section>
     </div>
+
+    <SelfSwitchCard />
 
     <section class="glass panel">
       <div class="panel-head"><h2>堆内存趋势</h2><span class="hint">服务端环形缓冲，重启后重新采样；每根柱是一次采样</span></div>

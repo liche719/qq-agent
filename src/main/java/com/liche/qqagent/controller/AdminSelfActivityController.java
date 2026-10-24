@@ -47,6 +47,10 @@ public class AdminSelfActivityController {
     private final BiliCommentLogRepository comments;
     private final BiliViewLogRepository views;
     private final boolean selfEnabled;
+
+    /** 运行时开关（2026-10-24）：面板上直接开关自主模块，不用重建容器 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.self.SelfSwitch selfSwitch;
     private final boolean researchEnabled;
     private final boolean bilibiliEnabled;
     private final int bilibiliDailyLimit;
@@ -75,6 +79,38 @@ public class AdminSelfActivityController {
     }
 
     /** 面板的表格直接渲染数组，所以这里返回 List 而不是包一层对象 */
+    /** 自主模块当前是否启用：{enabled, source(panel|env), defaultEnabled} */
+    @GetMapping("/switch")
+    public java.util.Map<String, Object> switchState() {
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        boolean fallback = selfEnabled;
+        boolean on = selfSwitch == null ? fallback : selfSwitch.enabled();
+        result.put("enabled", on);
+        result.put("source", selfSwitch == null ? "env" : selfSwitch.source());
+        result.put("defaultEnabled", selfSwitch == null ? fallback : selfSwitch.defaultEnabled());
+        return result;
+    }
+
+    /** 面板切换自主模块：{"enabled":true|false} */
+    @PostMapping("/switch")
+    public java.util.Map<String, Object> switchSet(@org.springframework.web.bind.annotation.RequestBody(required = false)
+                                                   java.util.Map<String, Object> body) {
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        if (selfSwitch == null) {
+            result.put("ok", false);
+            result.put("message", "运行时开关不可用（Redis 未就绪），只能改环境变量后重建容器");
+            return result;
+        }
+        Object raw = body == null ? null : body.get("enabled");
+        boolean target = raw instanceof Boolean b ? b : String.valueOf(raw).equalsIgnoreCase("true");
+        boolean ok = selfSwitch.set(target);
+        result.put("ok", ok);
+        result.put("enabled", selfSwitch.enabled());
+        result.put("source", selfSwitch.source());
+        result.put("message", ok ? (target ? "自主模块已开启" : "自主模块已关闭") : "写入失败，开关没变");
+        return result;
+    }
+
     @GetMapping("/activities")
     public List<Map<String, Object>> activities() {
         long openSeeds = seeds.countByStatus("OPEN");
