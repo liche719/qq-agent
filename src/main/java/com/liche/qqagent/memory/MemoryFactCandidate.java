@@ -21,7 +21,16 @@ import java.util.List;
 public record MemoryFactCandidate(String subject, String predicate, String object, String content,
                                   String source, int confidence, Long docMediaId,
                                   List<String> keywords, List<String> sourceMessageIds,
-                                  String relation, String targetSubject) {
+                                  String relation, String targetSubject, String origin) {
+
+    /** 兼容旧调用：没给 origin 就当"他说过的"（和存量数据一致） */
+    public MemoryFactCandidate(String subject, String predicate, String object, String content,
+                               String source, int confidence, Long docMediaId,
+                               List<String> keywords, List<String> sourceMessageIds,
+                               String relation, String targetSubject) {
+        this(subject, predicate, object, content, source, confidence, docMediaId,
+                keywords, sourceMessageIds, relation, targetSubject, null);
+    }
 
     public MemoryFactCandidate(String subject, String predicate, String object, String content,
                                String source, int confidence, Long docMediaId,
@@ -56,7 +65,7 @@ public record MemoryFactCandidate(String subject, String predicate, String objec
         String composed = subject + (predicate == null || predicate.isBlank() ? "" : "的" + predicate)
                 + "是" + object;
         return new MemoryFactCandidate(subject, predicate, object, composed, source, confidence, docMediaId,
-                keywords, sourceMessageIds, relation, targetSubject);
+                keywords, sourceMessageIds, relation, targetSubject, origin);
     }
 
     /** 属性槽的键（subject + predicate），用于批内去重 */

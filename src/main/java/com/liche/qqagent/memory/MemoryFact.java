@@ -51,6 +51,13 @@ public class MemoryFact {
     /** 模型从对话里推断的 */
     public static final String SOURCE_AUTO = "AUTO";
 
+    /** 信任分级（2026-10-24）：他明确说过的（原话级） */
+    public static final String ORIGIN_STATED = "STATED";
+    /** 信任分级：从对话推断的（可能错，回答时不能用陈述语气） */
+    public static final String ORIGIN_INFERRED = "INFERRED";
+    /** 信任分级：从资料/网页看来的（可能过期） */
+    public static final String ORIGIN_EXTERNAL = "EXTERNAL";
+
     /** 关系判定（主调用直接给结论时用；见 {@link MemoryFactCandidate#relation()}） */
     public static final String RELATION_NEW = "NEW";
     public static final String RELATION_SUPERSEDES = "SUPERSEDES";
@@ -85,6 +92,10 @@ public class MemoryFact {
 
     @Column(nullable = false)
     private Integer confidence = 70;
+
+    /** 可信度分级：STATED（他说过）/ INFERRED（推断）/ EXTERNAL（资料）；存量空值按 STATED 读 */
+    @Column(length = 16)
+    private String origin;
 
     @Column(length = 16, nullable = false)
     private String status = STATUS_ACTIVE;

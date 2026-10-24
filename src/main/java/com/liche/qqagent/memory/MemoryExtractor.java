@@ -1007,8 +1007,12 @@ public class MemoryExtractor {
                         + "要写就直接写具体日期或周次（「10-08·周五·体育课」而不是「下周·体育课」），"
                         + "否则过两周这条事实还活着、却已经指向不存在的时间；"
                         + "source=USER 表示用户自己说的，source=DOC 表示你是从用户发来的图片或文件里看到的（只看你确实看到的，图里没有的不要补）。"
+                        + "**origin 可信度**（2026-10-24 加）：origin=STATED 表示这句是他**明确说过**的；"
+                        + "origin=INFERRED 表示是你**从对话里推出来的**（他没直说）；origin=EXTERNAL 表示是从资料/网页看来的。"
+                        + "**必须如实标**——推断的就写 INFERRED，不要为了显得确定而写成 STATED。"
                         + "课表图这类信息请**逐条拆开**写，不要写成一句话塞很多件事。\n")
-                .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
+                                .append("13.5 【别乱记】（2026-10-24 加）：① **情绪不算事实**——他说「烦死了」「累」是当下心情，不要写成「他讨厌 X」「他压力大」这类结论；② **一次的话不算长期倾向**——除非他用了「我总是/我一般/以后都」；③ **闲聊不占位**——「哈哈」「晚安」「吃了吗」这类不记。\n")
+.append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
                         + "（比如「那改成 305 吧」到底在改哪件事），不要只凭它们新建记忆；"
                         + "只有当这次的新消息明确修正或延续了它们时，才按新消息的内容写。\n");
         if (factCards != null && !factCards.isEmpty()) {
@@ -1214,6 +1218,22 @@ public class MemoryExtractor {
     }
 
     // Parses atomic facts (memory v2): one sentence per fact, merged by subject+predicate later.
+    /** 信任分级归一：模型给的 origin 五花八门，统一成三档（2026-10-24） */
+    private static String normalizeOrigin(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return MemoryFact.ORIGIN_STATED;
+        }
+        String value = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (value.startsWith("INFER") || value.startsWith("GUESS")) {
+            return MemoryFact.ORIGIN_INFERRED;
+        }
+        if (value.startsWith("EXT") || value.startsWith("DOC") || value.startsWith("WEB")
+                || value.startsWith("SEARCH")) {
+            return MemoryFact.ORIGIN_EXTERNAL;
+        }
+        return MemoryFact.ORIGIN_STATED;
+    }
+
     private List<MemoryFactCandidate> parseFacts(JsonNode root) {
         List<MemoryFactCandidate> values = new ArrayList<>();
         int count = 0;
@@ -1226,7 +1246,8 @@ public class MemoryExtractor {
                     boundedInt(node.path("confidence").asInt(defaultConfidence), 0, 100), docMediaId,
                     // facts 不要 keywords：事实层是向量召回 + subject 聚合，关键词写了也没人读（2026-09-18 去掉）
                     List.of(), sourceMessageIds(node.path("sourceMessageIds")),
-                    node.path("relation").asText(null), node.path("targetSubject").asText(null)));
+                    node.path("relation").asText(null), node.path("targetSubject").asText(null),
+                    normalizeOrigin(node.path("origin").asText(null))));
         }
         return values;
     }

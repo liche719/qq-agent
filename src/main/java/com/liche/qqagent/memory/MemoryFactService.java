@@ -237,6 +237,8 @@ public class MemoryFactService {
         fact.setObject(candidate.object());
         fact.setContent(candidate.content());
         fact.setSource(candidate.source());
+        fact.setOrigin(candidate.origin() == null || candidate.origin().isBlank()
+                ? MemoryFact.ORIGIN_STATED : candidate.origin());
         fact.setConfidence(Math.max(0, Math.min(100, candidate.confidence())));
         fact.setStatus(MemoryFact.STATUS_ACTIVE);
         fact.setValidFrom(LocalDateTime.now());
@@ -640,6 +642,13 @@ public class MemoryFactService {
                 line.append("；");
             }
             line.append(entry.getKey()).append(' ').append(entry.getValue().getObject());
+            // 信任分级（2026-10-24）：推断和外部资料要标出来，别让它当"他说过"用陈述语气
+            String origin = entry.getValue().getOrigin();
+            if (MemoryFact.ORIGIN_INFERRED.equals(origin)) {
+                line.append("（我推断的）");
+            } else if (MemoryFact.ORIGIN_EXTERNAL.equals(origin)) {
+                line.append("（资料里看来的）");
+            }
             MemoryFact base = baseline.get(entry.getKey());
             if (base != null) {
                 line.append("（图上写的是 ").append(base.getObject()).append("）");
