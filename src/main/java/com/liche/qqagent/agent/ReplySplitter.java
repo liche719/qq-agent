@@ -43,7 +43,9 @@ public class ReplySplitter {
     private final int maxCharsPerBubble;
     private final int splitThreshold;
     private final int minCharsPerBubble;
-    private final long delayMillis;
+    /** 两个气泡之间随机停这么久（2026-10-24 用户要"活人感"：固定 900ms 像机器） */
+    private final long delayMinMillis;
+    private final long delayMaxMillis;
 
     public ReplySplitter(@Value("${agent.reply-split.enabled:true}") boolean enabled,
                          @Value("${agent.reply-split.disable-stream:false}") boolean disableStream,
@@ -51,19 +53,27 @@ public class ReplySplitter {
                          @Value("${agent.reply-split.max-chars-per-bubble:70}") int maxCharsPerBubble,
                          @Value("${agent.reply-split.split-threshold:60}") int splitThreshold,
                          @Value("${agent.reply-split.min-chars-per-bubble:4}") int minCharsPerBubble,
-                         @Value("${agent.reply-split.delay-ms:900}") long delayMillis) {
+                         @Value("${agent.reply-split.delay-min-ms:600}") long delayMinMillis,
+                         @Value("${agent.reply-split.delay-max-ms:1800}") long delayMaxMillis) {
         this.enabled = enabled;
         this.disableStream = disableStream;
         this.maxBubbles = Math.max(1, Math.min(4, maxBubbles));
         this.maxCharsPerBubble = Math.max(40, Math.min(500, maxCharsPerBubble));
         this.splitThreshold = Math.max(0, splitThreshold);
         this.minCharsPerBubble = Math.max(1, minCharsPerBubble);
-        this.delayMillis = Math.max(0, Math.min(5000, delayMillis));
+        long min = Math.max(0, Math.min(5000, delayMinMillis));
+        long max = Math.max(min, Math.min(6000, delayMaxMillis));
+        this.delayMinMillis = min;
+        this.delayMaxMillis = max;
     }
 
-    /** 两个气泡之间停多久（毫秒）——太快像刷屏，太慢像卡住 */
+    /** 两个气泡之间停多久（毫秒）——每次在区间里随机取，固定值会显得机械 */
     public long delayMillis() {
-        return delayMillis;
+        if (delayMaxMillis <= delayMinMillis) {
+            return delayMinMillis;
+        }
+        return delayMinMillis + java.util.concurrent.ThreadLocalRandom.current()
+                .nextLong(delayMaxMillis - delayMinMillis + 1);
     }
 
     /** 拆分是否真的会生效（关掉开关或只允许 1 条时等于没开） */
