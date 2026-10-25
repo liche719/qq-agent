@@ -733,6 +733,10 @@ public class MemoryService {
         return Math.max(1, Math.min(5, priority == null ? defaultPriority : priority));
     }
 
+    /** TASK 类默认有效期（2026-10-25）：提取时没给过期时间就按这个兜底，别让临时任务永久污染画像 */
+    @org.springframework.beans.factory.annotation.Value("${memory.task-default-ttl-days:30}")
+    private int taskDefaultTtlDays = 30;
+
     private void applyLifecycle(Memory memory, MemoryProvenance provenance, LocalDateTime validUntil,
                                 boolean mergeExisting) {
         applyProvenance(memory, provenance, mergeExisting);
@@ -741,6 +745,9 @@ public class MemoryService {
         }
         if (validUntil != null) {
             memory.setValidUntil(validUntil);
+        } else if (Memory.KIND_TASK.equals(memory.getKind()) && memory.getValidUntil() == null) {
+            int days = Math.max(1, Math.min(365, taskDefaultTtlDays));
+            memory.setValidUntil(LocalDateTime.now().plusDays(days));
         }
     }
 

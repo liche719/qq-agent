@@ -330,6 +330,10 @@ public class ConversationMemoryService {
         return deleteMatching(userId, record -> contentContains(record.getContent(), target));
     }
 
+    /** 遗忘级联（2026-10-25）：删对话证据时，把引用这些证据的派生事实一起作废 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MemoryFactService factService;
+
     private int deleteMatching(String userId, Predicate<ConversationMemory> matches) {
         if (!validUserId(userId) || matches == null) {
             return 0;
@@ -349,6 +353,17 @@ public class ConversationMemoryService {
                     .filter(matches)
                     .toList();
                 if (!removed.isEmpty()) {
+                    java.util.Set<String> messageIds = new java.util.HashSet<>();
+                    for (ConversationMemory record : removed) {
+                        messageIds.addAll(record.sourceMessageIdList());
+                    }
+                    if (factService != null && !messageIds.isEmpty()) {
+                        int facts = factService.forgetByMessageIds(userId, messageIds);
+                        if (facts > 0) {
+                            log.info("遗忘级联：对话证据 {} 条，同时作废派生事实 {} 条 user={}",
+                                    removed.size(), facts, userId);
+                        }
+                    }
                     repository.deleteAll(removed);
                     deleted += removed.size();
                 }

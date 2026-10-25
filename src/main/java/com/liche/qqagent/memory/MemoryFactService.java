@@ -228,6 +228,37 @@ public class MemoryFactService {
      * 否则读取时按内容召回的语义就对不上了。旧行被取代时**不重算**——行不动、向量不动，
      * 召回只查 {@code status='ACTIVE'}，旧向量不会再被用到。
      */
+    /**
+     * 遗忘级联（2026-10-25）：用户说"忘掉这句话"时，把证据里含这些消息 id 的事实一起作废。
+     *
+     * <p>为什么不物理删：事实层留着证据链（谁在什么时候因为哪句话写的），标 SUPERSEDED 就够了，
+     * 检索时不会再把它们捞出来；真要物理删是另一件事。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public int forgetByMessageIds(String userId, java.util.Collection<String> messageIds) {
+        if (userId == null || userId.isBlank() || messageIds == null || messageIds.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (MemoryFact fact : factRepository.findByUserIdAndStatus(userId, MemoryFact.STATUS_ACTIVE)) {
+            String evidence = fact.getSourceMessageIds();
+            if (evidence == null || evidence.isBlank()) {
+                continue;
+            }
+            boolean hit = messageIds.stream().anyMatch(id -> id != null && !id.isBlank() && evidence.contains(id));
+            if (!hit) {
+                continue;
+            }
+            fact.setStatus(MemoryFact.STATUS_SUPERSEDED);
+            fact.setUpdatedAt(java.time.LocalDateTime.now());
+            factRepository.save(fact);
+            changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", CHANGE_LAYER, fact.getId(), null,
+                    fact.getContent(), fact.getStatus()));
+            count++;
+        }
+        return count;
+    }
+
     private boolean persist(String userId, MemoryFactCandidate candidate, List<MemoryFact> supersedeTargets,
                             String reason) {
         MemoryFact fact = new MemoryFact();
@@ -244,6 +275,8 @@ public class MemoryFactService {
         fact.setValidFrom(LocalDateTime.now());
         fact.setDocMediaId(candidate.docMediaId());
         fact.setKeywords(candidate.keywords().isEmpty() ? null : truncate(String.join(",", candidate.keywords()), 500));
+        fact.setSourceMessageIds(candidate.sourceMessageIds() == null || candidate.sourceMessageIds().isEmpty()
+                ? null : truncate(String.join(",", candidate.sourceMessageIds()), 1000));
         fact.setCreatedAt(LocalDateTime.now());
         fact.setUpdatedAt(LocalDateTime.now());
         MemoryFact saved = factRepository.save(fact);

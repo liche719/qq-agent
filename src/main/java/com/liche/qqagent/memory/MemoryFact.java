@@ -117,6 +117,10 @@ public class MemoryFact {
     @Column(length = 500)
     private String keywords;
 
+    /** 证据消息 id（CSV）：用户说"忘掉这句话"时要靠它把派生事实一起作废（2026-10-25） */
+    @Column(name = "source_message_ids", length = 1000)
+    private String sourceMessageIds;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

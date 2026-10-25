@@ -498,6 +498,8 @@ memory:
   # 交给模型三分类（无关/补充/矛盾）再决定新建还是改写；min-score 是余弦相似度下限，
   # 低于它的一律当"无关"直接新增（宁可多一条，也不要把无关的事错并到一起）。
   fact-recall-limit: ${MEMORY_FACT_RECALL_LIMIT:6}
+  # TASK 类记忆默认有效期（2026-10-25）：提取没给过期时间时兜底
+  task-default-ttl-days: ${MEMORY_TASK_DEFAULT_TTL_DAYS:30}
   fact-recall-min-score: ${MEMORY_FACT_RECALL_MIN_SCORE:0.5}
   # 召回工具 recallMemoryFacts（**模型主动查**，不再每轮注入——2026-09-18 按用户要求改）：
   # 它问了就给宽一点，查一次只是一次向量检索的价钱；min-score 比写入时更低（宁可多给几条让它自己判断）
