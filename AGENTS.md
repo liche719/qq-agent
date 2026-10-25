@@ -166,6 +166,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
 | `docs/memory-extraction.md` | 记忆提取：触发、窗口、落库埋点、成本、信任分级与遗忘级联 |
 | `docs/agent-loop.md` | **Agent 循环**：计划/失败分级/反思/反思记忆/软预算/进度降级 |
+| `docs/eval.md` | **记忆评估跑分**：用例结构、本地怎么跑、安全边界、当前基线 |
 | `docs/archive/memory-hybrid-plan.md` | 早期混合检索方案（**已被 vector 方案取代，存档**） |
 | `docs/llm-call-modes.md` | LLM 调用档位、思考模式、缓存计价 |
 | `docs/self-layer-plan.md` | 自主模块「它自己」的设计与实测（**主文档**） |

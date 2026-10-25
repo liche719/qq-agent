@@ -13,8 +13,10 @@
 | **踩到坑 / 要动不熟的模块** | [`pitfalls.md`](pitfalls.md) ← **83 条**完整坑，开头有按主题的索引 |
 | 想知道还有什么事没做 | [`todo.md`](todo.md) |
 | 动工具集或系统提示词 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) |
-| **改进度条 / 语音时机 / 轮内注入 / 按需工具** | [`interaction-feedback.md`](interaction-feedback.md) |
+| **改进度条 / 语音时机 / 轮内注入 / 按需工具** | [`eval.md`](eval.md) | **记忆评估**：19 条用例（抽取 + 召回）、本地跑分脚本、安全边界 | 2026-10-26 | 2026-10-26 |
+| [`interaction-feedback.md`](interaction-feedback.md) |
 | 动 Agent 循环（计划/反思/失败分级/预算/进度） | [`agent-loop.md`](agent-loop.md) |
+| 改提示词/记忆策略后想对比效果 | [`eval.md`](eval.md) |
 | 动记忆（`memory` / `memory_fact` / `conversation_memory`） | [`memory-vector-plan.md`](memory-vector-plan.md) |
 | 动记忆提取的触发/窗口/成本 | [`memory-extraction.md`](memory-extraction.md) |
 | 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
@@ -29,7 +31,7 @@
 | 面板安卓壳（APK） | [`panel-app.md`](panel-app.md) |
 | 备案相关 | [`icp-filing.md`](icp-filing.md) |
 
-## 现役文档（17 篇）
+## 现役文档（18 篇）
 
 **「最后校对」= 最后一次逐篇对齐过代码/配置/生产事实的日期**（不是文件 mtime）。
 **2026-10-22 整理**：新增 `interaction-feedback.md`；三篇存档与两份历史 SQL 挪进 `archive/`，

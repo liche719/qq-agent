@@ -176,6 +176,9 @@ agent:
   # should_replan=true 时把"改后的步骤"注入下一轮，而不是只加一段感想。
   # 多步任务先写计划（2026-10-25）：不额外调模型，只要求它在第一轮输出里顺手写「计划：1) …」，
   # 反思靠这段文本判断"计划本身错没错"，重规划才有对象。
+  # 记忆评估（2026-10-26）：本地跑分用，生产保持 false（接口不接受 eval- 以外的用户）
+  eval-enabled: ${AGENT_EVAL_ENABLED:false}
+
   # 普通对话软预算（2026-10-25）：Planner/反思各多一跳，超过这个数就收尾。0 = 不限
   dialog-budget-yuan: ${AGENT_DIALOG_BUDGET_YUAN:0.3}
   plan:

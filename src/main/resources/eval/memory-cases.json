@@ -1,0 +1,126 @@
+{
+  "_说明": "记忆评估用例（2026-10-26）。extract = 喂对话看抽出什么；recall = 给 query 看召回。每个 extract 用例用独立 eval 用户，互不污染；recall 用 fromCase 指向某个 extract 用例。",
+  "cases": [
+    {
+      "id": "classroom",
+      "type": "extract",
+      "conversation": ["周二晚上的课教室改成 8B304 了"],
+      "expectFacts": [{ "subject": "周二", "object": "8B304" }]
+    },
+    {
+      "id": "classtime",
+      "type": "extract",
+      "conversation": ["周三的体育课改到下午三点"],
+      "expectFacts": [{ "subject": "周三", "object": "三点" }]
+    },
+    {
+      "id": "nickname",
+      "type": "extract",
+      "conversation": ["以后别叫我小梁了，叫我阿文"],
+      "expectFacts": [{ "object": "阿文" }]
+    },
+    {
+      "id": "teacher",
+      "type": "extract",
+      "conversation": ["数字系统综合设计是钟雪峰老师带的"],
+      "expectFacts": [{ "object": "钟雪峰" }]
+    },
+    {
+      "id": "phone",
+      "type": "extract",
+      "conversation": ["我的手机号是 13800138000，记一下"],
+      "expectFacts": [{ "object": "13800138000" }]
+    },
+    {
+      "id": "intern",
+      "type": "extract",
+      "conversation": ["寒假打算去深圳找实习，先待两个月"],
+      "expectFacts": [{ "object": "深圳" }]
+    },
+    {
+      "id": "library",
+      "type": "extract",
+      "conversation": ["图书馆四楼的自习室比较安静，我一般去那儿"],
+      "expectFacts": [{ "object": "四楼" }]
+    },
+    {
+      "id": "emotion-only",
+      "type": "extract",
+      "conversation": ["我今天好烦啊，不想说话"],
+      "forbidFacts": ["烦死了", "讨厌", "压力大"]
+    },
+    {
+      "id": "oneoff-meal",
+      "type": "extract",
+      "conversation": ["中午吃了个鸡腿饭，还行"],
+      "forbidFacts": ["鸡腿饭"]
+    },
+    {
+      "id": "chat-noise",
+      "type": "extract",
+      "conversation": ["哈哈", "晚安啦"],
+      "forbidFacts": ["晚安"]
+    },
+    {
+      "id": "negation",
+      "type": "extract",
+      "conversation": ["周三没有 Java 课，别记错了"],
+      "forbidFacts": ["没有 Java 课", "没有Java课"]
+    },
+    {
+      "id": "vague-plan",
+      "type": "extract",
+      "conversation": ["以后有需要再联系你"],
+      "forbidFacts": ["以后有需要"]
+    },
+    {
+      "id": "recall-classroom",
+      "type": "recall",
+      "fromCase": "classroom",
+      "query": "周二晚上的课在哪个教室",
+      "expectContains": "8B304"
+    },
+    {
+      "id": "recall-teacher",
+      "type": "recall",
+      "fromCase": "teacher",
+      "query": "数字系统综合设计谁教",
+      "expectContains": "钟雪峰"
+    },
+    {
+      "id": "recall-phone",
+      "type": "recall",
+      "fromCase": "phone",
+      "query": "我手机号多少",
+      "expectContains": "13800138000"
+    },
+    {
+      "id": "recall-nickname",
+      "type": "recall",
+      "fromCase": "nickname",
+      "query": "该怎么称呼我",
+      "expectContains": "阿文"
+    },
+    {
+      "id": "recall-intern",
+      "type": "recall",
+      "fromCase": "intern",
+      "query": "寒假实习打算去哪",
+      "expectContains": "深圳"
+    },
+    {
+      "id": "recall-library",
+      "type": "recall",
+      "fromCase": "library",
+      "query": "我常去哪个自习室",
+      "expectContains": "四楼"
+    },
+    {
+      "id": "recall-classtime",
+      "type": "recall",
+      "fromCase": "classtime",
+      "query": "周三体育课几点",
+      "expectContains": "三点"
+    }
+  ]
+}
