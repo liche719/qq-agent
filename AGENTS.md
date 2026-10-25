@@ -27,10 +27,10 @@
 - 代码目录：`C:\Users\33721\Desktop\wechat-agent\qq-agent`
 - 仓库：https://github.com/liche719/qq-agent （private，账号 liche719，主分支 main；**旧名 wechat-qq-agent 只是重定向**，ghcr 镜像名用的是真名 qq-agent）
 - 入口类：`com.liche.qqagent.QqAgentApplication`
-- 包结构：agent / alert / backup / care / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
+- 包结构：agent / alert / backup / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`docs/archive/code-analysis-2026-09-02/`（**2026-09-02 的旧分析，部分结论已过期**，已存档）。
-- **规模现状**：工具 **64 个 / 21 个类**（2026-10-22 生产启动日志 `21 个类 / 64 个工具`；新增 `DiscoverToolsTool`）、系统提示词 **30 条**（编号 1–30，**15 已并入 9、20 空号**；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
+- **规模现状**：工具 **64 个 / 21 个类**（2026-10-22 生产启动日志 `21 个类 / 64 个工具`；新增 `DiscoverToolsTool`）、系统提示词 **32 条**（编号 1–32，**15 已并入 9、20 空号**；31 画图止损、32 别像汇报；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -147,9 +147,9 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 ### 三个功能模块（均已端到端验证）
 
-**面试陪练**（`interview/` 包）：不是"换个人设聊天"，而是有题库 + 评分卡 + 复盘报告的模拟面试。入口 `陪练 面试` / `陪练 Java 后端 3 年` / `结束陪练`（中文指令走 `CommandRegistry` 的"整串不是别名就按首词识别、余下当参数"），也支持 `/practice interview|off`、以及自然语言（`InterviewTool`，提示词第 19 条要求必须调工具进入模式而不是临时扮演）。**不动用户人设**：只在 `user_profile` 记 `coach_mode`/`coach_session_id`/`coach_role`，由 `CoachPresets.withMode` 把模式要求追加到系统提示词。`InterviewBank` 6 个题类；`InterviewService` 的复盘报告**由程序按 `interview_round` 记录生成**（轮数/各维度均分/最弱项/未覆盖题类/下次重点），不靠模型记忆。**坑**：模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）→ "每轮必须先记分再说话"要同时写死在工具描述和提示词里。加新指令必须同步改写死的 `HelpHandler` 清单。此项**没有 QQ 菜单按钮**（菜单已满）。
+**面试陪练**（`interview/` 包）：不是"换个人设聊天"，而是有题库 + 评分卡 + 复盘报告的模拟面试。入口 `陪练 面试` / `陪练 Java 后端 3 年` / `结束陪练`（中文指令走 `CommandRegistry` 的"整串不是别名就按首词识别、余下当参数"），也支持 `/practice interview|off`、以及自然语言（`InterviewTool`，提示词第 19 条要求必须调工具进入模式而不是临时扮演）。**不动用户人设**：只在 `user_profile` 记 `coach_mode`/`coach_session_id`/`coach_role`，由 `CoachPresets.withMode` 把模式要求追加到系统提示词。`InterviewBank` 6 个题类；`InterviewService` 的复盘报告**由程序按 `interview_round` 记录生成**（轮数/各维度均分/最弱项/未覆盖题类/下次重点），不靠模型记忆。**坑**：模型会在长回复里漏调 `recordInterviewRound`（那轮等于没练）→ "每轮必须先记分再说话"要同时写死在工具描述和提示词里。**指令面板 2026-10-25 起只有三条**（定时任务 / 设置助手人设 / 帮助），记忆、陪练这些功能仍在，只是不列在帮助里；改指令要同步 `HelpHandler` 与 QQ 面板两处。
 
-**定时任务**（`schedule/` 包）：与「定时提醒」的区别必须分清——提醒到点只发一句话，**定时任务到点重跑一遍完整 Agent**（可搜索、可调工具）再把结果发回来。入口：工具 `ScheduledTaskTool`（create/list/setEnabled/cancel/runNow）、`/schedules` 命令、面板页签（可新建/启停/立即执行/删除并显示上次结果）。调度复用现有 Quartz（组 `scheduled-tasks`，**不需要改表结构**），落 `scheduled_task` 表；启动时 `ApplicationReadyEvent` 把库里启用中的任务重新同步进调度器（容器重建自愈）。**手动执行必须放后台线程**：`runNow` 同步跑会嵌套 `onInboundSync`、打乱 MDC/userScope 与工具尾注上下文。面板还列 12 条系统内置任务（关怀复盘 20:30、数据库备份 03:00 等；Spring 不暴露 `@Scheduled` 的下次时间，如实标"—"）。
+**定时任务**（`schedule/` 包）：与「定时提醒」的区别必须分清——提醒到点只发一句话，**定时任务到点重跑一遍完整 Agent**（可搜索、可调工具）再把结果发回来。入口：工具 `ScheduledTaskTool`（create/list/setEnabled/cancel/runNow）、`/schedules` 命令、面板页签（可新建/启停/立即执行/删除并显示上次结果）。调度复用现有 Quartz（组 `scheduled-tasks`，**不需要改表结构**），落 `scheduled_task` 表；启动时 `ApplicationReadyEvent` 把库里启用中的任务重新同步进调度器（容器重建自愈）。**手动执行必须放后台线程**：`runNow` 同步跑会嵌套 `onInboundSync`、打乱 MDC/userScope 与工具尾注上下文。面板还列系统内置任务（数据库备份 03:00 等；Spring 不暴露 `@Scheduled` 的下次时间，如实标"—"）。
 
 **运维告警**（`alert/` 包）：`AlertNotifier` 每 60 秒查 QQ 网关 / PostgreSQL / Redis / Quartz / 磁盘 / 堆，**只在问题新出现或恢复时**推送（同问题 `repeat-minutes` 内不重复，启动 2 分钟宽限期避免误报）；只发给 `.env` 的 `ALERT_QQ_OPENID`（**是 openid 不是 QQ 号**）。QQ 主动消息有额度限制，所以推送是"尽力而为"，**面板状态才是准的**。测试按钮在「QQ 通道」页，或 `POST /api/admin/actions/alerts/test`、`POST /api/admin/actions/alerts/notify`（CI 失败告警用）。**2026-09-20 起"备份太旧"也进这套告警**（`BackupFreshnessChecker`：`backup/` 下最新一份备份超过 `BACKUP_MAX_AGE_HOURS`（默认 26 小时）没更新就推 QQ，并且面板总览会变 `DEGRADED`；详见 `docs/backup.md`）——因为备份是应用自己在 03:00 跑的，撞上部署重启就会整天没有备份而无人知晓。
 
@@ -164,7 +164,8 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 | `docs/todo.md` | 待办、还没做的事 |
 | `docs/tools-and-prompt-inventory.md` | 工具集与提示词的真实调用数据、失败率、取舍记录 |
 | `docs/memory-vector-plan.md` | 记忆三层（`memory`/`memory_fact`/`conversation_memory`）的设计与实测 |
-| `docs/memory-extraction.md` | 记忆提取：触发、窗口、落库埋点、成本 |
+| `docs/memory-extraction.md` | 记忆提取：触发、窗口、落库埋点、成本、信任分级与遗忘级联 |
+| `docs/agent-loop.md` | **Agent 循环**：计划/失败分级/反思/反思记忆/软预算/进度降级 |
 | `docs/archive/memory-hybrid-plan.md` | 早期混合检索方案（**已被 vector 方案取代，存档**） |
 | `docs/llm-call-modes.md` | LLM 调用档位、思考模式、缓存计价 |
 | `docs/self-layer-plan.md` | 自主模块「它自己」的设计与实测（**主文档**） |
@@ -185,7 +186,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`qq-agent` + `qq-agent-{postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **64 个 / 21 个类**、系统提示词 **30 条**（2026-10-22 压缩重写：15 并入 9，之后新增第 30 条）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
+- **规模**：工具 **64 个 / 21 个类**、系统提示词 **32 条**（31 画图止损、32 别像汇报）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
@@ -239,6 +240,19 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
   视频、生图、语音都进审计：生图没 token 按张数 × 0.2 折，**语音没 token 按字符 × 0.8 元/万字符折**（`voice.tts.price-yuan-per-10k-chars`）。
 - **峰谷计价已关**（`LLM_PRICE_PEAK_MULTIPLIER=1.0`）：基元律动不区分峰谷。
   自主模块的谷时限制也关了（`MEMORY_SELF_OFFPEAK_ONLY=false`），随时能跑。代码都留着。
+- **循环与记忆（2026-10-25 一批，细节见 `docs/agent-loop.md`）**：
+  - **计划**：`agent.plan.mode` 一个开关（`off`/`inline`/`auto`）。`auto` = 第一轮就要调 **≥2 个不同工具** 时
+    真跑一次 `PlanService`（约 ¥0.01 + 3~5 秒）；一句话能办的事一次规划都不做。
+  - **失败分级**：`TRANSIENT`（超时/5xx，代码重试）/ `FIXABLE`（参数错，原样回传）/ `STRATEGIC`（连续失败或轮次过半）——
+    只有第三类才触发**独立反思**（`LlmScenario.REFLECT`，每轮 ≤1 次，输出 JSON，`should_replan` 时注入重规划）。
+  - **反思记忆**：结果落 `task_reflection` 表，下次同一工具失败时取最近 3 条塞回提示词。
+  - **软预算**：普通对话也有 `agent.dialog-budget-yuan`（默认 0.3 元），超了就收尾，不再无限跑。
+  - **信任分级**：`memory_fact.origin` = `STATED`（他说过）/ `INFERRED`（推断）/ `EXTERNAL`（资料）；
+    注入时推断/资料会带「（我推断的）」「（资料里看来的）」。
+  - **遗忘级联**：`memory_fact.source_message_ids` 存证据 id，`/memory forget` 会把引用这些消息的事实标 `SUPERSEDED`。
+  - **TASK 默认 180 天**（`memory.task-default-ttl-days`）；**存量 65 条不要批量补 TTL**——里面混着长期事实，
+    dry-run 实测会误杀 42 条，见 `docs/pitfalls.md` 第 82 条。
+- **指令面板只有三条**（2026-10-25）：定时任务（提醒并进来）、设置助手人设、帮助；关怀/复盘模块整块删除。
 - **事实层的两条硬规矩**（2026-10-21 加）：① object 是「没有/不上/没课」这类**空信息**不入库
   （原来 38 条有 8 条是这种，问「周三什么课」命中的就是「没有Java课」）；
   ② 检索除了向量相似度，还会**按时间词重排**（查询里的「周X/明天/后天」与 subject 对上就排前面），

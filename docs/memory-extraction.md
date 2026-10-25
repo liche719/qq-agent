@@ -289,3 +289,38 @@ memory_change_log:
 部署后调 `POST /api/admin/memory/extract` 手动跑一次提取，看日志里有没有
 `丢弃空信息事实 subject=… object=…`（DEBUG 级）。再问一次「明天什么课」，
 看 `recallMemoryFacts` 返回的第一条是不是周三的。
+
+## 信任分级、有效期与遗忘级联（2026-10-25 加）
+
+### 1. origin：这句话是他说的，还是我推的
+
+`memory_fact` 新增 `origin` 列（迁移 `V28`），三档：
+
+| 值 | 含义 | 注入时 |
+|---|---|---|
+| `STATED` | 他明确说过 | 直接陈述 |
+| `INFERRED` | 从对话推断（他没直说） | 后面带「（我推断的）」 |
+| `EXTERNAL` | 从资料/网页看来的 | 后面带「（资料里看来的）」 |
+
+提取提示词第 13 条要求模型**如实标注**，并明说"标错了会让他看到「你说过…」其实是你猜的"。
+存量 45 条是空的，按 `STATED` 读（当时只从用户对话抽取）。
+
+### 2. 有效期：只作用于**新** TASK
+
+`memory.task-default-ttl-days`（默认 180 天）：提取时模型没给 `validUntil` 的 TASK 记忆兜底加期限。
+**存量不要批量补**（坑 82）：库里 99 条 TASK 只有 18 条有 TTL，其中混着"用户希望助手说话简洁""教务系统域名"
+这类长期事实——当年被错归到 TASK，一刀切会立刻过期 42 条。
+
+### 3. 证据链与遗忘级联
+
+- `memory_fact.source_message_ids`（迁移 `V30`）存这条事实的**证据消息 id**（CSV）。
+  之前提取出的 `sourceMessageIds` 被直接丢弃，导致"忘掉这句话"连不回事实。
+- `/memory forget …` 走 `ConversationMemoryService.deleteMatching`：先查要删的证据消息 id，
+  调 `MemoryFactService.forgetByMessageIds` 把引用它们的事实标 `SUPERSEDED`（**不物理删**，保留证据链），
+  再物理删 `conversation_memory` 行。日志：`遗忘级联：对话证据 N 条，同时作废派生事实 M 条`。
+
+### 4. 两个不要做的事
+
+1. **不要给 `memory` 全表批量补 TTL**（见上）；
+2. **不要把"反思/洞察"写进 `memory`**——任务反思有自己的表 `task_reflection`（见 `docs/agent-loop.md`），
+   `memory` 存的是"关于他的事实"，混进去会污染注入通道。

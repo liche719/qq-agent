@@ -10,10 +10,11 @@
 
 | 你在干什么 | 看哪篇 |
 |---|---|
-| **踩到坑 / 要动不熟的模块** | [`pitfalls.md`](pitfalls.md) ← **78 条**完整坑，开头有按主题的索引 |
+| **踩到坑 / 要动不熟的模块** | [`pitfalls.md`](pitfalls.md) ← **83 条**完整坑，开头有按主题的索引 |
 | 想知道还有什么事没做 | [`todo.md`](todo.md) |
 | 动工具集或系统提示词 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) |
 | **改进度条 / 语音时机 / 轮内注入 / 按需工具** | [`interaction-feedback.md`](interaction-feedback.md) |
+| 动 Agent 循环（计划/反思/失败分级/预算/进度） | [`agent-loop.md`](agent-loop.md) |
 | 动记忆（`memory` / `memory_fact` / `conversation_memory`） | [`memory-vector-plan.md`](memory-vector-plan.md) |
 | 动记忆提取的触发/窗口/成本 | [`memory-extraction.md`](memory-extraction.md) |
 | 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
@@ -28,17 +29,19 @@
 | 面板安卓壳（APK） | [`panel-app.md`](panel-app.md) |
 | 备案相关 | [`icp-filing.md`](icp-filing.md) |
 
-## 现役文档（16 篇）
+## 现役文档（17 篇）
 
 **「最后校对」= 最后一次逐篇对齐过代码/配置/生产事实的日期**（不是文件 mtime）。
 **2026-10-22 整理**：新增 `interaction-feedback.md`；三篇存档与两份历史 SQL 挪进 `archive/`，
 根目录只留现役。
+**2026-10-25**：新增 `agent-loop.md`（计划 / 失败分级 / 反思 / 软预算 / 进度降级）。
 
 | 文档 | 管什么 | 最后校对 | 内容日期 |
 |---|---|---|---|
-| [`pitfalls.md`](pitfalls.md) | **78 条已知坑与约定**（原文 + 主题索引 + 带日期的现状括注） | 2026-10-22 | 2026-09-11 ~ 10-20 |
+| [`pitfalls.md`](pitfalls.md) | **83 条已知坑与约定**（原文 + 主题索引 + 带日期的现状括注） | 2026-10-25 | 2026-09-11 ~ 10-25 |
+| [`agent-loop.md`](agent-loop.md) | **Agent 循环**：计划三档、失败分级、独立反思与重规划、`task_reflection`、软预算、进度降级 | 2026-10-25 | 2026-10-25 |
 | [`interaction-feedback.md`](interaction-feedback.md) | **进度条 / 语音时机（`atEnd`）/ 轮内注入 / 按需工具 / 搜索条数 / 合并窗口** | 2026-10-22 | 2026-10-22 |
-| [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 工具与提示词的真实调用数、失败率、取舍记录。**§0~§7 是历史快照，最新现状看 §8**（64 个工具 / 21 个类 / 30 条规则） | 2026-10-22 | 2026-10-09 ~ 10-22 |
+| [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 工具与提示词的真实调用数、失败率、取舍记录。**§0~§7 是历史快照，最新现状看 §8**（64 个工具 / 21 个类 / **32 条规则**） | 2026-10-22 | 2026-10-09 ~ 10-22 |
 | [`todo.md`](todo.md) | 待办与「说过但没做」的事 | 2026-10-20 | 2026-10-20 |
 | [`memory-vector-plan.md`](memory-vector-plan.md) | 记忆三层合并、向量召回、归档删除的完整设计与实测 | 2026-10-10 | 2026-09-17 ~ 09-20 |
 | [`memory-extraction.md`](memory-extraction.md) | 提取触发（轮次驱动）、窗口、落库埋点口径、成本账 | 2026-10-10 | 2026-09-14 ~ 10-08 |
