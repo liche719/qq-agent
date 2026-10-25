@@ -154,13 +154,14 @@ public class AgentLoop {
     @org.springframework.beans.factory.annotation.Value("${agent.reflect.max-per-turn:1}")
     private int reflectMaxPerTurn = 1;
     /** 多步任务先写计划（2026-10-25）：不额外调模型，只是要求模型在这轮输出里顺手写出来 */
-    @org.springframework.beans.factory.annotation.Value("${agent.plan.enabled:true}")
-    private boolean planEnabled = true;
     @org.springframework.beans.factory.annotation.Value("${agent.plan.max-steps:3}")
     private int planMaxSteps = 3;
     /** 真 Planner（2026-10-25）：auto = 第一轮就要调多个工具时才规划一次；inline = 只让模型顺手写；off = 都不做 */
     @org.springframework.beans.factory.annotation.Value("${agent.plan.mode:auto}")
     private String planMode = "auto";
+    /** 普通对话的软预算（2026-10-25）：超过就收尾，不硬砍。0 = 不限 */
+    @org.springframework.beans.factory.annotation.Value("${agent.dialog-budget-yuan:0.3}")
+    private double dialogBudgetYuan = 0.3;
     @org.springframework.beans.factory.annotation.Value("${agent.plan.min-tools:2}")
     private int planMinTools = 2;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -337,7 +338,8 @@ public class AgentLoop {
         List<ToolSpecification> specifications = trimmedSpecifications(userId, scope);
         int maxRounds = effectiveMaxRounds(scope);
         boolean scoped = scope != null && scope.isScoped();
-        double budgetYuan = scope == null ? 0 : scope.budgetYuan();
+        // 2026-10-25：普通对话也有软上限（Planner + 反思会各多一跳，极端情况成本会浮）
+        double budgetYuan = scope == null ? dialogBudgetYuan : scope.budgetYuan();
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
         int reflections = 0;
@@ -371,7 +373,7 @@ public class AgentLoop {
                 // 否则轮数/预算用完会掉进 fallbackReply，作业记录里只剩一句"这次处理没有完成"，
                 // 而它下次读到自己上次的总结时是断的——连续性正是这块要观察的东西。
                 // 只对作用域调用生效：普通对话的轮数行为一个字都不改。
-                boolean lastRound = scoped && (round == maxRounds - 1 || budgetOut);
+                boolean lastRound = (scoped && (round == maxRounds - 1 || budgetOut)) || (!scoped && budgetOut);
                 if (lastRound) {
                     // 光收走工具不够：模型会把工具调用**当文本吐出来**（实测第二次作业的"总结"
                     // 就是一段 <tool_calls> 文本，等于没总结）。所以要明说一句工具已经没了。
@@ -386,7 +388,7 @@ public class AgentLoop {
                     messages.add(UserMessage.from("（下一步就是最后一步，工具会被收回。"
                             + "要留下来、要记下来的东西现在就得做；最后一步只能写字。）"));
                 }
-                if (round == 0 && planEnabled && !"auto".equalsIgnoreCase(planMode)) {
+                if (round == 0 && "inline".equalsIgnoreCase(planMode)) {
                     // 2026-10-25：多步任务先写计划。**不额外调模型**——就让它在这轮的普通输出里写，
                     // 反思靠这段文本判断"计划本身是不是错的"，重规划才有对象。
                     messages.add(SystemMessage.from("如果这件事需要好几步（多个工具、先后依赖），"
@@ -399,7 +401,7 @@ public class AgentLoop {
                 if (outcome.toolCalls()) {
                     // 真 Planner（2026-10-25）：只在"第一轮就要调多个工具"时规划一次，
                     // 一句话能办的事一次规划都不做。
-                    if (!planned && planService != null && planService.enabled()
+                    if (!planned && planService != null
                             && "auto".equalsIgnoreCase(planMode) && round == 0
                             && distinctTools(successfulTools, failedTools) >= planMinTools) {
                         planned = true;
@@ -408,7 +410,7 @@ public class AgentLoop {
                         PlanService.Plan planOutcome = planService.plan(firstUserText(messages), toolsUsed,
                                 briefResults(failedTools, toolResults));
                         if (planOutcome.ok()) {
-                            messages.add(SystemMessage.from(planOutcome.toPromptBlock()));
+                            messages.add(UserMessage.from("（系统规划：" + planOutcome.toPromptBlock() + "）"));
                             planText = String.join(" / ", planOutcome.steps());
                         }
                     }
@@ -432,7 +434,7 @@ public class AgentLoop {
                                 : taskReflection.reflect(userId, task, planText, failedReasons, failedKinds,
                                         new ArrayList<>(successfulTools), round, maxRounds);
                         if (reflection.ok()) {
-                            messages.add(SystemMessage.from(reflection.toPromptBlock()));
+                            messages.add(UserMessage.from("（系统反思：" + reflection.toPromptBlock() + "）"));
                             log.info("已注入任务反思 user={} replan={} type={}", userId,
                                     reflection.replan(), reflection.failureType());
                         }
@@ -647,6 +649,13 @@ public class AgentLoop {
                                             ? executeTool(request, userId)
                                             : ToolExecutionOutcome.failure(
                                                     "这个工具不在当前作用域里，换一个：" + request.name(), 0);
+                                } catch (RuntimeException exception) {
+                                    // 2026-10-25：工具抛异常原来会逃出回调 → latch 不计数 → 干等 120 秒。
+                                    // 现在一律转成失败结果交还给模型，它自己决定换方法还是收尾。
+                                    log.warn("工具执行抛出异常，转为失败结果 name={} user={}: {}",
+                                            request.name(), userId, exception.getMessage());
+                                    outcome = ToolExecutionOutcome.failure(
+                                            "工具执行异常：" + exception.getMessage(), 0);
                                 } finally {
                                     if (heartbeat != null) {
                                         heartbeat.cancel(false);
@@ -679,6 +688,9 @@ public class AgentLoop {
 
         try {
             if (!latch.await(effectiveStreamTimeoutSeconds(), TimeUnit.SECONDS)) {
+                // 上游可能还在生成（我们只是不等了），留一条日志便于对账
+                log.warn("LLM 流式响应超时（{} 秒），上游可能仍在生成 user={}",
+                        effectiveStreamTimeoutSeconds(), userId);
                 throw new RuntimeException("LLM 流式响应超时");
             }
         } catch (InterruptedException e) {

@@ -176,14 +176,14 @@ agent:
   # should_replan=true 时把"改后的步骤"注入下一轮，而不是只加一段感想。
   # 多步任务先写计划（2026-10-25）：不额外调模型，只要求它在第一轮输出里顺手写「计划：1) …」，
   # 反思靠这段文本判断"计划本身错没错"，重规划才有对象。
+  # 普通对话软预算（2026-10-25）：Planner/反思各多一跳，超过这个数就收尾。0 = 不限
+  dialog-budget-yuan: ${AGENT_DIALOG_BUDGET_YUAN:0.3}
   plan:
-    # inline = 只让模型在这轮输出里顺手写计划（零成本）；auto = 第一轮要调多个工具时才真跑一次 Planner；
-    # off = 都不做。用户拍板：auto，但只在"需要多步"时触发。
+    # off / inline / auto（用户拍板：auto，但只在"需要多步"时触发）
+    # 只有一个开关：off / inline（顺手写，零成本）/ auto（第一轮要调多个工具才真规划）
     mode: ${AGENT_PLAN_MODE:auto}
-    enabled: ${AGENT_PLAN_ENABLED:true}
     min-tools: ${AGENT_PLAN_MIN_TOOLS:2}
     max-steps: ${AGENT_PLAN_MAX_STEPS:5}
-    planner-enabled: ${AGENT_PLAN_PLANNER_ENABLED:true}
 
   reflect:
     enabled: ${AGENT_REFLECT_ENABLED:true}

@@ -48,19 +48,12 @@ public class PlanService {
     }
 
     private final ChatModel chatModel;
-    private final boolean enabled;
     private final int maxSteps;
 
     public PlanService(ChatModel chatModel,
-                       @Value("${agent.plan.planner-enabled:true}") boolean enabled,
                        @Value("${agent.plan.max-steps:5}") int maxSteps) {
         this.chatModel = chatModel;
-        this.enabled = enabled;
         this.maxSteps = Math.max(2, Math.min(8, maxSteps));
-    }
-
-    public boolean enabled() {
-        return enabled;
     }
 
     /**
@@ -71,9 +64,6 @@ public class PlanService {
      * @param progress 第一轮的结果摘要（可能为空）
      */
     public Plan plan(String task, List<String> tools, String progress) {
-        if (!enabled) {
-            return Plan.failed("规划开关关着");
-        }
         try {
             StringBuilder prompt = new StringBuilder();
             prompt.append("你是这个 Agent 的执行规划员。它接到一个需要多步的任务，请给出可执行计划。\n\n");
