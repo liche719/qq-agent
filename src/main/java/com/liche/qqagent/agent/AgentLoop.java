@@ -143,6 +143,12 @@ public class AgentLoop {
     private boolean progressiveTools = true;
     private final Map<String, String> toolDisplayNames;
 
+    /** 任务级反思（2026-10-25）：只在策略性失败时调一次，给结构化归因/重规划 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TaskReflectionService taskReflection;
+    @org.springframework.beans.factory.annotation.Value("${agent.reflect.max-per-turn:1}")
+    private int reflectMaxPerTurn = 1;
+
     /** 自主模块运行时开关（2026-10-24）：关掉后模型看不到 self* 工具 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.liche.qqagent.self.SelfSwitch selfSwitch;
@@ -316,6 +322,8 @@ public class AgentLoop {
         boolean scoped = scope != null && scope.isScoped();
         double budgetYuan = scope == null ? 0 : scope.budgetYuan();
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
+        // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
+        int reflections = 0;
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
         Set<String> announcedTools = new LinkedHashSet<>();
         // 轮内注入次数（用户在它干活时又发来的消息，最多注入 2 次）
@@ -363,6 +371,23 @@ public class AgentLoop {
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
                         toolResults, scope, round, announcedTools);
                 if (outcome.toolCalls()) {
+                    // 策略性失败才反思（2026-10-25）：工具内部重试过仍失败，或轮次过半一次没成
+                    if (reflections < reflectMaxPerTurn && shouldReflect(round, maxRounds, successfulTools, failedTools)) {
+                        reflections++;
+                        String task = firstUserText(messages);
+                        java.util.Map<String, String> failedReasons = new java.util.LinkedHashMap<>();
+                        failedTools.forEach((name, value) ->
+                                failedReasons.put(name, value == null ? "" : value.failureReason()));
+                        TaskReflectionService.Result reflection = taskReflection == null
+                                ? TaskReflectionService.Result.failed("反思服务不可用")
+                                : taskReflection.reflect(task, failedReasons,
+                                        new ArrayList<>(successfulTools), round, maxRounds);
+                        if (reflection.ok()) {
+                            messages.add(SystemMessage.from(reflection.toPromptBlock()));
+                            log.info("已注入任务反思 user={} replan={} type={}", userId,
+                                    reflection.replan(), reflection.failureType());
+                        }
+                    }
                     continue;
                 }
                 if (outcome.text() != null) {
@@ -889,6 +914,37 @@ public class AgentLoop {
                 // 进度是尽力而为，发不出去不能影响工具
             }
         }, 30, 30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /**
+     * 要不要触发反思（2026-10-25）：
+     * ① 某个工具内部已经重试过（attempts≥2）还是失败 → 大概率是策略问题；
+     * ② 轮次过半、一次都没成功、但有失败 → 再走下去也是撞墙。
+     */
+    private boolean shouldReflect(int round, int maxRounds, java.util.Set<String> successfulTools,
+                                  java.util.Map<String, ToolExecutionOutcome> failedTools) {
+        if (taskReflection == null || !taskReflection.enabled() || failedTools.isEmpty()) {
+            return false;
+        }
+        for (ToolExecutionOutcome outcome : failedTools.values()) {
+            if (outcome != null && outcome.attempts() >= 2) {
+                return true;
+            }
+        }
+        return round + 1 >= Math.max(1, maxRounds / 2) && successfulTools.isEmpty();
+    }
+
+    /** 这一轮用户到底要什么：取第一条用户消息 */
+    private static String firstUserText(List<ChatMessage> messages) {
+        for (ChatMessage message : messages) {
+            if (message instanceof UserMessage user) {
+                String text = user.singleText();
+                if (text != null && !text.isBlank()) {
+                    return text;
+                }
+            }
+        }
+        return "";
     }
 
     private String progressLabel(ToolExecutionRequest request) {

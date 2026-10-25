@@ -172,6 +172,13 @@ agent:
   channel:
     mode: ${AGENT_CHANNEL_MODE:${WECHAT_CHANNEL_MODE:disabled}}
 
+  # 任务级反思（2026-10-25）：只在策略性失败时独立调一次，输出结构化 JSON；
+  # should_replan=true 时把"改后的步骤"注入下一轮，而不是只加一段感想。
+  reflect:
+    enabled: ${AGENT_REFLECT_ENABLED:true}
+    max-per-turn: ${AGENT_REFLECT_MAX_PER_TURN:1}
+    evidence-chars: ${AGENT_REFLECT_EVIDENCE_CHARS:200}
+
   # 长任务后台执行（2026-10-21）
   background:
     # 排队 + 在跑的总数上限，超了直接拒绝（不然它会一口气扔十个进来）
