@@ -86,6 +86,9 @@ public class QqChannel implements ChatChannel {
     private final AtomicBoolean reconnectPending = new AtomicBoolean(false);
     private final QqMessageSequence messageSequence = new QqMessageSequence();
 
+    /** 一轮对话的被动回复额度（2026-10-26）：总额 5，始终留 1 条给最终回复 */
+    private final TurnReplyBudget turnReplyBudget = new TurnReplyBudget(5);
+
     private volatile String accessToken;
     private volatile long tokenExpireAtMs;
     private volatile String selfOpenid; // 机器人自己的 openid（从 READY 记录，用于过滤 bot 消息回显）
@@ -1064,6 +1067,8 @@ public class QqChannel implements ChatChannel {
 
     @Override
     public boolean sendTextReplyResultFrom(String botId, String userId, String replyToMsgId, String text) {
+        // 最终回复用预留额度：哪怕播报/进度已经用掉 4 条，这句也必须发出去
+        turnReplyBudget.tryAcquire(userId, replyToMsgId, TurnReplyBudget.Kind.FINAL);
         long started = System.nanoTime();
         try {
             boolean sent = sendWithPassiveFirst(userId, replyToMsgId, text);
@@ -1163,6 +1168,11 @@ public class QqChannel implements ChatChannel {
      */
     @Override
     public boolean sendVoiceReplyFrom(String botId, String userId, String replyToMsgId, String audioUrl) {
+        if (!turnReplyBudget.tryAcquire(userId, replyToMsgId, TurnReplyBudget.Kind.VOICE)) {
+            log.warn("[qq] 语音放弃：这一轮回复额度用完了 user={} used={}", userId,
+                    turnReplyBudget.used(userId, replyToMsgId));
+            return false;
+        }
         if (isGroupConversation(userId) || userId == null || userId.isBlank()
                 || audioUrl == null || audioUrl.isBlank()) {
             return false;
@@ -1293,6 +1303,13 @@ public class QqChannel implements ChatChannel {
     public void progressLine(String botId, String userId, String replyToMsgId, String line) {
         if (isGroupConversation(userId) || line == null || line.isBlank()
                 || replyToMsgId == null || replyToMsgId.isBlank()) {
+            return;
+        }
+        ProgressSession existing = progressSessions.get(userId);
+        if (existing == null
+                && !turnReplyBudget.tryAcquire(userId, replyToMsgId, TurnReplyBudget.Kind.PROGRESS)) {
+            // 额度已经用完：宁可不显示进度，也要把最后一条留给最终回复
+            log.info("[qq] 跳过进度条：这一轮额度已用完 user={}", userId);
             return;
         }
         ProgressSession session = progressSessions.computeIfAbsent(userId,
