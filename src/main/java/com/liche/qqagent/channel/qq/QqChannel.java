@@ -610,22 +610,16 @@ public class QqChannel implements ChatChannel {
                             .queryParam("limit", "50")
                             .build())
                     .header("Authorization", "QQBot " + accessToken).retrieve().body(String.class);
-            if (existing != null && existing.contains("qq-agent-c2c")) {
+            if (existing != null && existing.contains("qq-agent-c2c-v2")) {
                 log.info("QQ C2C command panel already exists");
                 return;
             }
+            // 2026-10-25 用户要求：指令面板只留三项（提醒并进定时任务，复盘/关怀整块删掉）
             List<Map<String, Object>> items = List.of(
-                    Map.of("type", "command", "name", "帮助", "desc", "查看使用说明"),
-                    Map.of("type", "command", "name", "查看记忆", "desc", "查看自动记忆"),
-                    Map.of("type", "command", "name", "查看提醒", "desc", "查看待执行提醒"),
-                    Map.of("type", "command", "name", "开启自动记忆", "desc", "开启长期记忆"),
-                    Map.of("type", "command", "name", "关闭自动记忆", "desc", "关闭长期记忆"),
-                    Map.of("type", "command", "name", "删除记忆", "desc", "按关键词删除记忆"),
+                    Map.of("type", "command", "name", "定时任务", "desc", "查看提醒和定时任务"),
                     Map.of("type", "command", "name", "设置助手人设", "desc", "调整说话方式"),
-                    Map.of("type", "command", "name", "开启每日复盘", "desc", "开启每日主动关怀"),
-                    Map.of("type", "command", "name", "开启每周复盘", "desc", "开启每周主动关怀"),
-                    Map.of("type", "command", "name", "关闭主动关怀", "desc", "关闭主动关怀"));
-            Map<String, Object> panel = Map.of("items", items, "remark", "qq-agent-c2c");
+                    Map.of("type", "command", "name", "帮助", "desc", "查看使用说明"));
+            Map<String, Object> panel = Map.of("items", items, "remark", "qq-agent-c2c-v2");
             Map<String, Object> payload = Map.of("scope", "c2c", "target_type", "all", "panel", panel);
             String payloadJson = objectMapper.writeValueAsString(payload);
             buildRestClient(apiBase).post().uri("/v2/panels")
@@ -664,17 +658,11 @@ public class QqChannel implements ChatChannel {
         if (!commandPanelEnabled) return;
         try {
             ensureToken();
+            // 2026-10-25 用户要求：快捷菜单也只剩三项
             List<Map<String, Object>> items = List.of(
-                    Map.of("type", "send_message", "name", "帮助", "send_message", "帮助"),
-                    Map.of("type", "send_message", "name", "记忆", "send_message", "查看记忆"),
-                    Map.of("type", "send_message", "name", "提醒", "send_message", "查看提醒"),
-                    Map.of("type", "send_message", "name", "记忆开", "send_message", "开启自动记忆"),
-                    Map.of("type", "send_message", "name", "记忆关", "send_message", "关闭自动记忆"),
-                    Map.of("type", "send_message", "name", "删记忆", "send_message", "删除记忆"),
+                    Map.of("type", "send_message", "name", "定时任务", "send_message", "查看提醒"),
                     Map.of("type", "send_message", "name", "设人设", "send_message", "设置助手人设"),
-                    Map.of("type", "send_message", "name", "日复盘", "send_message", "开启每日复盘"),
-                    Map.of("type", "send_message", "name", "周复盘", "send_message", "开启每周复盘"),
-                    Map.of("type", "send_message", "name", "关怀关", "send_message", "关闭主动关怀"));
+                    Map.of("type", "send_message", "name", "帮助", "send_message", "帮助"));
             Map<String, Object> payload = Map.of("menu", Map.of("items", items));
             buildRestClient(apiBase).put().uri("/v2/menu")
                     .header("Authorization", "QQBot " + accessToken)

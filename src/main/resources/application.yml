@@ -634,14 +634,6 @@ reminder:
   recovery-scan-interval-ms: ${REMINDER_RECOVERY_SCAN_INTERVAL_MS:300000}
   recovery-initial-delay-ms: ${REMINDER_RECOVERY_INITIAL_DELAY_MS:120000}
 
-care:
-  scan-interval-ms: ${CARE_SCAN_INTERVAL_MS:60000}
-  initial-delay-ms: ${CARE_INITIAL_DELAY_MS:30000}
-  delivery-time: ${CARE_DELIVERY_TIME:20:30}
-  focus-max-chars: ${CARE_FOCUS_MAX_CHARS:100}
-  min-focus-priority: ${CARE_MIN_FOCUS_PRIORITY:4}
-  weekly-day: ${CARE_WEEKLY_DAY:SUNDAY}
-  retry-delay-minutes: ${CARE_RETRY_DELAY_MINUTES:60}
 
 backup:
   dir: ${BACKUP_DIR:backup}

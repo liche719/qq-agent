@@ -3,7 +3,12 @@ package com.liche.qqagent.command.handler;
 import com.liche.qqagent.command.CommandHandler;
 import org.springframework.stereotype.Component;
 
-/** /help：查看所有可用指令和功能说明（不依赖 CommandRegistry，避免构造循环） */
+/**
+ * /help：查看可用指令（不依赖 CommandRegistry，避免构造循环）。
+ *
+ * <p>2026-10-25 用户要求：**只保留三条**——定时任务（提醒并进来）、人设提示词、帮助。
+ * 复盘/关怀那套整块删了；记忆、陪练这些仍然能用，只是不再列在帮助里（发对应的话照样生效）。
+ */
 @Component
 public class HelpHandler implements CommandHandler {
 
@@ -14,29 +19,24 @@ public class HelpHandler implements CommandHandler {
 
     @Override
     public String description() {
-        return "查看所有可用指令和功能说明";
+        return "查看可用指令";
     }
 
     @Override
     public String handle(String args, String userId) {
-        return "我现在能帮你：\n"
-                + "• 自动记住长期目标、稳定偏好和重要经历，不会询问要不要保存\n"
-                + "• 阅读图片、PDF、DOCX；对未来仍有价值的资料会自动长期保管\n"
-                + "• 搜索最新资料、读取网页、设置和取消提醒\n"
-                + "• 定时任务：说「每天早上 8 点把今天的天气发我」「每周一汇总上周聊过的重点」，到点我会真的去做完再把结果发你\n"
-                + "• 陪你模拟面试（说「陪练 面试」或「陪练 Java 后端 3 年」），逐轮评分、结束给复盘\n"
-                + "• 在你主动开启后，按每天或每周做一次低打扰目标复盘\n\n"
-                + "可用指令：\n"
-                + "/memory — 查看自动记忆\n"
-                + "/memory forget 关键词 — 按内容删除一条记忆\n"
-                + "/memory on|off — 开关自动记忆\n"
-                + "/reminders — 查看待执行提醒\n"
-                + "/schedules — 查看定时任务（off|on|run|delete <ID> 可暂停/恢复/立即执行/删除）\n"
-                + "/care on|off|daily|weekly — 管理主动关怀频率\n"
-                + "/practice interview|off — 面试陪练，也可以直接发「陪练 面试」「结束陪练」\n"
-                + "/exam-study-start|end — 开始/结束学习计时（直接发「开始学数学」「结束学习」也行）\n"
-                + "/exam-mistakes — 错题本；发「错题 快排推导错了」直接记一条\n"
-                + "/set-prompt 内容 — 调整我的身份和说话方式\n"
-                + "/help — 再看一次这份说明";
+        return """
+                我现在能帮你：
+                • 自动记住长期目标、稳定偏好和重要经历，不会问你"要不要保存"
+                • 读图片、PDF、DOCX；对未来有用的资料会自动长期保管
+                • 搜索最新资料、读网页、看 B 站视频、画图、发语音
+                • 陪你练面试（直接说「陪练 面试」）
+
+                可用指令（就三个）：
+                • 「定时任务」或「查看提醒」— 看你的提醒和定时任务（/schedules）
+                  暂停/恢复/立即执行：/schedules off|on|run <ID>
+                  新建不用打指令，直接说「每天早上 8 点把今天的天气发我」
+                • 「设置助手人设 内容」— 调整我的身份和说话方式（/set-prompt）
+                • 「帮助」— 再看一次这份说明（/help）
+                """;
     }
 }

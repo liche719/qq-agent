@@ -43,30 +43,24 @@ public class BuiltinScheduleService {
     private final UserProfileRepository profileRepository;
     private final ZoneId zone;
 
-    private final String careDeliveryTime;
     private final String backupCron;
     private final long alertCheckMs;
-    private final long careScanMs;
     private final long reminderRecoveryMs;
     private final long memoryLifecycleMs;
     private final long dashboardSampleMs;
 
     public BuiltinScheduleService(Scheduler scheduler,
                                   UserProfileRepository profileRepository,
-                                  @Value("${care.delivery-time:20:30}") String careDeliveryTime,
                                   @Value("${backup.cron:0 0 3 * * ?}") String backupCron,
                                   @Value("${alert.check-interval-ms:60000}") long alertCheckMs,
-                                  @Value("${care.scan-interval-ms:60000}") long careScanMs,
                                   @Value("${reminder.recovery-scan-interval-ms:300000}") long reminderRecoveryMs,
                                   @Value("${memory.lifecycle-scan-interval-ms:3600000}") long memoryLifecycleMs,
                                   @Value("${management.dashboard.metrics-sample-ms:10000}") long dashboardSampleMs,
                                   @Value("${app.time-zone:Asia/Shanghai}") String timeZoneId) {
         this.scheduler = scheduler;
         this.profileRepository = profileRepository;
-        this.careDeliveryTime = careDeliveryTime;
         this.backupCron = backupCron;
         this.alertCheckMs = alertCheckMs;
-        this.careScanMs = careScanMs;
         this.reminderRecoveryMs = reminderRecoveryMs;
         this.memoryLifecycleMs = memoryLifecycleMs;
         this.dashboardSampleMs = dashboardSampleMs;
@@ -76,36 +70,17 @@ public class BuiltinScheduleService {
     /** 内置任务清单 */
     public List<Map<String, Object>> list() {
         List<Map<String, Object>> rows = new ArrayList<>();
-        rows.add(proactiveCare());
         rows.add(backup());
         rows.add(quartzGroup("提醒调度（Quartz）", "用户创建的定时提醒，到点推送一句话",
                 "reminders", "/reminders 查看清单"));
         rows.add(quartzGroup("定时任务调度（Quartz）", "用户创建的定时任务，到点真正执行并把结果发回",
                 "scheduled-tasks", "面板下方「我创建的定时任务」"));
         rows.add(interval("运维告警检查", "QQ 网关、MySQL/Redis/Quartz、磁盘与内存异常时推送告警", alertCheckMs));
-        rows.add(interval("主动关怀扫描", "到点给开启了关怀的用户发复盘邀请", careScanMs));
         rows.add(interval("提醒恢复扫描", "补齐丢失的提醒调度（重启后自愈）", reminderRecoveryMs));
         rows.add(interval("记忆生命周期扫描", "清理过期上下文与失效记忆", memoryLifecycleMs));
         rows.add(interval("面板指标采样", "给总览页的趋势图取样", dashboardSampleMs));
         rows.sort(Comparator.comparing(row -> String.valueOf(row.get("group"))));
         return rows;
-    }
-
-    private Map<String, Object> proactiveCare() {
-        // 关怀是按用户排期的：取最近一个到期时间给面板看
-        List<UserProfile> caring = profileRepository
-                .findByProactiveCareEnabledTrueAndNextCareAtLessThanEqual(LocalDateTime.now(zone).plusYears(5));
-        LocalDateTime earliest = caring.stream()
-                .map(UserProfile::getNextCareAt)
-                .filter(java.util.Objects::nonNull)
-                .min(Comparator.naturalOrder())
-                .orElse(null);
-        Map<String, Object> row = base("主动关怀复盘", "定时", "按用户设置每天/每周做一次低打扰复盘",
-                "每天 " + careDeliveryTime + "（按用户开关）", "用户在聊天里用 /care 管理");
-        row.put("nextRunAt", earliest == null ? "—" : earliest.format(DISPLAY));
-        row.put("lastRunText", "已开启的用户：" + caring.size() + " 个");
-        row.put("enabled", !caring.isEmpty());
-        return row;
     }
 
     private Map<String, Object> backup() {

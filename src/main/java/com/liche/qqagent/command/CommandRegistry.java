@@ -20,7 +20,7 @@ public class CommandRegistry {
     static {
         TEXT_ALIASES.put("帮助", "help");
         TEXT_ALIASES.put("查看记忆", "memory");
-        TEXT_ALIASES.put("查看提醒", "reminders");
+        TEXT_ALIASES.put("查看提醒", "schedules");
         TEXT_ALIASES.put("定时任务", "schedules");
         TEXT_ALIASES.put("查看定时任务", "schedules");
         TEXT_ALIASES.put("我的定时任务", "schedules");
@@ -33,9 +33,6 @@ public class CommandRegistry {
         TEXT_ALIASES.put("面试陪练", "practice");
         TEXT_ALIASES.put("模拟面试", "practice");
         TEXT_ALIASES.put("结束陪练", "practice");
-        TEXT_ALIASES.put("开启每日复盘", "care");
-        TEXT_ALIASES.put("开启每周复盘", "care");
-        TEXT_ALIASES.put("关闭主动关怀", "care");
     }
 
     private final Map<String, CommandHandler> handlers = new LinkedHashMap<>();
@@ -93,8 +90,6 @@ public class CommandRegistry {
             }
             if (name.equals("memory") && !trimmed.equals("查看记忆")) {
                 args = trimmed.contains("关闭") ? "off" : trimmed.equals("删除记忆") ? "forget" : "on";
-            } else if (name.equals("care")) {
-                args = trimmed.contains("每日") ? "daily" : trimmed.contains("每周") ? "weekly" : "off";
             } else if (name.equals("practice")) {
                 args = switch (trimmed) {
                     case "面试陪练", "模拟面试" -> "interview";

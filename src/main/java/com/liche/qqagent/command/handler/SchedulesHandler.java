@@ -2,6 +2,7 @@ package com.liche.qqagent.command.handler;
 
 import com.liche.qqagent.command.CommandHandler;
 import com.liche.qqagent.exception.BizException;
+import com.liche.qqagent.reminder.ReminderService;
 import com.liche.qqagent.schedule.ScheduledTaskService;
 import org.springframework.stereotype.Component;
 
@@ -18,9 +19,12 @@ import java.util.Map;
 public class SchedulesHandler implements CommandHandler {
 
     private final ScheduledTaskService service;
+    /** 2026-10-25：用户认为"提醒"和"定时任务"是一类，列表合成一处显示 */
+    private final ReminderService reminderService;
 
-    public SchedulesHandler(ScheduledTaskService service) {
+    public SchedulesHandler(ScheduledTaskService service, ReminderService reminderService) {
         this.service = service;
+        this.reminderService = reminderService;
     }
 
     @Override
@@ -30,7 +34,7 @@ public class SchedulesHandler implements CommandHandler {
 
     @Override
     public String description() {
-        return "查看定时任务：/schedules；暂停/恢复/立即执行用 /schedules off|on|run <ID>；新建直接说「每天早上 8 点把天气发我」";
+        return "查看提醒和定时任务（一类东西）：/schedules；暂停/恢复/立即执行用 /schedules off|on|run <ID>；新建直接说「每天早上 8 点把天气发我」";
     }
 
     @Override
@@ -38,7 +42,8 @@ public class SchedulesHandler implements CommandHandler {
         String raw = args == null ? "" : args.strip();
         try {
             if (raw.isEmpty() || "list".equalsIgnoreCase(raw) || raw.contains("查看") || raw.contains("列表")) {
-                return service.listText(userId);
+                return "【提醒】\n" + reminderService.listPendingText(userId)
+                        + "\n\n【定时任务】\n" + service.listText(userId);
             }
             String[] parts = raw.split("\\s+", 2);
             String verb = parts[0].toLowerCase();
