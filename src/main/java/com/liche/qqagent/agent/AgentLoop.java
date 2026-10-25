@@ -158,6 +158,13 @@ public class AgentLoop {
     private boolean planEnabled = true;
     @org.springframework.beans.factory.annotation.Value("${agent.plan.max-steps:3}")
     private int planMaxSteps = 3;
+    /** 真 Planner（2026-10-25）：auto = 第一轮就要调多个工具时才规划一次；inline = 只让模型顺手写；off = 都不做 */
+    @org.springframework.beans.factory.annotation.Value("${agent.plan.mode:auto}")
+    private String planMode = "auto";
+    @org.springframework.beans.factory.annotation.Value("${agent.plan.min-tools:2}")
+    private int planMinTools = 2;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PlanService planService;
 
     /** 自主模块运行时开关（2026-10-24）：关掉后模型看不到 self* 工具 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -335,6 +342,7 @@ public class AgentLoop {
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
         int reflections = 0;
         String planText = "";
+        boolean planned = false;
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
         Set<String> announcedTools = new LinkedHashSet<>();
         // 轮内注入次数（用户在它干活时又发来的消息，最多注入 2 次）
@@ -378,7 +386,7 @@ public class AgentLoop {
                     messages.add(UserMessage.from("（下一步就是最后一步，工具会被收回。"
                             + "要留下来、要记下来的东西现在就得做；最后一步只能写字。）"));
                 }
-                if (round == 0 && planEnabled) {
+                if (round == 0 && planEnabled && !"auto".equalsIgnoreCase(planMode)) {
                     // 2026-10-25：多步任务先写计划。**不额外调模型**——就让它在这轮的普通输出里写，
                     // 反思靠这段文本判断"计划本身是不是错的"，重规划才有对象。
                     messages.add(SystemMessage.from("如果这件事需要好几步（多个工具、先后依赖），"
@@ -389,6 +397,21 @@ public class AgentLoop {
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
                         toolResults, scope, round, announcedTools);
                 if (outcome.toolCalls()) {
+                    // 真 Planner（2026-10-25）：只在"第一轮就要调多个工具"时规划一次，
+                    // 一句话能办的事一次规划都不做。
+                    if (!planned && planService != null && planService.enabled()
+                            && "auto".equalsIgnoreCase(planMode) && round == 0
+                            && distinctTools(successfulTools, failedTools) >= planMinTools) {
+                        planned = true;
+                        List<String> toolsUsed = new ArrayList<>(successfulTools);
+                        toolsUsed.addAll(failedTools.keySet());
+                        PlanService.Plan planOutcome = planService.plan(firstUserText(messages), toolsUsed,
+                                briefResults(failedTools, toolResults));
+                        if (planOutcome.ok()) {
+                            messages.add(SystemMessage.from(planOutcome.toPromptBlock()));
+                            planText = String.join(" / ", planOutcome.steps());
+                        }
+                    }
                     if (planText.isBlank() && outcome.text() != null && !outcome.text().isBlank()) {
                         planText = outcome.text().strip();
                     }
@@ -943,6 +966,32 @@ public class AgentLoop {
                 // 进度是尽力而为，发不出去不能影响工具
             }
         }, 30, 30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    private static int distinctTools(java.util.Set<String> succeeded,
+                                     java.util.Map<String, ToolExecutionOutcome> failed) {
+        java.util.Set<String> names = new java.util.HashSet<>(succeeded);
+        names.addAll(failed.keySet());
+        return names.size();
+    }
+
+    /** 第一轮的结果摘要（给 Planner 当上下文，别太长） */
+    private static String briefResults(java.util.Map<String, ToolExecutionOutcome> failed,
+                                       java.util.Map<String, ToolExecutionOutcome> results) {
+        StringBuilder text = new StringBuilder();
+        results.forEach((name, outcome) -> {
+            if (outcome != null && outcome.successful()) {
+                text.append(name).append("：成功。");
+            }
+        });
+        failed.forEach((name, outcome) -> {
+            if (outcome != null) {
+                text.append(name).append("：失败（")
+                        .append(outcome.failureReason() == null ? "" : outcome.failureReason()).append("）。");
+            }
+        });
+        String flat = text.toString().replaceAll("\s+", " ").trim();
+        return flat.length() <= 240 ? flat : flat.substring(0, 240) + "…";
     }
 
     /**
