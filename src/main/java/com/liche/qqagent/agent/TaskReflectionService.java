@@ -159,7 +159,7 @@ public class TaskReflectionService {
         return prompt.toString();
     }
 
-    private Result parse(String raw) {
+    Result parse(String raw) {
         if (raw == null || raw.isBlank()) {
             return Result.failed("模型没返回内容");
         }
