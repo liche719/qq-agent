@@ -1276,6 +1276,11 @@ public class QqChannel implements ChatChannel {
         volatile String replyToMsgId;
         /** 平台已经拒绝过这一轮（msg_id 失效/流式已收尾）：别再重试，静默降级 */
         volatile boolean dead;
+        /** 流式被平台拒了，改用普通消息发一次就够（2026-10-25） */
+        volatile boolean fallbackUsed;
+        /** 降级时已经发出去多少字符，收尾补发剩下的 */
+        volatile int fallbackSentChars;
+        volatile String botId;
 
         ProgressSession(int msgSeq) {
             this.msgSeq = msgSeq;
@@ -1292,10 +1297,17 @@ public class QqChannel implements ChatChannel {
         }
         ProgressSession session = progressSessions.computeIfAbsent(userId,
                 ignored -> new ProgressSession(messageSequence.next()));
-        if (session.dead) {
-            return;
-        }
         synchronized (session) {
+            if (session.dead) {
+                // 流式没了：继续把行攒起来，收尾时一次补发（2026-10-25）
+                if (session.text.length() > 0) {
+                    session.text.append('
+');
+                }
+                session.text.append("· ").append(line.trim());
+                return;
+            }
+            session.botId = botId;
             session.replyToMsgId = replyToMsgId;
             // 心跳会往同一行里补"还在…"，总行数封顶，别让进度条变成流水账
             if (session.text.length() > 0 && session.text.toString().split("\n").length >= 12) {
@@ -1319,6 +1331,21 @@ public class QqChannel implements ChatChannel {
         // 答案流式已关（disable-stream=true），不会再有 40034019；万一以后重新开流式，
         // 这里的失败只记 debug，不影响主流程。
         synchronized (session) {
+            if (session.dead) {
+                // 流式降级：把首帧之后累积的行补发一条（最多再一条，不刷屏）
+                if (session.fallbackUsed && session.text.length() > session.fallbackSentChars) {
+                    String rest = session.text.substring(session.fallbackSentChars).trim();
+                    if (!rest.isEmpty() && session.botId != null && session.replyToMsgId != null) {
+                        try {
+                            sendTextReplyResultFrom(session.botId, userId, session.replyToMsgId, rest);
+                            log.info("[qq] progress fallback flushed user={} chars={}", userId, rest.length());
+                        } catch (RuntimeException exception) {
+                            log.warn("[qq] progress fallback flush failed: {}", exception.getMessage());
+                        }
+                    }
+                }
+                return;
+            }
             sendProgressFrame(userId, session.replyToMsgId, session, 10);
         }
         if (!recall) {
@@ -1363,12 +1390,37 @@ public class QqChannel implements ChatChannel {
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? "" : exception.getMessage();
             if (message.contains("40034019") || message.contains("40034024")) {
-                // 流式已收尾 / msg_id 失效：这一轮的进度条到此为止，别再重试
+                // 流式已收尾 / msg_id 失效：流式这条路走不通了（沙箱环境常见）。
+                // 2026-10-25 修：不再静默丢进度，改成用**普通被动消息发一次**，至少让他看得见在干什么。
                 session.dead = true;
-                log.info("[qq] progress stopped user={} reason={}", userId,
-                        message.contains("40034024") ? "msg_id 失效" : "流式已收尾");
+                log.warn("[qq] progress stream rejected user={} reason={} -> 改用普通消息",
+                        userId, message.contains("40034024") ? "msg_id 失效" : "流式已收尾");
+                sendProgressFallback(userId, session);
             } else {
                 log.warn("[qq] progress frame failed user={}: {}", userId, message);
+            }
+        }
+    }
+
+    /**
+     * 进度降级（2026-10-25）：流式消息被平台拒绝时（沙箱/额度/msg_id 失效），
+     * 用普通被动消息把当前进度发一次。**只发一次**，不发就再也没有过程可看。
+     */
+    private void sendProgressFallback(String userId, ProgressSession session) {
+        if (session.fallbackUsed || session.text.length() == 0) {
+            return;
+        }
+        session.fallbackUsed = true;
+        String text = session.text.toString();
+        if (session.botId != null && session.replyToMsgId != null) {
+            try {
+                boolean sent = sendTextReplyResultFrom(session.botId, userId, session.replyToMsgId, text);
+                session.fallbackSentChars = session.text.length();
+                log.info("[qq] progress fallback sent user={} lines={} ok={}", userId,
+                        text.split("
+").length, sent);
+            } catch (RuntimeException exception) {
+                log.warn("[qq] progress fallback failed user={}: {}", userId, exception.getMessage());
             }
         }
     }
