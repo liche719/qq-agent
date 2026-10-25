@@ -240,7 +240,7 @@ public class MemoryFactService {
             return 0;
         }
         int count = 0;
-        for (MemoryFact fact : factRepository.findByUserIdAndStatus(userId, MemoryFact.STATUS_ACTIVE)) {
+        for (MemoryFact fact : factRepository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, MemoryFact.STATUS_ACTIVE)) {
             String evidence = fact.getSourceMessageIds();
             if (evidence == null || evidence.isBlank()) {
                 continue;
@@ -252,8 +252,8 @@ public class MemoryFactService {
             fact.setStatus(MemoryFact.STATUS_SUPERSEDED);
             fact.setUpdatedAt(java.time.LocalDateTime.now());
             factRepository.save(fact);
-            changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", CHANGE_LAYER, fact.getId(), null,
-                    fact.getContent(), fact.getStatus()));
+            changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", CHANGE_LAYER, fact.getId(),
+                    fact.getContent(), fact.getContent(), "用户要求忘掉", "USER"));
             count++;
         }
         return count;
