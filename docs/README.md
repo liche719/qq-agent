@@ -12,6 +12,7 @@
 |---|---|
 | **踩到坑 / 要动不熟的模块** | [`pitfalls.md`](pitfalls.md) ← **83 条**完整坑，开头有按主题的索引 |
 | 想知道还有什么事没做 | [`todo.md`](todo.md) |
+| **看整体整改方案（审计 + 外部对标 + 分批计划）** | [`plan-2026-10-26.md`](plan-2026-10-26.md) |
 | 动工具集或系统提示词 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) |
 | **改进度条 / 语音时机 / 轮内注入 / 按需工具** | [`eval.md`](eval.md) | **记忆评估**：19 条用例（抽取 + 召回）、本地跑分脚本、安全边界 | 2026-10-26 | 2026-10-26 |
 | [`interaction-feedback.md`](interaction-feedback.md) |
