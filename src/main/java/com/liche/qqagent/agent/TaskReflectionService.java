@@ -66,13 +66,23 @@ public class TaskReflectionService {
     private final ChatModel chatModel;
     private final boolean enabled;
     private final int evidenceChars;
+    /** 反思记忆（2026-10-25）：落库 + 下次同类失败时复用 */
+    private final TaskReflectionRepository reflections;
+    private final boolean memoryEnabled;
+    private final int memoryDays;
 
     public TaskReflectionService(ChatModel chatModel,
+                                 TaskReflectionRepository reflections,
                                  @Value("${agent.reflect.enabled:true}") boolean enabled,
-                                 @Value("${agent.reflect.evidence-chars:200}") int evidenceChars) {
+                                 @Value("${agent.reflect.evidence-chars:200}") int evidenceChars,
+                                 @Value("${agent.reflect.memory-enabled:true}") boolean memoryEnabled,
+                                 @Value("${agent.reflect.memory-days:30}") int memoryDays) {
         this.chatModel = chatModel;
+        this.reflections = reflections;
         this.enabled = enabled;
         this.evidenceChars = Math.max(80, Math.min(600, evidenceChars));
+        this.memoryEnabled = memoryEnabled;
+        this.memoryDays = Math.max(1, Math.min(365, memoryDays));
     }
 
     public boolean enabled() {
@@ -88,23 +98,28 @@ public class TaskReflectionService {
      * @param round    当前是第几轮（从 0 开始）
      * @param maxRounds 这一轮最多几轮
      */
-    public Result reflect(String task, String plan, Map<String, String> failed, List<String> succeeded,
+    public Result reflect(String userId, String task, String plan, Map<String, String> failed,
+                          Map<String, FailureKind> kinds, List<String> succeeded,
                           int round, int maxRounds) {
         if (!enabled) {
             return Result.failed("反思开关关着");
         }
         try {
-            String prompt = buildPrompt(task, plan, failed, succeeded, round, maxRounds);
+            String prompt = buildPrompt(task, plan, failed, kinds, succeeded, round, maxRounds,
+                    pastMemories(userId, failed.keySet()));
             String raw = LlmScenario.run(LlmScenario.REFLECT, () -> chatModel.chat(prompt));
-            return parse(raw);
+            Result result = parse(raw);
+            remember(userId, failed.keySet(), kinds, result);
+            return result;
         } catch (RuntimeException exception) {
             log.warn("任务反思调用失败：{}", exception.getMessage());
             return Result.failed(exception.getMessage());
         }
     }
 
-    private String buildPrompt(String task, String plan, Map<String, String> failed, List<String> succeeded,
-                               int round, int maxRounds) {
+    private String buildPrompt(String task, String plan, Map<String, String> failed,
+                               Map<String, FailureKind> kinds, List<String> succeeded,
+                               int round, int maxRounds, List<TaskReflection> past) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是这个 Agent 的「失败复盘员」。它刚刚连续失败，请判断**是哪里错了、下一步该怎么改**。\n\n");
         prompt.append("【用户要什么】").append(clip(task, 300)).append("\n\n");
@@ -117,6 +132,14 @@ public class TaskReflectionService {
         }
         prompt.append("\n【已经成功过的工具】")
                 .append(succeeded == null || succeeded.isEmpty() ? "（无）" : String.join("、", succeeded)).append('\n');
+        if (past != null && !past.isEmpty()) {
+            prompt.append("\n【上次遇到同类失败时的结论】（可复用，别重复踩坑）\n");
+            for (TaskReflection item : past) {
+                prompt.append("- ").append(item.getTool()).append(" 曾")
+                        .append(clip(item.getRootCause(), 60))
+                        .append("；当时的改法：").append(clip(item.getNextAction(), 60)).append('\n');
+            }
+        }
         prompt.append("【轮次】第 ").append(round + 1).append(" / ").append(maxRounds).append(" 轮\n\n");
         prompt.append("""
                 只输出一个 JSON 对象，不要解释、不要代码块：
@@ -163,6 +186,45 @@ public class TaskReflectionService {
             return result;
         } catch (Exception exception) {
             return Result.failed("JSON 解析失败：" + exception.getMessage());
+        }
+    }
+
+    /** 查最近的历史反思（只查这次失败的这几个工具） */
+    private List<TaskReflection> pastMemories(String userId, java.util.Set<String> tools) {
+        if (!memoryEnabled || reflections == null || userId == null || userId.isBlank()
+                || tools == null || tools.isEmpty()) {
+            return List.of();
+        }
+        try {
+            return reflections.findByUserIdAndToolInAndCreatedAtAfterOrderByCreatedAtDesc(
+                    userId, new ArrayList<>(tools), java.time.LocalDateTime.now().minusDays(memoryDays),
+                    org.springframework.data.domain.PageRequest.of(0, 3));
+        } catch (RuntimeException exception) {
+            log.warn("读反思记忆失败（忽略）：{}", exception.getMessage());
+            return List.of();
+        }
+    }
+
+    /** 落库：下次同一工具失败时能查到"上次是怎么归因、怎么改的" */
+    private void remember(String userId, java.util.Set<String> tools, Map<String, FailureKind> kinds, Result result) {
+        if (!memoryEnabled || reflections == null || !result.ok() || userId == null || userId.isBlank()) {
+            return;
+        }
+        try {
+            for (String tool : tools) {
+                TaskReflection row = new TaskReflection();
+                row.setUserId(userId);
+                row.setTool(tool);
+                row.setFailureKind(kinds != null && kinds.get(tool) != null
+                        ? kinds.get(tool).name() : FailureKind.FIXABLE.name());
+                row.setFailureType(clip(result.failureType(), 32));
+                row.setRootCause(clip(result.rootCause(), 300));
+                row.setNextAction(clip(result.nextAction(), 300));
+                row.setCreatedAt(java.time.LocalDateTime.now());
+                reflections.save(row);
+            }
+        } catch (RuntimeException exception) {
+            log.warn("写反思记忆失败（忽略）：{}", exception.getMessage());
         }
     }
 

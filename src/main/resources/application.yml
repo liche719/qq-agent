@@ -184,6 +184,10 @@ agent:
     enabled: ${AGENT_REFLECT_ENABLED:true}
     max-per-turn: ${AGENT_REFLECT_MAX_PER_TURN:1}
     evidence-chars: ${AGENT_REFLECT_EVIDENCE_CHARS:200}
+    # 反思记忆（2026-10-25）：落库到 task_reflection，下次同一工具失败时先查历史结论。
+    # ⚠️ 部署前必须先建表：deploy/postgres/V29__task_reflection.sql
+    memory-enabled: ${AGENT_REFLECT_MEMORY_ENABLED:true}
+    memory-days: ${AGENT_REFLECT_MEMORY_DAYS:30}
 
   # 长任务后台执行（2026-10-21）
   background:

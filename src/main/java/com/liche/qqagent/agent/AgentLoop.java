@@ -397,11 +397,16 @@ public class AgentLoop {
                         reflections++;
                         String task = firstUserText(messages);
                         java.util.Map<String, String> failedReasons = new java.util.LinkedHashMap<>();
-                        failedTools.forEach((name, value) ->
-                                failedReasons.put(name, value == null ? "" : value.failureReason()));
+                        java.util.Map<String, FailureKind> failedKinds = new java.util.LinkedHashMap<>();
+                        failedTools.forEach((name, value) -> {
+                            String reason = value == null ? "" : value.failureReason();
+                            failedReasons.put(name, reason);
+                            failedKinds.put(name, FailureKind.classify(reason,
+                                    value == null ? 0 : value.attempts()));
+                        });
                         TaskReflectionService.Result reflection = taskReflection == null
                                 ? TaskReflectionService.Result.failed("反思服务不可用")
-                                : taskReflection.reflect(task, planText, failedReasons,
+                                : taskReflection.reflect(userId, task, planText, failedReasons, failedKinds,
                                         new ArrayList<>(successfulTools), round, maxRounds);
                         if (reflection.ok()) {
                             messages.add(SystemMessage.from(reflection.toPromptBlock()));
