@@ -1301,8 +1301,7 @@ public class QqChannel implements ChatChannel {
             if (session.dead) {
                 // 流式没了：继续把行攒起来，收尾时一次补发（2026-10-25）
                 if (session.text.length() > 0) {
-                    session.text.append('
-');
+                    session.text.append('\n');
                 }
                 session.text.append("· ").append(line.trim());
                 return;
@@ -1417,8 +1416,7 @@ public class QqChannel implements ChatChannel {
                 boolean sent = sendTextReplyResultFrom(session.botId, userId, session.replyToMsgId, text);
                 session.fallbackSentChars = session.text.length();
                 log.info("[qq] progress fallback sent user={} lines={} ok={}", userId,
-                        text.split("
-").length, sent);
+                        text.split("\n").length, sent);
             } catch (RuntimeException exception) {
                 log.warn("[qq] progress fallback failed user={}: {}", userId, exception.getMessage());
             }
