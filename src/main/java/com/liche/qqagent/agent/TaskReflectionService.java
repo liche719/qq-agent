@@ -88,13 +88,13 @@ public class TaskReflectionService {
      * @param round    当前是第几轮（从 0 开始）
      * @param maxRounds 这一轮最多几轮
      */
-    public Result reflect(String task, Map<String, String> failed, List<String> succeeded,
+    public Result reflect(String task, String plan, Map<String, String> failed, List<String> succeeded,
                           int round, int maxRounds) {
         if (!enabled) {
             return Result.failed("反思开关关着");
         }
         try {
-            String prompt = buildPrompt(task, failed, succeeded, round, maxRounds);
+            String prompt = buildPrompt(task, plan, failed, succeeded, round, maxRounds);
             String raw = LlmScenario.run(LlmScenario.REFLECT, () -> chatModel.chat(prompt));
             return parse(raw);
         } catch (RuntimeException exception) {
@@ -103,7 +103,7 @@ public class TaskReflectionService {
         }
     }
 
-    private String buildPrompt(String task, Map<String, String> failed, List<String> succeeded,
+    private String buildPrompt(String task, String plan, Map<String, String> failed, List<String> succeeded,
                                int round, int maxRounds) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("你是这个 Agent 的「失败复盘员」。它刚刚连续失败，请判断**是哪里错了、下一步该怎么改**。\n\n");

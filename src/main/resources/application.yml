@@ -174,6 +174,12 @@ agent:
 
   # 任务级反思（2026-10-25）：只在策略性失败时独立调一次，输出结构化 JSON；
   # should_replan=true 时把"改后的步骤"注入下一轮，而不是只加一段感想。
+  # 多步任务先写计划（2026-10-25）：不额外调模型，只要求它在第一轮输出里顺手写「计划：1) …」，
+  # 反思靠这段文本判断"计划本身错没错"，重规划才有对象。
+  plan:
+    enabled: ${AGENT_PLAN_ENABLED:true}
+    max-steps: ${AGENT_PLAN_MAX_STEPS:3}
+
   reflect:
     enabled: ${AGENT_REFLECT_ENABLED:true}
     max-per-turn: ${AGENT_REFLECT_MAX_PER_TURN:1}

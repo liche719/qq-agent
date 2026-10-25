@@ -83,6 +83,11 @@ public class AgentLoop {
             return new RoundOutcome(null, true);
         }
 
+        /** 调了工具、但过程中说了话（一般是它自己写的计划） */
+        static RoundOutcome tools(String text) {
+            return new RoundOutcome(text, true);
+        }
+
         static RoundOutcome text(String value) {
             return new RoundOutcome(value, false);
         }
@@ -148,6 +153,11 @@ public class AgentLoop {
     private TaskReflectionService taskReflection;
     @org.springframework.beans.factory.annotation.Value("${agent.reflect.max-per-turn:1}")
     private int reflectMaxPerTurn = 1;
+    /** 多步任务先写计划（2026-10-25）：不额外调模型，只是要求模型在这轮输出里顺手写出来 */
+    @org.springframework.beans.factory.annotation.Value("${agent.plan.enabled:true}")
+    private boolean planEnabled = true;
+    @org.springframework.beans.factory.annotation.Value("${agent.plan.max-steps:3}")
+    private int planMaxSteps = 3;
 
     /** 自主模块运行时开关（2026-10-24）：关掉后模型看不到 self* 工具 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -324,6 +334,7 @@ public class AgentLoop {
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
         int reflections = 0;
+        String planText = "";
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
         Set<String> announcedTools = new LinkedHashSet<>();
         // 轮内注入次数（用户在它干活时又发来的消息，最多注入 2 次）
@@ -367,10 +378,20 @@ public class AgentLoop {
                     messages.add(UserMessage.from("（下一步就是最后一步，工具会被收回。"
                             + "要留下来、要记下来的东西现在就得做；最后一步只能写字。）"));
                 }
+                if (round == 0 && planEnabled) {
+                    // 2026-10-25：多步任务先写计划。**不额外调模型**——就让它在这轮的普通输出里写，
+                    // 反思靠这段文本判断"计划本身是不是错的"，重规划才有对象。
+                    messages.add(SystemMessage.from("如果这件事需要好几步（多个工具、先后依赖），"
+                            + "先在回复开头用「计划：1) … 2) …」写不超过 " + planMaxSteps
+                            + " 步，再开始调工具；一句话就能答的，不要写计划。"));
+                }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
                         toolResults, scope, round, announcedTools);
                 if (outcome.toolCalls()) {
+                    if (planText.isBlank() && outcome.text() != null && !outcome.text().isBlank()) {
+                        planText = outcome.text().strip();
+                    }
                     // 策略性失败才反思（2026-10-25）：工具内部重试过仍失败，或轮次过半一次没成
                     if (reflections < reflectMaxPerTurn && shouldReflect(round, maxRounds, successfulTools, failedTools)) {
                         reflections++;
@@ -380,7 +401,7 @@ public class AgentLoop {
                                 failedReasons.put(name, value == null ? "" : value.failureReason()));
                         TaskReflectionService.Result reflection = taskReflection == null
                                 ? TaskReflectionService.Result.failed("反思服务不可用")
-                                : taskReflection.reflect(task, failedReasons,
+                                : taskReflection.reflect(task, planText, failedReasons,
                                         new ArrayList<>(successfulTools), round, maxRounds);
                         if (reflection.ok()) {
                             messages.add(SystemMessage.from(reflection.toPromptBlock()));
@@ -647,7 +668,10 @@ public class AgentLoop {
         // 关键：本轮若有工具调用（即使输出了过程文本），必须继续下一轮，
         // 让模型基于工具结果生成最终回复；工具轮的过程文本不应作为回复发送给用户
         if (Boolean.TRUE.equals(hasTools.get())) {
-            return RoundOutcome.tools();
+            // 把工具轮里的过程文本带出去：多步任务时模型会先写"计划：1)…"，反思要用它判断该不该重规划
+            String withTools = acc.get().toString();
+            return withTools == null || withTools.isBlank()
+                    ? RoundOutcome.tools() : RoundOutcome.tools(withTools);
         }
         String text = acc.get().toString();
         return (text == null || text.isBlank()) ? RoundOutcome.silent() : RoundOutcome.text(text);
