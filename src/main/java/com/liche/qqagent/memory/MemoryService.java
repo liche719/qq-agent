@@ -734,8 +734,8 @@ public class MemoryService {
     }
 
     /** TASK 类默认有效期（2026-10-25）：提取时没给过期时间就按这个兜底，别让临时任务永久污染画像 */
-    @org.springframework.beans.factory.annotation.Value("${memory.task-default-ttl-days:30}")
-    private int taskDefaultTtlDays = 30;
+    @org.springframework.beans.factory.annotation.Value("${memory.task-default-ttl-days:180}")
+    private int taskDefaultTtlDays = 180;
 
     private void applyLifecycle(Memory memory, MemoryProvenance provenance, LocalDateTime validUntil,
                                 boolean mergeExisting) {
