@@ -30,6 +30,7 @@ export QUARTZ_DELEGATE=org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
 export AGENT_CHANNEL_MODE=simulator QQ_ENABLED=false MEMORY_SELF_ENABLED=false SCHEDULED_ENABLED=false
 export SERVER_PORT=18080 SERVER_SSL_ENABLED=false
 export AGENT_EVAL_ENABLED=true          # 生产保持 false
+export MEMORY_RECALL_KEYWORD_FALLBACK=true   # 本地没配 embedding key，靠它才能验召回
 java -jar target/qq-agent-0.0.1-SNAPSHOT.jar
 
 # 3) 跑分
@@ -68,7 +69,9 @@ python eval/run_eval.py --url http://127.0.0.1:18080
 1. **没配 embedding 时记忆召回直接返回空**（产品 bug）。
    本地没 `EMBEDDING_API_KEY`，`recallFacts` 第一行就 `if (!embeddingClient.isEnabled()) return List.of();`——
    事实明明在库里，问它却答"没记过"。生产虽然配了 key，但**接口挂掉/额度用完时会静默失忆**。
-   已修：向量不可用、embed 失败、向量没命中，三种情况都退化为**关键词兜底**（中文按 2~3 字切片 + 停用词过滤）。
+   已加兜底：向量不可用、embed 失败、向量没命中，三种情况可退化为**关键词匹配**
+   （中文按 2~3 字切片 + 停用词过滤）。**但默认关着**——`memory.recall-keyword-fallback=false`：
+   宁可"查不到"，也不拿粗匹配结果冒充语义召回（用户 2026-10-26 明确要求）。
 
 2. **评估断言本身写错**（工具 bug）。
    期望只写 `object` 时，`contains(subject="")` 恒为 false → 6 条用例必挂；另外「三点」被模型规范化成「15:00」，

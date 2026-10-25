@@ -49,6 +49,10 @@ public class MemoryFactService {
     /** 补齐向量时一次最多处理多少条（用户后填 api-key 时靠它自愈，见 reindexMissing） */
     private static final int REINDEX_BATCH = 20;
 
+    /** 关键词兜底（2026-10-26）：默认关闭——向量不可用时宁可返回空，也不拿粗匹配结果冒充语义召回 */
+    @org.springframework.beans.factory.annotation.Value("${memory.recall-keyword-fallback:false}")
+    private boolean keywordFallbackEnabled = false;
+
     private final MemoryFactRepository factRepository;
     private final MemoryFactVectorStore vectorStore;
     private final MemoryChangeLogRepository changeLogRepository;
@@ -392,15 +396,15 @@ public class MemoryFactService {
         // 没有向量能力（没配 key / 接口挂了）时不能直接返回空：退化成关键词匹配，
         // 否则"记忆明明在库里、问它却说没记过"（2026-10-26 评估实测：4 条事实、召回全空）。
         if (!embeddingClient.isEnabled()) {
-            return keywordFallback(userId, queryText, limit);
+            return keywordFallbackEnabled ? keywordFallback(userId, queryText, limit) : List.of();
         }
         float[] query = embeddingClient.embedOne(queryText);
         if (query == null) {
-            return keywordFallback(userId, queryText, limit);
+            return keywordFallbackEnabled ? keywordFallback(userId, queryText, limit) : List.of();
         }
         List<MemoryFactVectorStore.FactHit> hits = vectorStore.search(userId, query, limit, minScore);
         if (hits.isEmpty()) {
-            return keywordFallback(userId, queryText, limit);
+            return keywordFallbackEnabled ? keywordFallback(userId, queryText, limit) : List.of();
         }
         Map<Long, MemoryFact> byId = new LinkedHashMap<>();
         for (MemoryFact fact : factRepository.findByIdInAndUserId(hits.stream()

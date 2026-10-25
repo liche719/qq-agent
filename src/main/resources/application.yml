@@ -506,6 +506,9 @@ memory:
   # 交给模型三分类（无关/补充/矛盾）再决定新建还是改写；min-score 是余弦相似度下限，
   # 低于它的一律当"无关"直接新增（宁可多一条，也不要把无关的事错并到一起）。
   fact-recall-limit: ${MEMORY_FACT_RECALL_LIMIT:6}
+  # 事实召回的关键词兜底（2026-10-26）：默认关。关着时向量不可用就返回空——
+  # 宁可"查不到"，也不拿粗匹配结果冒充语义召回。本地跑评估时设 true（见 docs/eval.md）。
+  recall-keyword-fallback: ${MEMORY_RECALL_KEYWORD_FALLBACK:false}
   # TASK 类记忆默认有效期（2026-10-25）：提取没给过期时间时兜底
   task-default-ttl-days: ${MEMORY_TASK_DEFAULT_TTL_DAYS:180}
   fact-recall-min-score: ${MEMORY_FACT_RECALL_MIN_SCORE:0.5}
