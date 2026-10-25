@@ -446,6 +446,11 @@ memory:
   context-ttl-hours: ${MEMORY_CONTEXT_TTL_HOURS:720}
   context-max-turns: ${MEMORY_CONTEXT_MAX_TURNS:40}
   context-max-chars: ${MEMORY_CONTEXT_MAX_CHARS:12000}
+  # 长对话压缩（2026-10-26）：窗口外的更早对话压成 ≤150 字摘要，而不是直接丢掉。
+  # 只对被截掉 ≥ min-turns 轮时触发；摘要按"最早那条消息"缓存 ttl-hours，同一段只花一次调用。
+  context-summary-enabled: ${MEMORY_CONTEXT_SUMMARY_ENABLED:true}
+  context-summary-min-turns: ${MEMORY_CONTEXT_SUMMARY_MIN_TURNS:6}
+  context-summary-ttl-hours: ${MEMORY_CONTEXT_SUMMARY_TTL_HOURS:12}
   core-max-load: ${MEMORY_CORE_MAX_LOAD:16}
   core-max-chars: ${MEMORY_CORE_MAX_CHARS:2200}
   work-max-load: ${MEMORY_WORK_MAX_LOAD:15}

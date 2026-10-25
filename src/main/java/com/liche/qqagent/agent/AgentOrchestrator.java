@@ -86,6 +86,10 @@ public class AgentOrchestrator {
     @Value("${memory.context-max-chars:12000}")
     private int contextMaxChars = DEFAULT_CONTEXT_MAX_CHARS;
 
+    /** 长对话压缩（2026-10-26）：窗口外的更早对话压成摘要，而不是直接丢 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ContextSummaryService contextSummaryService;
+
     @Autowired
     public AgentOrchestrator(MessageIdempotency idempotency,
                              UserService userService,
@@ -569,14 +573,47 @@ public class AgentOrchestrator {
 
     private List<ContextTurn> durableHistory(String userId) {
         if (conversationMemoryService != null) {
-            List<ContextTurn> durable = conversationMemoryService.recentForContext(userId,
-                    contextMaxTurns > 0 ? contextMaxTurns : DEFAULT_CONTEXT_MAX_TURNS,
-                    contextMaxChars > 0 ? contextMaxChars : DEFAULT_CONTEXT_MAX_CHARS);
+            int maxTurns = contextMaxTurns > 0 ? contextMaxTurns : DEFAULT_CONTEXT_MAX_TURNS;
+            int maxChars = contextMaxChars > 0 ? contextMaxChars : DEFAULT_CONTEXT_MAX_CHARS;
+            List<ContextTurn> durable = conversationMemoryService.recentForContext(userId, maxTurns, maxChars);
             if (durable != null && !durable.isEmpty()) {
-                return durable;
+                return withOlderSummary(userId, durable, maxTurns, maxChars);
             }
         }
         return contextStore.getRecent(userId);
+    }
+
+    /**
+     * 长对话压缩（2026-10-26）：窗口外的更早对话原来**直接丢掉**，模型既不知道被截了、
+     * 也接不上"那件事怎么发展到今天"。现在把那一段压成摘要，作为 summary 轮次放在历史最前面。
+     * 只在真的被截掉 ≥ 阈值时才有这一步，摘要按"最早那条消息"缓存，同一段只花一次调用。
+     */
+    private List<ContextTurn> withOlderSummary(String userId, List<ContextTurn> kept,
+                                               int maxTurns, int maxChars) {
+        if (contextSummaryService == null || !contextSummaryService.enabled()) {
+            return kept;
+        }
+        try {
+            // 多取一段，才能知道"被截掉的是什么"
+            List<ContextTurn> wider = conversationMemoryService.recentForContext(userId,
+                    Math.min(400, maxTurns * 3), Math.max(maxChars * 3, maxChars + 12000));
+            if (wider == null || wider.size() <= kept.size()) {
+                return kept;
+            }
+            int droppedCount = wider.size() - kept.size();
+            List<ContextTurn> dropped = wider.subList(0, droppedCount);
+            String summary = contextSummaryService.summarize(userId, dropped);
+            if (summary == null || summary.isBlank()) {
+                return kept;
+            }
+            List<ContextTurn> merged = new java.util.ArrayList<>();
+            merged.add(new ContextTurn("summary", "【更早的对话摘要（原对话已被截断）】" + summary));
+            merged.addAll(kept);
+            return merged;
+        } catch (RuntimeException exception) {
+            log.warn("补上下文摘要失败（照常只用最近窗口）：{}", exception.getMessage());
+            return kept;
+        }
     }
 
     private record DocumentBundle(List<ExtractedDocument> documents,

@@ -319,6 +319,11 @@ public class AgentLoop {
         }
         if (history != null) {
             for (ContextTurn turn : history) {
+                if ("summary".equals(turn.role())) {
+                    // 2026-10-26：被截掉的那段对话的摘要，当成系统提示放在历史最前面
+                    messages.add(SystemMessage.from(turn.text()));
+                    continue;
+                }
                 messages.add("assistant".equals(turn.role())
                         ? AiMessage.from(turn.text()) : UserMessage.from(turn.text()));
             }
