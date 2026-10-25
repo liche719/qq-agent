@@ -47,12 +47,12 @@ public class TaskReflectionService {
         public String toPromptBlock() {
             StringBuilder text = new StringBuilder();
             if (replan && !revisedPlan.isEmpty()) {
-                text.append("【重新规划】上面的做法走不通，按下面来：\n");
+                text.append("【重新规划 v2】上面的做法走不通，按下面来：\n");
                 for (int i = 0; i < revisedPlan.size(); i++) {
                     text.append(i + 1).append(". ").append(revisedPlan.get(i)).append('\n');
                 }
             } else {
-                text.append("【失败归因】").append(rootCause.isBlank() ? "上一步没成功" : rootCause).append('\n');
+                text.append("【失败归因 v2】").append(rootCause.isBlank() ? "上一步没成功" : rootCause).append('\n');
             }
             if (!nextAction.isBlank()) {
                 text.append("【下一步】").append(nextAction).append('\n');

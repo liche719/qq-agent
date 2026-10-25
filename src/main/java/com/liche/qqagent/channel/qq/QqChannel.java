@@ -1405,8 +1405,12 @@ public class QqChannel implements ChatChannel {
      * 进度降级（2026-10-25）：流式消息被平台拒绝时（沙箱/额度/msg_id 失效），
      * 用普通被动消息把当前进度发一次。**只发一次**，不发就再也没有过程可看。
      */
+    /** 进度降级要不要发（2026-10-26）：它会占用一条被动回复，和最终回复抢额度，默认关 */
+    @org.springframework.beans.factory.annotation.Value("${qq.progress-fallback-enabled:false}")
+    private boolean progressFallbackEnabled = false;
+
     private void sendProgressFallback(String userId, ProgressSession session) {
-        if (session.fallbackUsed || session.text.length() == 0) {
+        if (!progressFallbackEnabled || session.fallbackUsed || session.text.length() == 0) {
             return;
         }
         session.fallbackUsed = true;

@@ -406,8 +406,10 @@ public class AgentLoop {
                 if (outcome.toolCalls()) {
                     // 真 Planner（2026-10-25）：只在"第一轮就要调多个工具"时规划一次，
                     // 一句话能办的事一次规划都不做。
+                    // 2026-10-26：只在 round==0 触发会漏掉"每轮只加一个工具"的漂移场景——
+                    // 那种情况 round 0 只有 1 个工具，到 round 1 才凑够 2 个。放宽到前两轮。
                     if (!planned && planService != null
-                            && "auto".equalsIgnoreCase(planMode) && round == 0
+                            && "auto".equalsIgnoreCase(planMode) && round <= 1
                             && distinctTools(successfulTools, failedTools) >= planMinTools) {
                         planned = true;
                         List<String> toolsUsed = new ArrayList<>(successfulTools);

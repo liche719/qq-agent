@@ -38,7 +38,7 @@ public class PlanService {
 
         /** 给模型看的注入文本 */
         public String toPromptBlock() {
-            StringBuilder text = new StringBuilder("【执行计划】按这个顺序走，别跳步、也别重复已经做过的：\n");
+            StringBuilder text = new StringBuilder("【执行计划 v1】按这个顺序走，别跳步、也别重复已经做过的：\n");
             for (int i = 0; i < steps.size(); i++) {
                 text.append(i + 1).append(". ").append(steps.get(i)).append('\n');
             }

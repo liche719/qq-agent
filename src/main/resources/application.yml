@@ -371,6 +371,8 @@ web:
   read-timeout-seconds: ${WEB_READ_TIMEOUT_SECONDS:20}
   user-agent: '${WEB_USER_AGENT:Mozilla/5.0 (compatible; WechatAgent/1.0)}'
 
+  # 进度流式被拒时是否改用普通消息补发（2026-10-26）：会占一条被动回复，默认关
+  progress-fallback-enabled: ${QQ_PROGRESS_FALLBACK_ENABLED:false}
 qq:
   # QQ 官方机器人（需先在 QQ 开放平台创建机器人并获取 AppID/AppSecret）
   enabled: ${QQ_ENABLED:false}
