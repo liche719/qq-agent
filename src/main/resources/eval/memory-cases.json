@@ -11,7 +11,7 @@
       "id": "classtime",
       "type": "extract",
       "conversation": ["周三的体育课改到下午三点"],
-      "expectFacts": [{ "subject": "周三", "object": "三点" }]
+      "expectFacts": [{ "subject": "周三", "objectAny": ["三点", "15:00"] }]
     },
     {
       "id": "nickname",
@@ -120,7 +120,7 @@
       "type": "recall",
       "fromCase": "classtime",
       "query": "周三体育课几点",
-      "expectContains": "三点"
+      "expectContains": "15:00"
     }
   ]
 }

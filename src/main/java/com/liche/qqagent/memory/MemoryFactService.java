@@ -386,16 +386,21 @@ public class MemoryFactService {
      * 记忆里的"第一周周二晚数学课的教室是 303"字面上一个词都不重合，但向量上很近）。
      */
     public List<MemoryFact> recallFacts(String userId, String queryText, int limit, double minScore) {
-        if (!embeddingClient.isEnabled() || userId == null || queryText == null || queryText.isBlank() || limit <= 0) {
+        if (userId == null || queryText == null || queryText.isBlank() || limit <= 0) {
             return List.of();
+        }
+        // 没有向量能力（没配 key / 接口挂了）时不能直接返回空：退化成关键词匹配，
+        // 否则"记忆明明在库里、问它却说没记过"（2026-10-26 评估实测：4 条事实、召回全空）。
+        if (!embeddingClient.isEnabled()) {
+            return keywordFallback(userId, queryText, limit);
         }
         float[] query = embeddingClient.embedOne(queryText);
         if (query == null) {
-            return List.of();
+            return keywordFallback(userId, queryText, limit);
         }
         List<MemoryFactVectorStore.FactHit> hits = vectorStore.search(userId, query, limit, minScore);
         if (hits.isEmpty()) {
-            return List.of();
+            return keywordFallback(userId, queryText, limit);
         }
         Map<Long, MemoryFact> byId = new LinkedHashMap<>();
         for (MemoryFact fact : factRepository.findByIdInAndUserId(hits.stream()
@@ -691,6 +696,60 @@ public class MemoryFactService {
     }
 
     /** 属性在"一句话"里的先后：先说什么、后说什么 */
+    /**
+     * 关键词兜底（2026-10-26）：向量不可用或没命中时，按 subject/object/content 里出现的词捞。
+     * 只做「至少命中一个词」的粗筛，按更新时间排序——不追求精确，只保证记得的东西能被问出来。
+     */
+    /** 关键词兜底的噪声词：这些片几乎每句话都有，留着只会误命中 */
+    private static final java.util.Set<String> STOP_TERMS = java.util.Set.of(
+            "什么", "怎么", "哪个", "多少", "什么时", "么时候", "吗", "呢", "的", "了", "是", "在",
+            "我", "你", "他", "她", "它", "我们", "你们", "请问", "一下", "告诉", "记得");
+
+    private List<MemoryFact> keywordFallback(String userId, String queryText, int limit) {
+        // 中文没有空格，整句当一个词几乎永远匹配不上——切成 2~3 字的片，去掉疑问/代词这类噪声词。
+        List<String> terms = new ArrayList<>();
+        StringBuilder compactBuilder = new StringBuilder();
+        for (char ch : queryText.toCharArray()) {
+            if (Character.isLetterOrDigit(ch)) {
+                compactBuilder.append(ch);
+            }
+        }
+        String compact = compactBuilder.toString();
+        for (int size = 3; size >= 2; size--) {
+            for (int i = 0; i + size <= compact.length(); i++) {
+                String term = compact.substring(i, i + size);
+                if (STOP_TERMS.contains(term) || terms.contains(term)) {
+                    continue;
+                }
+                terms.add(term);
+            }
+        }
+        if (terms.isEmpty()) {
+            return List.of();
+        }
+        List<MemoryFact> candidates = factRepository.findByUserIdAndStatusOrderByUpdatedAtDesc(
+                userId, MemoryFact.STATUS_ACTIVE);
+        List<MemoryFact> matched = new ArrayList<>();
+        for (MemoryFact fact : candidates) {
+            String haystack = ((fact.getSubject() == null ? "" : fact.getSubject()) + " "
+                    + (fact.getObject() == null ? "" : fact.getObject()) + " "
+                    + (fact.getContent() == null ? "" : fact.getContent())).toLowerCase();
+            for (String term : terms) {
+                if (haystack.contains(term.toLowerCase())) {
+                    matched.add(fact);
+                    break;
+                }
+            }
+            if (matched.size() >= limit) {
+                break;
+            }
+        }
+        if (!matched.isEmpty()) {
+            log.info("记忆召回走关键词兜底 user={} 命中={}", userId, matched.size());
+        }
+        return reorderByTimeWord(matched, queryText);
+    }
+
     private static int predicateRank(String predicate) {
         String key = predicate == null ? "" : predicate;
         if (key.matches(".*(课程|名称|科目|标题|是什么|项目|事情).*")) return 0;

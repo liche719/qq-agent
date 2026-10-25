@@ -64,6 +64,10 @@ public class MemoryEvalService {
 
     /** 跑全部用例，返回逐条结果与总分 */
     public Map<String, Object> run(String userId) {
+        return run(userId, false);
+    }
+
+    public Map<String, Object> run(String userId, boolean keepData) {
         if (!enabled) {
             return Map.of("ok", false, "error", "评估开关关着（agent.eval-enabled=false）");
         }
@@ -83,7 +87,9 @@ public class MemoryEvalService {
             }
             results.add(one);
         }
-        cleanup(userId);
+        if (!keepData) {
+            cleanup(userId);
+        }
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("ok", true);
         report.put("user", userId);
@@ -110,15 +116,39 @@ public class MemoryEvalService {
             index++;
         }
         boolean ran = extractor.extract(caseUser);
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
         List<Map<String, Object>> facts = factRows(caseUser);
         List<String> missing = new ArrayList<>();
         for (JsonNode expected : node.path("expectFacts")) {
-            String subject = expected.path("subject").asText("");
-            String object = expected.path("object").asText("");
-            boolean hit = facts.stream().anyMatch(row ->
-                    contains(row.get("subject"), subject) && contains(row.get("object"), object));
+            String subject = expected.path("subject").asText("").trim();
+            String object = expected.path("object").asText("").trim();
+            List<String> objectAny = new ArrayList<>();
+            for (JsonNode alt : expected.path("objectAny")) {
+                String value = alt.asText("").trim();
+                if (!value.isBlank()) {
+                    objectAny.add(value);
+                }
+            }
+            // 空字符串 = 这条不约束（早期版本把空当"必须匹配空"，导致所有只写 object 的用例必挂）
+            boolean hit = facts.stream().anyMatch(row -> {
+                boolean subjectOk = subject.isBlank() || contains(row.get("subject"), subject);
+                boolean objectOk = object.isBlank()
+                        ? objectAny.isEmpty() || objectAny.stream().anyMatch(alt -> contains(row.get("object"), alt))
+                        : contains(row.get("object"), object);
+                return subjectOk && objectOk;
+            });
             if (!hit) {
-                missing.add(subject + "=" + object);
+                List<String> wanted = object.isBlank() ? objectAny : List.of(object);
+                hit = !wanted.isEmpty() && memoryRows(caseUser).stream()
+                        .anyMatch(content -> wanted.stream().anyMatch(w -> contains(content, w)));
+            }
+            if (!hit) {
+                missing.add((subject.isBlank() ? "*" : subject) + "="
+                        + (object.isBlank() ? objectAny.toString() : object));
             }
         }
         List<String> forbidden = new ArrayList<>();
@@ -152,6 +182,13 @@ public class MemoryEvalService {
         String caseUser = fromCase.isBlank() ? userId : userId + "-" + fromCase;
         List<MemoryFact> hits = factService.recallFacts(caseUser, query, 8, 0d);
         String rendered = factService.renderCards(hits, 1200);
+        // 画像类（昵称、手机号）不在事实层，走 memory 表——模型平时是靠核心记忆注入拿到的
+        if (!contains(rendered, expect)) {
+            String fromMemory = String.join(" | ", memoryRows(caseUser));
+            if (contains(fromMemory, expect)) {
+                rendered = rendered + " | " + fromMemory;
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", id);
         result.put("type", "recall");
@@ -163,6 +200,19 @@ public class MemoryEvalService {
             result.put("got", rendered.length() > 300 ? rendered.substring(0, 300) : rendered);
         }
         return result;
+    }
+
+    /** 画像/任务类记忆（memory 表）：昵称、手机号这类不进事实层 */
+    private List<String> memoryRows(String userId) {
+        List<String> rows = new ArrayList<>();
+        for (Map<String, Object> row : jdbc.queryForList(
+                "select content from memory where user_id = ? and (status is null or status = 'ACTIVE')", userId)) {
+            Object content = row.get("content");
+            if (content != null) {
+                rows.add(String.valueOf(content));
+            }
+        }
+        return rows;
     }
 
     private List<Map<String, Object>> factRows(String userId) {

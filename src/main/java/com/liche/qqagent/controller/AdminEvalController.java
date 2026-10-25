@@ -31,7 +31,8 @@ public class AdminEvalController {
     }
 
     @PostMapping("/memory")
-    public Map<String, Object> memory(@RequestParam String userId) {
-        return evalService.run(userId);
+    public Map<String, Object> memory(@RequestParam String userId,
+                                      @RequestParam(defaultValue = "false") boolean keep) {
+        return evalService.run(userId, keep);
     }
 }
