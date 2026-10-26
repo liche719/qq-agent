@@ -49,6 +49,7 @@ public class AdminPanelController {
         tabs.add(selfTab());
         tabs.add(memoryTab());
         tabs.add(core("users", "用户与记忆"));
+        tabs.add(core("tools", "工具"));
         tabs.add(core("logs", "日志"));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("tabs", tabs);

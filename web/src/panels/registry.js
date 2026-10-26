@@ -16,6 +16,7 @@ import TasksPanel from './TasksPanel.vue'
 import ScheduledPanel from './ScheduledPanel.vue'
 import UsersPanel from './UsersPanel.vue'
 import LogsPanel from './LogsPanel.vue'
+import ToolsPanel from './ToolsPanel.vue'
 
 export const CORE_PANELS = {
   overview: OverviewPanel,
@@ -26,7 +27,8 @@ export const CORE_PANELS = {
   tasks: TasksPanel,
   scheduled: ScheduledPanel,
   users: UsersPanel,
-  logs: LogsPanel
+  logs: LogsPanel,
+  tools: ToolsPanel
 }
 
 /** 清单接口挂掉时用的中文页签名（也是后端漏给 label 时的兜底） */
@@ -39,7 +41,8 @@ export const CORE_TAB_LABELS = {
   tasks: '任务',
   scheduled: '定时任务',
   users: '用户与记忆',
-  logs: '日志'
+  logs: '日志',
+  tools: '工具'
 }
 
 /** 兜底页签清单，顺序与 CORE_TAB_LABELS 一致 */
