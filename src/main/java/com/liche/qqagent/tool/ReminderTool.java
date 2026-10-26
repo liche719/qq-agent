@@ -26,9 +26,7 @@ public class ReminderTool implements AgentToolProvider {
         this.statusService = statusService;
     }
 
-    @Tool(value = "解析用户的提醒需求并创建定时提醒。用户提到'提醒我/帮我记着/XX点叫我/定时/每天/每周'等意图时调用。参数 description 是用户的原话。"
-            + "**注意区分**：如果到点后需要你去做一件事（查天气、汇总内容、给建议等）再把结果发给他，请改用 createScheduledTask；"
-            + "本工具只适合「到点发一句话提醒」的场景。")
+    @Tool(value = "创建**一次性**提醒：到点只发一句话（「7 点提醒我吃药」「明天叫我起床」）。**每天/每周重复做的事 → createScheduledTask**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult parseReminder(String description) {
@@ -37,19 +35,19 @@ public class ReminderTool implements AgentToolProvider {
         return toToolResult(reminderService.createFromParsedResult(parsed, userId));
     }
 
-    @Tool(value = "查询当前用户所有待执行的定时提醒任务。")
+    @Tool(value = "列出还没到点的提醒。")
     public String listReminders() {
         return reminderService.listPendingText(requireCurrentUser());
     }
 
-    @Tool(value = "取消一个定时提醒任务。参数 reminderId 为提醒的 ID（可通过 listReminders 查询）。")
+    @Tool(value = "取消一个提醒（id 从 listReminders 拿）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult cancelReminder(Long reminderId) {
         return toToolResult(reminderService.cancelResult(requireCurrentUser(), reminderId));
     }
 
-    @Tool(value = "安全调整当前用户已有的定时提醒。先解析并验证新的时间，只有新提醒成功保存和调度后才会取消旧提醒；旧提醒 ID 通过 listReminders 或提醒状态查询获得。用户说‘改成/调整到/换成’已有提醒的新时间时优先调用。")
+    @Tool(value = "改一个已有提醒的时间：先建新的、成功后再取消旧的，不会出现空窗。id 从 listReminders 拿。")
     // 不要声明 requiresConfirmation：它的校验依赖 confirmationParameter，而本方法没有任何令牌参数，
     // 写了等于挂一道永不生效的门（策略层对外声称 HIGH + 需确认，实现里零强制）。真实防线是工具描述 +
     // 系统提示词"改动前先复述给用户确认"，以及 service 侧的"新提醒成功落库后才取消旧的"。
@@ -61,7 +59,7 @@ public class ReminderTool implements AgentToolProvider {
         return toToolResult(reminderService.replaceFromParsed(parsed, requireCurrentUser(), reminderId));
     }
 
-    @Tool(value = "查询当前用户最近提醒的真实状态，包括已推送、已过期、已取消和待执行；用户问‘提醒过吗/有没有收到/是不是没设置’时调用。")
+    @Tool(value = "查提醒的真实状态（已推送/已过期/已取消/待执行）。他问「提醒过吗」「是不是没设」时用。")
     public String getReminderStatus() {
         return reminderService.listRecentStatusText(requireCurrentUser());
     }

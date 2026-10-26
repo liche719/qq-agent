@@ -122,13 +122,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
         this.taskTimeoutMinutes = Math.max(1, taskTimeoutMinutes);
     }
 
-    @Tool(value = "把一件**要干很久**的事放到后台去做，做完你主动汇报给他。"
-            + "用它之后这一轮立刻结束——他能马上继续跟你说话（你也可以正常回他），"
-            + "后台任务跑完会自己给他发一条消息。"
-            + "**什么时候用**：搜索+读好几个网页、翻好几条视频、写长东西这类估计要几分钟的活。"
-            + "**什么时候别用**：一句话能答的、要立刻拿到结果的、需要来回确认的——那些直接做。"
-            + "task 要写清楚**做完之后要知道什么**（比如「查一下 XX 最近的进展，重点看发布时间和版本号」），"
-            + "后台那一轮是**独立**的，看不到你们现在的聊天，所以别写「按刚才说的」这种指代。")
+    @Tool(value = "把要跑很久的活放后台，立刻结束这一轮，做完主动汇报。**几分钟能完成的别用**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = false,
             riskLevel = com.liche.qqagent.tool.ToolRiskLevel.LOW, allowParallel = false)
     public ToolBusinessResult workInBackground(String task) {

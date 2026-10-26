@@ -26,10 +26,7 @@ public class AgentSeedTool implements com.liche.qqagent.tool.AgentToolProvider {
         this.seeds = seeds;
     }
 
-    @Tool(value = "记下一个你自己的念头：一句话，你刚想到「我想搞清楚什么」或者「我想去干点什么」。"
-            + "比如刷到一个视频觉得有意思、或者读资料时冒出一个还没验证的疑点。"
-            + "**轻一点**：这不是开方向（那是 selfQuestChoose），只是一句待办的想法，写清来源；"
-            + "以后任何一轮（研究、刷视频、随便看看）都能接着它往下走。")
+    @Tool(value = "记下一个你自己的念头：一句话，我想搞清楚什么、或者想去干点什么。")
     @ToolExecutionPolicy(ToolExecutionClass.FAST)
     public ToolBusinessResult selfSeedNote(String content, String source) {
         try {

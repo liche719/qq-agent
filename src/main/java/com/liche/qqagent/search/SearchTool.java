@@ -90,8 +90,7 @@ public class SearchTool implements com.liche.qqagent.tool.AgentToolProvider {
                 deepReadCount, deepReadChars, timeZoneId);
     }
 
-    @Tool(value = "搜索互联网获取资料，返回最相关的结果。需要查询实时信息、新闻、未知资料时使用。"
-            + "可以用 count 指定要几条（默认 6、最多 15）：查一个事实给 3–5 条，做汇总/比价或要多个来源时给 10–15 条。")
+    @Tool(value = "通用搜索：找资料、找链接、了解某个主题。**要最新/今天/价格/版本 → searchLatestWeb；政策法规等要交叉核验 → searchVerifiedWeb**。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String searchWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
                             @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
@@ -100,8 +99,7 @@ public class SearchTool implements com.liche.qqagent.tool.AgentToolProvider {
         return search(requireQuery(query), null, false, false, count);
     }
 
-    @Tool(value = "核对当前、最新、今天、正在使用的版本、价格、活动、新闻等会随时间变化的事实。会限定近一年结果并带入当前年月。拿到结果后，必须阅读可靠来源的原文再给出明确结论。"
-            + "count 可以指定要几条（默认 6、最多 15）。")
+    @Tool(value = "查「现在/最新/今天/当前版本」这类会变的事（新闻、价格、版本、活动）。会自动限定近期结果并带入当前年月；拿到结果要读原文再下结论。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String searchLatestWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
                                   @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",
@@ -113,8 +111,7 @@ public class SearchTool implements com.liche.qqagent.tool.AgentToolProvider {
         return search(datedQuery, "year", true, false, count);
     }
 
-    @Tool(value = "高可靠核验搜索：用于政策、法规、考试、医疗、价格、版本等不能仅凭单个摘要判断的事实。返回候选来源，并明确要求读取原文、比较至少两个独立发布者、检查日期和适用范围；证据不足时必须说明无法确认。"
-            + "count 可以指定要几条（默认 6、最多 15；核验一般 8–12 条）。")
+    @Tool(value = "高可靠核验：政策、法规、考试、医疗、价格、版本这类不能只信一条摘要的事实。会要求读原文、比对多个独立来源。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String searchVerifiedWeb(@dev.langchain4j.agent.tool.P("搜索关键词") String query,
                                     @dev.langchain4j.agent.tool.P(value = "要几条结果，默认 6、最多 15；不确定就省略",

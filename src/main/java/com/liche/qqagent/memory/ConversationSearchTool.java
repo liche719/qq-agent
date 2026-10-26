@@ -48,11 +48,7 @@ public class ConversationSearchTool implements AgentToolProvider {
         this.minScore = Math.max(0d, Math.min(0.99d, minScore));
     }
 
-    @Tool(value = "按语义搜「以前的原话」：用户说过什么、助手当时怎么回的。"
-            + "用户问「上次/之前/那天我们说的那个…」「你当时是怎么说的」「我们是不是聊过…」这类**要翻旧账**的问题时用它；"
-            + "query 用他现在的说法就行（不用一模一样，按意思搜）。"
-            + "注意分工：查「会变的信息现在是什么值」用 recallMemoryFacts；"
-            + "这里的返回是**原始对话片段**（带时间），可能已经过时或被后来的话推翻——引用时要说清是哪天说的，别当成当前结论。")
+    @Tool(value = "按语义翻「以前的原话」：他说过什么、你当时怎么回的。**要查某个信息的当前值用 recallMemoryFacts**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
     public ToolBusinessResult searchConversation(String query) {
         String userId = requireCurrentUser();

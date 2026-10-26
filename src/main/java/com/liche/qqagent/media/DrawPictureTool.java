@@ -130,11 +130,7 @@ public class DrawPictureTool implements AgentToolProvider {
         return selfDailyLimit > 0 && selfUsedToday.get() >= selfDailyLimit;
     }
 
-    @Tool(value = "画一张图并发给用户。用户说「给我画个…」「画一张…」「做个图」时调用。"
-            + "prompt 用中文描述画面，越具体越好（主体、动作、场景、风格、光线）；"
-            + "别把「画一个」这类指令本身写进去。"
-            + "**你自己主动画有每日上限**（用户明确要求的不受限）；没想法时别为了显得有产出而画。"
-            + "返回是否成功；失败时如实告诉用户没画成、别假装画了。")
+    @Tool(value = "画一张图发给他（「画个…」「做个图」）。**一轮只画一张**；他说不像/没让画就停手，先问清楚哪里不对。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult drawPicture(String prompt) {
         if (!imageClient.enabled()) {

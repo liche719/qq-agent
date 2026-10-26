@@ -79,7 +79,7 @@ public class WebFileTool implements com.liche.qqagent.tool.AgentToolProvider {
                 DEFAULT_READ_TIMEOUT_SECONDS, DEFAULT_USER_AGENT);
     }
 
-    @Tool(value = "列出公开网页中可直接下载的文件链接。仅当用户明确要求寻找或下载该网页的文件时调用。返回链接后，必须根据用户指定的文件调用 downloadWebFile；不得下载登录、付费、版权受限或用户未要求的内容。")
+    @Tool(value = "列出网页里可直接下载的文件链接（他明确要找/下文件时）。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public String findDownloadableLinks(String pageUrl) {
         statusService.push("我正在查找网页里的可下载文件…");
@@ -114,7 +114,7 @@ public class WebFileTool implements com.liche.qqagent.tool.AgentToolProvider {
         }
     }
 
-    @Tool(value = "下载用户当前明确指定的公开文件 URL，并保存到该用户独立目录。fileName 应按文件内容命名，summary 应说明文件是什么。下载完成后如用户要求发送，再调用 sendDownloadedFile。不得下载或转发登录、付费、版权受限或用户未明确要求的内容。")
+    @Tool(value = "下载他指定的公开文件 URL 到他的目录。文件名按内容起，summary 说明这是什么。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     @com.liche.qqagent.tool.NonIdempotentTool
     public String downloadWebFile(String url, String fileName, String summary) {
@@ -123,7 +123,7 @@ public class WebFileTool implements com.liche.qqagent.tool.AgentToolProvider {
         return storageService.downloadFromWeb(userId, null, url, fileName, summary).message();
     }
 
-    @Tool(value = "将当前用户已下载或保存的本地文件发送到当前消息通道。先用 listStoredMedia 找到 mediaId；仅当用户当前明确要求发送该文件时调用。不能发送其他用户文件。")
+    @Tool(value = "把已下载/已保存的文件发到当前会话（先 listStoredMedia 拿 mediaId）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.MEDIUM, allowParallel = false)
     @com.liche.qqagent.tool.NonIdempotentTool
     public String sendDownloadedFile(Long mediaId) {

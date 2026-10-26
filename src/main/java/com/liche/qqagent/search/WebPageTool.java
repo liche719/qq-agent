@@ -75,12 +75,7 @@ public class WebPageTool implements com.liche.qqagent.tool.AgentToolProvider {
         }
     }
 
-    @Tool(value = "读取指定公开网页的正文。当用户给出 URL，或需要查看搜索结果中的具体页面、文章详情时调用。"
-            + "只支持公开 HTTP/HTTPS 页面。"
-            + "**fullText 由你自己判断**：想看完整内容（代码文件、长文档、要靠它下结论的文章）就传 true，"
-            + "程序会用 DeepSeek 渲染后取全文（比本地直抓干净，但按次收费、且吃每日配额）；"
-            + "只是随便看一眼页面大意，就留空（走本地抓取，快且免费）。"
-            + "GitHub/GitLab 的 blob 链接会自动换成纯文本地址，读代码传 true 更稳。")
+    @Tool(value = "读一个公开网页的正文（用户给了 URL，或要看搜索结果里的具体页面）。**只读这一页，不搜索**；要搜索用 searchWeb。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult readWebPage(String url, Boolean fullText) {
         // 5 分钟内刚失败过的网址：直接告诉他别再试同一个，省一轮超时也省一次思考

@@ -32,10 +32,7 @@ public class DiscoverToolsTool implements AgentToolProvider {
         this.registryProvider = registryProvider;
     }
 
-    @Tool(value = "当你要做的事需要一个当前没有的工具时调用：按关键词搜索更多能力"
-            + "（例如「面试」「定时任务」「自主模块」「发语音」）。"
-            + "返回匹配的工具名和用途；**命中之后这些工具在本轮就能直接调用**，不用再搜第二次。"
-            + "如果搜不到，就如实告诉用户这个能力暂时没有，别硬编。")
+    @Tool(value = "缺工具时按关键词搜更多能力（搜到后本轮直接可用）。")
     public ToolBusinessResult discoverTools(
             @dev.langchain4j.agent.tool.P("要做什么，用自然语言几个词，例如「面试陪练」「定时任务」") String query) {
         List<ToolRegistry.ToolMeta> hits = registryProvider.getObject().allMetadata().stream()

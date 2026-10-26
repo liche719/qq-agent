@@ -20,13 +20,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class SayTool implements AgentToolProvider {
 
-    @Tool(value = "在你干活**途中有话说**的时候，先把这句话发给他，然后继续干（不会中止当前任务）。"
-            + "比如：「行，我去翻翻」「翻到几个了，先看着」「这个有点绕，我多看两条」。"
-            + "**只在这种时候用**：这件事要调好几个工具、他会等十几秒以上——先说一句让他知道你在动，"
-            + "中途有阶段性结果再补一句，最后再给完整答复。"
-            + "**不要用在这些时候**：一问一答的闲聊、查个天气、记个提醒、说个晚安——那些本来就快，说了是添乱。"
-            + "一句话就够，别超过 60 字，像跟人说话，不要「正在处理中」「请稍候」这种机器腔。"
-            + "一轮最多说 2 次（和程序自动发的「正在看视频…」共用 QQ 的被动回复额度），说多了会被拒。")
+    @Tool(value = "干活途中有话说时先发一句（不中止任务）。一问一答或闲聊**别用**；一轮最多 2 次。")
     public ToolBusinessResult sayToUser(
             @P("要说给他听的那句话，像平时聊天，别超过 60 字") String text) {
         String outcome = TurnProgress.emit(text);

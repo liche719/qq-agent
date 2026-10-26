@@ -122,7 +122,10 @@
         }
       ],
       "question": "体育课几点来着？",
-      "expectContains": "15:00"
+      "expectAnyContains": [
+        "15:00",
+        "三点"
+      ]
     },
     {
       "id": "cont-teacher",

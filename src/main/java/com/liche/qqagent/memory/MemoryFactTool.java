@@ -46,10 +46,7 @@ public class MemoryFactTool implements AgentToolProvider {
         this.minScore = Math.max(0d, Math.min(0.99d, minScore));
     }
 
-    @Tool(value = "查「会变的信息」的当前值：课表/教室/上课时间/老师/临时日程/目标分这类**用户说过、后来又可能改过**的事。"
-            + "query 传你想查的那件事，用用户的原话最好（例如「第一周周二晚数学课教室」「英语课在哪上」「数学目标分」）。"
-            + "**回答这类问题之前先查这里**，不要凭印象、更不要拿更早对话里的旧值；查不到就照实说没记过，不要编。"
-            + "返回里「图上写的是…」是用户当初发的图片上的原值，可能已经被他后来的话取代，以「用户说的」那个值为准。")
+    @Tool(value = "查「会变的信息」的当前值：教室/时间/老师/目标分/日程这类他说过、后来又可能改过的事。**建提醒/定时任务时不要先查这里**（直接 parseReminder / createScheduledTask）；**要翻原话用 searchConversation**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
     public ToolBusinessResult recallMemoryFacts(String query) {
         String userId = requireCurrentUser();
@@ -67,9 +64,7 @@ public class MemoryFactTool implements AgentToolProvider {
         return ToolBusinessResult.success(factService.renderCards(hits, CARD_CHARS));
     }
 
-    @Tool(value = "看最近几次「记忆提取」的结果：什么时候跑的、读了多少轮、模型判出几条、为什么空跑或失败。"
-            + "用户问「你最近记了什么」「你是不是没记住」「上次提取成功了吗」这类问题时调用；"
-            + "注意它只说**提取过程**，要查具体记下的内容用 recallMemoryFacts。")
+    @Tool(value = "看最近几次记忆提取的结果：读了多少轮、判出几条、为什么空跑或失败。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, allowParallel = true)
     public ToolBusinessResult recentExtractions() {
         String userId = requireCurrentUser();

@@ -107,9 +107,7 @@ public class AgentSelfTool implements AgentToolProvider {
 
     // ---------------------------------------------------------------- 写自己的块
 
-    @Tool(value = "往你自己的一侧追加一行（例如「我现在在做：把错题按错误类型重排」）。"
-            + "blockType 取 PERSONA（我是谁）/ TASK（我现在在做）/ PROJECT（我长期在做）/ NOTE。"
-            + "块有字数上限，超了会报错——那时先调用 selfSummarize。" + POLICY_HINT)
+    @Tool(value = "往你自己那一侧追加一行（如「我现在在做：…」）。blockType 取 PERSONA/DOING/LONG_TERM/STANCE/OWED。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult selfAppend(String blockType, String text, String evidence) {
@@ -137,11 +135,7 @@ public class AgentSelfTool implements AgentToolProvider {
 
     // ---------------------------------------------------------------- 判断与分歧（二期）
 
-    @Tool(value = "记一条你自己的判断——这是「我一贯怎么看」的原料。"
-            + "同一类事要用**同一个 topic 词**（例如「学习安排」「该不该答应」），同一个主张要用**同一个 direction 词**"
-            + "（例如「要有记录」「先做再说」）。程序会在同类同方向攒够 ≥3 次、跨 ≥2 天、跨 ≥2 个情境之后，"
-            + "自动把它提升成倾向——**你自己不能直接写倾向**，也不能自己宣布「我一贯如此」。"
-            + "content 写清这次的判断本身。" + POLICY_HINT)
+    @Tool(value = "记一条你自己的判断（「我一贯怎么看」的原料）。同一类事用同一个 topic 词，方便以后归纳。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult selfJudge(String topic, String direction, String content, String evidence) {
@@ -154,10 +148,7 @@ public class AgentSelfTool implements AgentToolProvider {
         }
     }
 
-    @Tool(value = "记一次**分歧**：你的主张和机主的不一样（默认只讲一次，不反复唠叨）。"
-            + "content 要写清「我主张什么、他主张什么、为什么」。这不是拒绝执行——他的指令照做，"
-            + "它只是把这次不同意见记在账上；他明确说「就这样办」就是终局。"
-            + "涉及**他自己**的事（他的安排、他的偏好）只记不说重话；只有你自己的事才允许坚持。" + POLICY_HINT)
+    @Tool(value = "记一次**分歧**：你的主张和机主不一样。写清我主张什么、他主张什么、我为什么还这么想；默认只讲一次。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult selfDisagree(String topic, String direction, String content, String evidence) {
@@ -171,12 +162,7 @@ public class AgentSelfTool implements AgentToolProvider {
 
     // ---------------------------------------------------------------- 教训清单（三期领域①）
 
-    @Tool(value = "给自己记一条教训：你反复在哪栽，就记哪。"
-            + "**三段必须齐**：whatIDid（我做了什么）、expected（我当时预期）、whatHappened（实际发生了什么），"
-            + "外加 correction（**以后怎么做**的可执行短句——不是感悟，「以后要更细心」这种没用）。"
-            + "category 取 TIME（时间/日程算错）/ COMMITMENT（答应了没做）/ GUESS（没核就答）/ FORMAT（格式返工）/ TOOL（工具用错）；"
-            + "trigger 取 SURPRISE / USER_POINTED / PROMISE_BROKEN / SELF_CHECK。"
-            + "同类教训程序会自动并进已有那条（复现次数 +1、难度上升），不用你重复记。" + POLICY_HINT)
+    @Tool(value = "给自己记一条教训：反复栽在哪就记哪。三段必须齐：我做了什么(whatIDid)、当时预期(expected)、该怎么改。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
     public ToolBusinessResult selfLesson(String category, String trigger, String whatIDid, String expected,

@@ -143,6 +143,13 @@ public class AgentEvalService {
     private Map<String, Object> runContinuity(JsonNode node) {
         String id = node.path("id").asText("");
         String expect = node.path("expectContains").asText("");
+        List<String> expectAny = new ArrayList<>();
+        for (JsonNode alt : node.path("expectAnyContains")) {
+            String value = alt.asText("").trim();
+            if (!value.isBlank()) {
+                expectAny.add(value);
+            }
+        }
         List<ChatMessage> base = new ArrayList<>();
         base.add(SystemMessage.from("你是一个中文个人助手。回答要简短，直接回答问题。"));
         for (JsonNode turn : node.path("history")) {
@@ -158,7 +165,11 @@ public class AgentEvalService {
             messages.add(UserMessage.from(question));
             String answer = ask(messages, List.of());
             answers.add(clip(answer, 60));
-            if (answer != null && answer.toLowerCase(Locale.ROOT).contains(expect.toLowerCase(Locale.ROOT))) {
+            String lower = answer == null ? "" : answer.toLowerCase(Locale.ROOT);
+            boolean ok = !expectAny.isEmpty()
+                    ? expectAny.stream().anyMatch(value -> lower.contains(value.toLowerCase(Locale.ROOT)))
+                    : lower.contains(expect.toLowerCase(Locale.ROOT));
+            if (ok) {
                 pass++;
             }
         }

@@ -63,10 +63,7 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
      *
      * <p>它**不发送**，只返回那句话；发送仍然走 {@code commentBilibili}，护栏也仍然在那里拦。
      */
-    @Tool(value = "先写出一句要发到 B 站评论区的話（**只生成，不发送**）。"
-            + "在真正调用 commentBilibili 之前先用它，把它返回的那句原样传给 commentBilibili。"
-            + "参数：video 是视频标题，point 是你想说的那个**具体点**（某句话、某个画面、某个数字）。"
-            + "它只写一句 10~25 字的人话，不写总结、不带链接、不评价视频好坏。")
+    @Tool(value = "先写一句要发到 B 站评论区的話（**只生成不发送**）。写出来再交给 commentBilibili。")
     @ToolExecutionPolicy(ToolExecutionClass.FAST)
     public ToolBusinessResult draftBilibiliComment(String video, String point) {
         if (chatModel == null) {
@@ -130,9 +127,7 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
      * <p>会过滤掉两类：**它自己发的**（同 mid）和**已经回过的**（台账里有 parent_rpid 记录），
      * 所以重复调用不会给它一堆"已经处理过"的噪音。
      */
-    @Tool(value = "看看有没有人在你发过的 B 站评论下面回复你。只列出**你还没回过的**。"
-            + "看到想回的，用 commentBilibili（rootRpid 填你那条评论的 rpid，parentRpid 填对方那条回复的 rpid）去回。"
-            + "**别人没回你就别主动找话说**；也别为了「有互动」去回一句没内容的。")
+    @Tool(value = "看有没有人回复你发过的评论（只列你还没回过的）。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult listMyCommentReplies(Integer limit) {
         if (!client.configured()) {
@@ -172,19 +167,7 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
         return ToolBusinessResult.success("有 " + lines.size() + " 条新回复：\n" + String.join("\n", lines));
     }
 
-    @Tool(value = "在 B 站视频下发一条评论，或回复某条评论（楼中楼）。"
-            + "**这是拿机主的账号说话，只有这两种情况才用**：①你自己刷视频时确实有话想说；"
-            + "②机主明确让你去发。别因为一句闲聊就发评论。"
-            + "message 用你自己的语气、短、像人说的话，别写成总结报告，别提机主的账号/机器/聊天记录，不要放链接。"
-            + "要回复楼中楼就传 rootRpid（那一楼的根评论号）和 parentRpid（你回复的那条评论号）。"
-            + "**picturePrompt 可选**：填一句画面描述（主体/动作/场景/风格，越具体越好），"
-            + "工具会照它画一张图、传到 B 站、跟这条评论一起发出去。"
-            + "只在「配张图这句话才完整」时才填——没想法就留空，纯文字完全正常；"
-            + "画图失败会自动退回纯文字，不会把评论卡住。"
-            + "护栏：每天最多几条、同一视频只评一次、两条之间要隔一段时间。"
-            + "发之前先想一下：今天评过几条、这个视频评过没有、上一条是几点——"
-            + "这些从 listMyCommentReplies 和之前的工具结果里能看出来，别一头撞上去被拒。"
-            + "被拦了会告诉你原因，如实转述、别绕。")
+    @Tool(value = "在 B 站视频下发评论、或回复某条评论。message 用 draftBilibiliComment 的结果，**别自己现编**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
             riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @com.liche.qqagent.tool.NonIdempotentTool

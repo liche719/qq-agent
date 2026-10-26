@@ -22,11 +22,7 @@ public class ScheduledTaskTool implements AgentToolProvider {
         this.statusService = statusService;
     }
 
-    @Tool(value = "创建重复执行的定时任务：到点后由你真正去完成任务并把结果发给用户。"
-            + "当用户要求「每天/每周/每隔一段时间」做一件需要你动手的事时调用"
-            + "（例如「每天早上 8 点把今天的天气发我」「每周一帮我汇总上周聊过的重点」「每天晚上 9 点提醒我复盘今天的进度并给建议」）。"
-            + "参数名就是 **task**：把「到点要做什么」按他的原话写进去。"
-            + "注意：如果只是到点提醒一句话、不需要你做事，应该用 parseReminder 而不是这个工具。")
+    @Tool(value = "创建**重复执行**的任务：他说「每天/每周/固定几点」时**直接用它**，先别查记忆；到点由你真正去做完再发结果。**一次性提醒 → parseReminder**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
@@ -54,8 +50,7 @@ public class ScheduledTaskTool implements AgentToolProvider {
                 || result.startsWith("定时任务已经有") || result.contains("功能当前关闭");
     }
 
-    @Tool(value = "查询当前用户所有的定时任务（含启用状态、执行频率、下次执行时间、上次结果）。"
-            + "用户问「我有哪些定时任务」「定时任务都在跑吗」时调用。")
+    @Tool(value = "列出所有定时任务（状态、频率、下次时间、上次结果）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = true)
     public ToolBusinessResult listScheduledTasks() {
@@ -63,8 +58,7 @@ public class ScheduledTaskTool implements AgentToolProvider {
         return ToolBusinessResult.success(scheduledTaskService.listText(userId));
     }
 
-    @Tool(value = "暂停或恢复一个定时任务。参数 taskId 是任务 ID（先用 listScheduledTasks 查），"
-            + "enabled 传 true 表示恢复执行、false 表示暂停。用户说「停掉/别再跑了/恢复那个定时任务」时调用。")
+    @Tool(value = "暂停或恢复一个定时任务（id 从 listScheduledTasks 拿）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
@@ -74,8 +68,7 @@ public class ScheduledTaskTool implements AgentToolProvider {
         return ToolBusinessResult.success(scheduledTaskService.setEnabled(userId, taskId, value));
     }
 
-    @Tool(value = "删除一个定时任务（不可恢复）。参数 taskId 是任务 ID（先用 listScheduledTasks 查）。"
-            + "用户明确说「删掉/取消这个定时任务」时调用；只是暂时不想跑请用 setScheduledTaskEnabled 暂停。")
+    @Tool(value = "删除一个定时任务，不可恢复（id 从 listScheduledTasks 拿）。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, destructive = true,
             retryable = false, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
@@ -84,8 +77,7 @@ public class ScheduledTaskTool implements AgentToolProvider {
         return ToolBusinessResult.success(scheduledTaskService.cancel(userId, taskId));
     }
 
-    @Tool(value = "立刻执行一次某个定时任务（不影响原定计划）。参数 taskId 是任务 ID。"
-            + "用户说「现在就跑一下那个定时任务」「先试一次」时调用。")
+    @Tool(value = "立刻跑一次某个定时任务，不影响原定计划。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, retryable = false,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool

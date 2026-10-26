@@ -57,13 +57,7 @@ public class BilibiliTool implements AgentToolProvider {
         this.maxDownloadBytes = Math.max(5L * 1024 * 1024, maxDownloadBytes);
     }
 
-    @Tool(value = "看一个 B 站视频到底讲了什么。用户转发 B 站视频、发来 B 站链接或 BV 号时调用。"
-            + "参数 url 传链接或 BV 号都行；"
-            + "**如果只有标题（比如他转发过来的卡片没有带链接），直接把那个标题原样传进来**——"
-            + "我会拿标题去 B 站搜，只有搜到标题逐字一致的视频才会用。"
-            + "返回标题、UP 主、时长、简介，以及**画面内容**（我会直接看视频，不是只看几张截图）；"
-            + "能拿到字幕时会附带台词原文。"
-            + "**画面都没看到时**结果会明确写出来——那时只能依据标题和简介，不要编造视频里的内容。")
+    @Tool(value = "看一个 B 站视频讲了什么（他转发链接或 BV 号时）。**一轮只读一条**，读完立刻 noteWatchedVideo 记一笔。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult readBilibiliVideo(String url) {
         try {
@@ -182,11 +176,7 @@ public class BilibiliTool implements AgentToolProvider {
         }
     }
 
-    @Tool(value = "看看 B 站上有什么视频。用户说「看看 B 站」「刷会儿 B 站」「有什么好玩的」时调用，"
-            + "或者你自己想找点东西看时也可以。source 三选一："
-            + "hot=全站热门（不用登录）、following=他关注的 UP 主更新（要登录）、later=他的稍后再看（要登录）；"
-            + "count 是条数，1~30，默认 12。返回标题、UP 主、时长、播放量、BV 号。"
-            + "**它只是目录**：想知道某个视频讲了什么，把 BV 号传给 readBilibiliVideo 再读字幕/抽帧。")
+    @Tool(value = "随便看看 B 站（热门/关注/稍后再看）。只是「刷会儿」用这个；**有具体问题去 digBilibili**。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult browseBilibili(String source, Integer count) {
         int limit = count == null ? DEFAULT_BROWSE_COUNT : Math.max(1, Math.min(30, count));
@@ -258,9 +248,7 @@ public class BilibiliTool implements AgentToolProvider {
      *
      * <p>所以读完视频要**立刻**调用它，把摘要存进那条台账（同一个 bvid 覆盖最近一条，不重复插行）。
      */
-    @Tool(value = "把你看过的这个视频**记下来**：summary 是它讲了什么（两三句，用你自己的话，带关键词），"
-            + "takeaway 是你自己的看法——为什么值得记、跟你自己有什么关系（一句话）。"
-            + "**每读完一个视频都要调用一次**，不然过几天你就只剩一个标题，想找也找不回来。")
+    @Tool(value = "把刚看的视频记下来：summary 两三句带关键词，takeaway 写你自己怎么看。**看完立刻记，别拖到下一轮**。")
     @ToolExecutionPolicy(ToolExecutionClass.FAST)
     public ToolBusinessResult noteWatchedVideo(String bvid, String summary, String takeaway) {
         if (bvid == null || bvid.isBlank()) {

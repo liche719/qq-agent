@@ -35,10 +35,7 @@ public class BiliDigTool implements com.liche.qqagent.tool.AgentToolProvider {
         this.deepSeek = deepSeek;
     }
 
-    @Tool(value = "带着一个具体的问题/念头，去 B 站找相关视频（不是随便刷热门）。"
-            + "比如你心里惦记着「FSRS 到底有没有实测」这种问题，就传关键词。"
-            + "返回标题、链接、一句摘要——要知道视频讲了什么，再把链接给 readBilibiliVideo 读。"
-            + "days 是只看最近几天发布的（可选，默认不限）。")
+    @Tool(value = "带着一个具体问题去 B 站找视频（不是随便刷热门）。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult digBilibili(String query, Integer days) {
         String keyword = query == null ? "" : query.trim();
