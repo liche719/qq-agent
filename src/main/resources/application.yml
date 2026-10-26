@@ -179,6 +179,11 @@ agent:
   # 记忆评估（2026-10-26）：本地跑分用，生产保持 false（接口不接受 eval- 以外的用户）
   eval-enabled: ${AGENT_EVAL_ENABLED:false}
 
+  # 工具结果清空（2026-10-26）：本轮内旧工具结果换占位符，和"历史压缩"是两个独立杠杆。
+  context-clearing-enabled: ${AGENT_CONTEXT_CLEARING_ENABLED:true}
+  context-clearing-keep: ${AGENT_CONTEXT_CLEARING_KEEP:4}
+  context-clearing-threshold-chars: ${AGENT_CONTEXT_CLEARING_THRESHOLD_CHARS:12000}
+
   # 普通对话软预算（2026-10-25）：Planner/反思各多一跳，超过这个数就收尾。0 = 不限
   dialog-budget-yuan: ${AGENT_DIALOG_BUDGET_YUAN:0.3}
   plan:

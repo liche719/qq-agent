@@ -162,6 +162,14 @@ public class AgentLoop {
     /** 普通对话的软预算（2026-10-25）：超过就收尾，不硬砍。0 = 不限 */
     @org.springframework.beans.factory.annotation.Value("${agent.dialog-budget-yuan:0.3}")
     private double dialogBudgetYuan = 0.3;
+
+    /** 工具结果清空（2026-10-26 P1-4）：长任务里旧工具结果一直占上下文，压缩之外还要"清旧" */
+    @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-enabled:true}")
+    private boolean contextClearingEnabled = true;
+    @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-keep:4}")
+    private int contextClearingKeep = 4;
+    @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-threshold-chars:12000}")
+    private int contextClearingThresholdChars = 12000;
     @org.springframework.beans.factory.annotation.Value("${agent.plan.min-tools:2}")
     private int planMinTools = 2;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -338,6 +346,46 @@ public class AgentLoop {
         return messages;
     }
 
+    /**
+     * 清空较早的工具结果（2026-10-26 P1-4）。
+     *
+     * <p>一个长任务里 8 轮工具结果（网页正文、视频摘要）会一直挂在上下文里，压缩（summary）
+     * 只处理"被截断的历史"，管不到**本轮内**这些消息。这里把最近 {@code keep} 条之外的旧结果
+     * 换成"已省略 + 开头一小段"，既不丢结构（tool_call id 还在），又省下大块 token。
+     *
+     * <p>只改文本、不动 id：LangChain4j 要求 tool_call 与 tool_result 一一对应，动 id 会把请求打断。
+     */
+    private void compactOldToolResults(List<ChatMessage> messages) {
+        if (!contextClearingEnabled || messages == null || messages.isEmpty()) {
+            return;
+        }
+        List<Integer> toolIndexes = new ArrayList<>();
+        int totalChars = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) instanceof ToolExecutionResultMessage result) {
+                toolIndexes.add(i);
+                totalChars += result.text() == null ? 0 : result.text().length();
+            }
+        }
+        int keep = Math.max(1, contextClearingKeep);
+        if (totalChars <= contextClearingThresholdChars || toolIndexes.size() <= keep) {
+            return;
+        }
+        int removable = toolIndexes.size() - keep;
+        for (int i = 0; i < removable; i++) {
+            int index = toolIndexes.get(i);
+            ToolExecutionResultMessage old = (ToolExecutionResultMessage) messages.get(index);
+            String text = old.text() == null ? "" : old.text();
+            if (text.startsWith("【较早的工具结果已省略")) {
+                continue;
+            }
+            String head = text.length() <= 120 ? text : text.substring(0, 120) + "…";
+            messages.set(index, new ToolExecutionResultMessage(old.id(), old.toolName(),
+                    "【较早的工具结果已省略；" + old.toolName() + " 的开头：" + head + "】"));
+        }
+        log.info("工具结果清空：省略 {} 条旧结果（保留最近 {} 条）", removable, keep);
+    }
+
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
     private static String summaryOf(List<ContextTurn> history) {
         if (history == null || history.isEmpty()) {
@@ -469,6 +517,7 @@ public class AgentLoop {
                                     reflection.replan(), reflection.failureType());
                         }
                     }
+                    compactOldToolResults(messages);
                     continue;
                 }
                 if (outcome.text() != null) {
