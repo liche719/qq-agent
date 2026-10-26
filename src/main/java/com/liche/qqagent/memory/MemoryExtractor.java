@@ -300,7 +300,7 @@ public class MemoryExtractor {
             int backgroundTurns = backgroundUserTurns(recent, burstTexts == null ? 0 : burstTexts.size());
             String factCards = factCardsForPrompt(userId);
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
-                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns, factCards))));
+                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns, factCards, userId))));
             if (result == null) {
                 // 解析不出来**不能算"跑完了"**：那会把这段对话当成已处理、计数清零，它就再也不会被提取。
                 // 返回 false 走失败重试，并把原因记进审计（面板能看到）。
@@ -968,8 +968,12 @@ public class MemoryExtractor {
                 result.coreUpdates(), result.conflicts(), result.completedWork(), result.duplicates(), cleaned);
     }
 
+    /** 实体归一（2026-10-26）：给提示词带上"已有的 subject 写法"，让它尽量复用 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MemoryEntityService memoryEntityService;
+
     private String buildPrompt(List<ContextTurn> recent, List<Memory> existing, List<Memory> cores,
-                               int backgroundTurns, String factCards) {
+                               int backgroundTurns, String factCards, String userId) {
         StringBuilder prompt = new StringBuilder();
         // 【2026-09-29 缓存修复】**不要把「当前时间」写在第一句**：上游的上下文缓存只认前缀，
         // 时间每轮都变 → 从第 10 个 token 起就全部作废，实测 prompt 7015 命中 0%（单次 0.026 元，
@@ -1018,6 +1022,13 @@ public class MemoryExtractor {
 .append("14. 【背景消息】标了 [背景/上次已处理] 的消息上一次提取时已经看过：**只用来理解上下文**"
                         + "（比如「那改成 305 吧」到底在改哪件事），不要只凭它们新建记忆；"
                         + "只有当这次的新消息明确修正或延续了它们时，才按新消息的内容写。\n");
+        if (memoryEntityService != null && userId != null) {
+            List<String> known = memoryEntityService.topCanonicals(userId, 20);
+            if (!known.isEmpty()) {
+                prompt.append("【已有 subject 写法】同一件事请**完全复用**下面已有的写法，不要另起新名字：")
+                        .append(String.join("、", known)).append('\n');
+            }
+        }
         if (factCards != null && !factCards.isEmpty()) {
             // 带了卡片清单才加这条规则：让模型**在同一次输出里**把合并结论给出来（省掉后续每条一次小调用）
             prompt.append("15. 【facts 的合并】下面是系统现在记着的「会变的信息」。写 facts 时，如果这条跟某张卡片讲的是"

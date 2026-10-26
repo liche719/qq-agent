@@ -45,6 +45,10 @@ import java.util.Set;
 public class MemoryFactService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryFactService.class);
+
+    /** 实体归一（2026-10-26）：同一件事的不同写法合成一个 canonical，避免拆卡 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MemoryEntityService memoryEntityService;
     private static final String CHANGE_LAYER = "FACT";
     /** 补齐向量时一次最多处理多少条（用户后填 api-key 时靠它自愈，见 reindexMissing） */
     private static final int REINDEX_BATCH = 20;
@@ -298,7 +302,11 @@ public class MemoryFactService {
                             String reason) {
         MemoryFact fact = new MemoryFact();
         fact.setUserId(userId);
-        fact.setSubject(candidate.subject());
+        String canonicalSubject = candidate.subject();
+        if (memoryEntityService != null) {
+            canonicalSubject = memoryEntityService.canonicalize(userId, candidate.subject());
+        }
+        fact.setSubject(canonicalSubject);
         fact.setPredicate(candidate.predicate());
         fact.setObject(candidate.object());
         fact.setContent(candidate.content());
