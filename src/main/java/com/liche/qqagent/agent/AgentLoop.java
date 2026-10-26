@@ -305,6 +305,7 @@ public class AgentLoop {
                                                         String workSection,
                                                         List<ContextTurn> history, String userText,
                                                         List<String> images, List<ExtractedDocument> documents) {
+        TurnLatency.begin();
         List<ChatMessage> messages = new ArrayList<>();
         String systemPrompt = buildSystemPrompt(persona, userId, userText);
         messages.add(SystemMessage.from(systemPrompt));
@@ -471,7 +472,7 @@ public class AgentLoop {
                     continue;
                 }
                 if (outcome.text() != null) {
-                    return completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink);
+                    return completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
                 }
                 // 这一轮既没调工具、也没说话。发过语音就视为"已经把话说完"——
                 // 2026-10-21 用户要求：语音本身就是回复，不要再硬凑一句文字。
@@ -559,13 +560,17 @@ public class AgentLoop {
     // Normalizes model text, appends deterministic notices, and delivers the final response.
     private String completeReply(String roundText, Set<String> successfulTools,
                                  Map<String, ToolExecutionOutcome> failedTools,
-                                 Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink) {
+                                 Map<String, ToolExecutionOutcome> toolResults, StreamReplySink sink,
+                                 String userId) {
         String replyText = stripModelToolDisclosure(roundText);
         String notice = mediaToolContextService.completionNotice();
         if (!notice.isBlank()) {
             replyText = replyText.stripTrailing() + "\n\n" + notice;
         }
         replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
+        log.info("轮次延迟 user={} 首字={}ms 总={}ms 工具={}个",
+                userId, TurnLatency.firstTokenMillis(), TurnLatency.totalMillis(), successfulTools.size());
+        TurnLatency.clear();
         String reply = appendToolFooter(replyText, successfulTools, toolDisplayNames);
         reply = appendSearchSources(reply, toolResults);
         if (turnTraceStore != null) {
@@ -646,11 +651,21 @@ public class AgentLoop {
             streamingChatModel.chat(chatRequest, new StreamingChatResponseHandler() {
                     @Override
                     public void onPartialResponse(String partial) {
+                        TurnLatency.firstToken();
                         acc.get().append(partial); // 仅内部累积
                     }
 
                     @Override
                     public void onCompleteResponse(ChatResponse response) {
+                        var firstUsage = response.tokenUsage();
+                        if (firstUsage != null && firstUsage.inputTokenCount() != null) {
+                            // 首跳的 prompt 大小：判断"12.7 秒"里有几成是提示词太长（2026-10-26 P1-2）
+                            log.info("首跳 tokens user={} 输入={} 输出={} 工具 schema={}个",
+                                    userId,
+                                    firstUsage.inputTokenCount(),
+                                    firstUsage.outputTokenCount() == null ? 0 : firstUsage.outputTokenCount(),
+                                    specs == null ? 0 : specs.size());
+                        }
                         if (turnTraceStore != null) {
                             long traceMillis = Math.max(0, (System.nanoTime() - traceStartedNanos) / 1_000_000L);
                             var usage = response.tokenUsage();
