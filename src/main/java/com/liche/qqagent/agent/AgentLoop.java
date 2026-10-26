@@ -696,6 +696,7 @@ public class AgentLoop {
         LlmScenario scenario = round == 0 ? LlmScenario.DIALOG_FIRST : LlmScenario.DIALOG;
         dev.langchain4j.model.chat.request.ChatRequest chatRequest =
                 ChatRequest.builder().messages(messages).toolSpecifications(specs).build();
+        TurnLatency.startFirstCall();
         LlmScenario.run(scenario, () -> {
             streamingChatModel.chat(chatRequest, new StreamingChatResponseHandler() {
                     @Override

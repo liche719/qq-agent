@@ -13,9 +13,23 @@ public final class TurnLatency {
     private TurnLatency() {
     }
 
-    /** 一轮开始 */
+    /**
+     * 一轮开始。数组含义：{轮次开始, 第一个文本片段, 第一次 LLM 调用的开始}。
+     *
+     * <p>2026-10-26 修正：多工具任务里第一段文本要等工具跑完才出现，如果从"轮次开始"算，
+     * 首字会变成 211 秒这种假数（那是工具耗时）。所以首字改成
+     * **第一次 LLM 调用 → 第一个 token**，工具时间单独看轮次总时长。
+     */
     public static void begin() {
-        STATE.set(new long[]{System.nanoTime(), 0L});
+        STATE.set(new long[]{System.nanoTime(), 0L, 0L});
+    }
+
+    /** 第一次调模型之前调用（多轮里只有第一次生效） */
+    public static void startFirstCall() {
+        long[] state = STATE.get();
+        if (state != null && state[2] == 0L) {
+            state[2] = System.nanoTime();
+        }
     }
 
     /** 第一个片段到达（只记第一次） */
@@ -26,13 +40,14 @@ public final class TurnLatency {
         }
     }
 
-    /** 首字耗时（毫秒）；没收到任何片段返回 -1 */
+    /** 首字耗时（毫秒，= 第一次 LLM 调用到第一个 token）；没收到片段返回 -1 */
     public static long firstTokenMillis() {
         long[] state = STATE.get();
         if (state == null || state[1] == 0L) {
             return -1L;
         }
-        return Math.max(0L, (state[1] - state[0]) / 1_000_000L);
+        long base = state[2] == 0L ? state[0] : state[2];
+        return Math.max(0L, (state[1] - base) / 1_000_000L);
     }
 
     /** 从本轮开始到现在（毫秒） */

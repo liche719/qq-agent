@@ -87,13 +87,17 @@ public class OpenAiCompatChatModel implements ChatModel {
         int maxTokens = scenarioSettings == null ? 0 : scenarioSettings.maxTokensFor(scenario);
         String reasoningEffort = scenarioSettings == null ? null : scenarioSettings.reasoningEffortFor(scenario);
         try {
-            String resp = restClient.post()
+            byte[] raw = restClient.post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.ALL)
                     .body(OpenAiRequestFactory.buildPayload(model, effectiveTemperature, request, false,
                             maxTokens, reasoningEffort).toString())
                     .retrieve()
-                    .body(String.class);
+                    .body(byte[].class);
+            // 2026-10-26：上游偶尔回 application/octet-stream（实测两天两次，61 秒后失败）。
+            // 不一定真是二进制——按魔数判断 gzip，解不开就当 UTF-8 文本解析，避免整次提取白跑。
+            String resp = decodeBody(raw);
             JsonNode root = objectMapper.readTree(resp);
             ChatResponse response = parseResponse(root);
             record(true, started, null, scenario, effectiveTemperature, maxTokens, usageOf(root), reasoningEffort);
@@ -102,6 +106,28 @@ public class OpenAiCompatChatModel implements ChatModel {
             record(false, started, e.getMessage(), scenario, effectiveTemperature, maxTokens, Usage.EMPTY,
                     reasoningEffort);
             throw new RuntimeException("调用 LLM 接口失败: " + e.getMessage(), e);
+        }
+    }
+
+    /** 把响应体解成 JSON 文本：gzip 先解压，否则按 UTF-8；解不开就原样返回（交给上层报错） */
+    private String decodeBody(byte[] raw) {
+        if (raw == null || raw.length == 0) {
+            return "";
+        }
+        try {
+            byte[] bytes = raw;
+            if (raw.length > 2 && (raw[0] & 0xFF) == 0x1F && (raw[1] & 0xFF) == 0x8B) {
+                try (java.util.zip.GZIPInputStream gzip =
+                             new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(raw))) {
+                    bytes = gzip.readAllBytes();
+                    log.info("LLM 响应是 gzip（content-type 被标成 octet-stream），已解压 {} -> {} 字节",
+                            raw.length, bytes.length);
+                }
+            }
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception exception) {
+            log.warn("解析 LLM 响应体失败（按原样返回）：{}", exception.getMessage());
+            return new String(raw, java.nio.charset.StandardCharsets.UTF_8);
         }
     }
 
