@@ -59,6 +59,14 @@ jobs:
       # 2026-10-26：把测试放进流水线（原来只在 Dockerfile 里 -DskipTests，CI 从没跑过测试）。
       # 先只跑"确定稳定"的一批；红了就阻断部署，绿了再逐步扩大范围。
       # 注意：-DskipTests=false 必须显式写，否则会被 job/env 里的默认值带偏。
+      # runner 默认 JDK 不是 21（会报 "release version 21 not supported"），测试前先装 temurin 21
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
       - name: Run stable unit tests
         run: |
           set -eu
