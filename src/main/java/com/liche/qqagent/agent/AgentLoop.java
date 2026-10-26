@@ -1026,15 +1026,22 @@ public class AgentLoop {
     private ToolExecutionOutcome executeTool(ToolExecutionRequest request, String userId) {
         String traceId = UUID.randomUUID().toString();
         recordToolEvent(userId, traceId, "call", request.name(), request.arguments());
+        long started = System.nanoTime();
         try {
             ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
-            recordToolEvent(userId, traceId, "result", request.name(), outcome.content());
+            // 带上耗时（2026-10-26 P2-4）：工具维度的统计（调用数/失败率/平均耗时）靠这一行解析
+            recordToolEvent(userId, traceId, "result", request.name(),
+                    "durationMs=" + millisSince(started) + "\n" + outcome.content());
             return outcome;
         } catch (RuntimeException exception) {
             recordToolEvent(userId, traceId, "result", request.name(),
-                    "工具执行抛出异常：" + exception.getClass().getSimpleName());
+                    "durationMs=" + millisSince(started) + "\n工具执行抛出异常：" + exception.getClass().getSimpleName());
             throw exception;
         }
+    }
+
+    private static long millisSince(long startedNanos) {
+        return Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     /**
