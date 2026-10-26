@@ -386,6 +386,14 @@ public class AgentLoop {
         log.info("工具结果清空：省略 {} 条旧结果（保留最近 {} 条）", removable, keep);
     }
 
+    /** 回写"反思之后成了没有"（2026-10-27 P1-1）：只有触发过反思的轮次才有 id，其他轮不写 */
+    private void markReflectionOutcome(List<Long> ids, String outcome) {
+        if (taskReflection == null || ids == null || ids.isEmpty()) {
+            return;
+        }
+        taskReflection.markOutcome(ids, outcome);
+    }
+
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
     private static String summaryOf(List<ContextTurn> history) {
         if (history == null || history.isEmpty()) {
@@ -419,6 +427,7 @@ public class AgentLoop {
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
         int reflections = 0;
+        List<Long> reflectionIds = new ArrayList<>();
         String planText = "";
         boolean planned = false;
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
@@ -512,6 +521,7 @@ public class AgentLoop {
                                 : taskReflection.reflect(userId, task, planText, failedReasons, failedKinds,
                                         new ArrayList<>(successfulTools), round, maxRounds);
                         if (reflection.ok()) {
+                            reflectionIds.addAll(reflection.savedIds());
                             messages.add(UserMessage.from("（系统反思：" + reflection.toPromptBlock() + "）"));
                             log.info("已注入任务反思 user={} replan={} type={}", userId,
                                     reflection.replan(), reflection.failureType());
@@ -521,7 +531,9 @@ public class AgentLoop {
                     continue;
                 }
                 if (outcome.text() != null) {
-                    return completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
+                    String reply = completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
+                    markReflectionOutcome(reflectionIds, "SUCCESS");
+                    return reply;
                 }
                 // 这一轮既没调工具、也没说话。发过语音就视为"已经把话说完"——
                 // 2026-10-21 用户要求：语音本身就是回复，不要再硬凑一句文字。
@@ -530,6 +542,7 @@ public class AgentLoop {
                     if (turnTraceStore != null) {
                         turnTraceStore.finishTurn(userId, 0);
                     }
+                    markReflectionOutcome(reflectionIds, "SUCCESS");
                     return "";
                 }
             }
@@ -539,6 +552,7 @@ public class AgentLoop {
             }
             log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
         }
+        markReflectionOutcome(reflectionIds, "FAILED");
         return fallbackReply(failedTools, successfulTools, toolResults, sink);
     }
 

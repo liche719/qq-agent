@@ -37,10 +37,14 @@ public class TaskReflectionService {
 
     /** 反思结果；ok=false 表示这次没跑成（调用失败或返回不可解析） */
     public record Result(boolean ok, String failureType, String rootCause, boolean replan,
-                         List<String> revisedPlan, String nextAction) {
+                         List<String> revisedPlan, String nextAction, List<Long> savedIds) {
 
         static Result failed(String why) {
-            return new Result(false, "", why, false, List.of(), "");
+            return new Result(false, "", why, false, List.of(), "", List.of());
+        }
+
+        Result withIds(List<Long> ids) {
+            return new Result(ok, failureType, rootCause, replan, revisedPlan, nextAction, List.copyOf(ids));
         }
 
         /** 给模型看的注入文本：重规划时给出步骤，否则给一句归因 + 下一步 */
@@ -109,8 +113,8 @@ public class TaskReflectionService {
                     pastMemories(userId, failed.keySet()));
             String raw = LlmScenario.run(LlmScenario.REFLECT, () -> chatModel.chat(prompt));
             Result result = parse(raw);
-            remember(userId, failed.keySet(), kinds, result);
-            return result;
+            List<Long> ids = remember(userId, failed.keySet(), kinds, result);
+            return result.withIds(ids);
         } catch (RuntimeException exception) {
             log.warn("任务反思调用失败：{}", exception.getMessage());
             return Result.failed(exception.getMessage());
@@ -180,7 +184,7 @@ public class TaskReflectionService {
             boolean replan = root.path("should_replan").asBoolean(false);
             String next = root.path("next_action").asText("").trim();
             Result result = new Result(true, root.path("failure_type").asText("").trim(),
-                    root.path("root_cause").asText("").trim(), replan, plan, next);
+                    root.path("root_cause").asText("").trim(), replan, plan, next, java.util.List.of());
             log.info("任务反思完成 type={} replan={} cause={}", result.failureType(), replan,
                     clip(result.rootCause(), 60));
             return result;
@@ -206,9 +210,11 @@ public class TaskReflectionService {
     }
 
     /** 落库：下次同一工具失败时能查到"上次是怎么归因、怎么改的" */
-    private void remember(String userId, java.util.Set<String> tools, Map<String, FailureKind> kinds, Result result) {
+    private List<Long> remember(String userId, java.util.Set<String> tools, Map<String, FailureKind> kinds,
+                                Result result) {
+        List<Long> saved = new ArrayList<>();
         if (!memoryEnabled || reflections == null || !result.ok() || userId == null || userId.isBlank()) {
-            return;
+            return saved;
         }
         try {
             for (String tool : tools) {
@@ -221,10 +227,27 @@ public class TaskReflectionService {
                 row.setRootCause(clip(result.rootCause(), 300));
                 row.setNextAction(clip(result.nextAction(), 300));
                 row.setCreatedAt(java.time.LocalDateTime.now());
-                reflections.save(row);
+                saved.add(reflections.save(row).getId());
             }
         } catch (RuntimeException exception) {
             log.warn("写反思记忆失败（忽略）：{}", exception.getMessage());
+        }
+        return saved;
+    }
+
+    /** 一轮结束时回写"反思后任务成了没有"（2026-10-27）：SUCCESS / FAILED */
+    public void markOutcome(List<Long> ids, String outcome) {
+        if (reflections == null || ids == null || ids.isEmpty() || outcome == null) {
+            return;
+        }
+        try {
+            for (TaskReflection row : reflections.findAllById(ids)) {
+                row.setTurnOutcome(outcome);
+                reflections.save(row);
+            }
+            log.info("反思效果已记录 ids={} outcome={}", ids, outcome);
+        } catch (RuntimeException exception) {
+            log.warn("回写反思效果失败：{}", exception.getMessage());
         }
     }
 

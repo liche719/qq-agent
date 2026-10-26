@@ -56,6 +56,10 @@ public class TaskReflection {
     @Column(name = "next_action", length = 300)
     private String nextAction;
 
+    /** 这一轮反思之后任务成了没有：SUCCESS / FAILED；NULL = 当时还没统计（2026-10-27） */
+    @Column(name = "turn_outcome", length = 16)
+    private String turnOutcome;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 }
