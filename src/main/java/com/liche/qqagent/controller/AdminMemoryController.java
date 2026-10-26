@@ -175,6 +175,78 @@ public class AdminMemoryController {
     }
 
     /** 面板按钮：立刻整理一次记忆（不等"满 15 条"或"拖过 6 小时"） */
+    /**
+     * 提取质量指标（2026-10-26，P0-2 埋点）：不新增表，直接从已有的审计行里解析
+     * {@code verdict_json}（提议，"facts=4"）和 {@code written_ids}（落库，"事实条数=3"）。
+     *
+     * <p>回答的问题：每 100 轮对话到底沉淀多少事实？有多少次提取是"零产出"？花了多少钱？
+     */
+    @GetMapping("/quality")
+    public Map<String, Object> quality(@RequestParam(defaultValue = "7") int days) {
+        int span = Math.max(1, Math.min(90, days));
+        List<MemoryExtractionRun> recent = this.runs.findByCreatedAtAfterOrderByCreatedAtDesc(
+                LocalDateTime.now().minusDays(span));
+        long total = recent.size();
+        long failed = 0;
+        long zeroFacts = 0;
+        long proposedSum = 0;
+        long writtenSum = 0;
+        long turnsSum = 0;
+        double costSum = 0;
+        for (MemoryExtractionRun run : recent) {
+            if ("FAILED".equalsIgnoreCase(run.getSkipReason())) {
+                failed++;
+                continue;
+            }
+            int proposed = extractCount(run.getVerdictJson(), "facts=");
+            int written = extractCount(run.getWrittenIds(), "事实条数=");
+            proposedSum += proposed;
+            writtenSum += written;
+            if (proposed == 0 && written == 0) {
+                zeroFacts++;
+            }
+            turnsSum += Math.max(0, run.getWindowTurns());
+            costSum += run.getCostYuan() == null ? 0 : run.getCostYuan().doubleValue();
+        }
+        long counted = Math.max(1, total - failed);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("days", span);
+        result.put("runs", total);
+        result.put("failed", failed);
+        result.put("zeroFactRuns", zeroFacts);
+        result.put("zeroFactRatio", String.format("%.0f%%", zeroFacts * 100.0 / counted));
+        result.put("factsProposed", proposedSum);
+        result.put("factsWritten", writtenSum);
+        result.put("factsPer100Turns", turnsSum == 0 ? "0" : String.format("%.1f", writtenSum * 100.0 / turnsSum));
+        result.put("costYuan", String.format("%.3f", costSum));
+        result.put("costPerRun", total == 0 ? "0" : String.format("%.4f", costSum / total));
+        return result;
+    }
+
+    /** 从 "core=1 work=0 facts=4" / "新增情景记忆=1,事实条数=3" 里抠出某个键的数字 */
+    private static int extractCount(String text, String key) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        int at = text.indexOf(key);
+        if (at < 0) {
+            return 0;
+        }
+        int i = at + key.length();
+        int start = i;
+        while (i < text.length() && Character.isDigit(text.charAt(i))) {
+            i++;
+        }
+        if (i == start) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(text.substring(start, i));
+        } catch (NumberFormatException exception) {
+            return 0;
+        }
+    }
+
     @PostMapping("/extract")
     public Map<String, Object> extractNow() {
         String userId = ownerUserId();
