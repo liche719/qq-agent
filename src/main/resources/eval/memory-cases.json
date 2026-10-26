@@ -74,6 +74,12 @@
       "forbidFacts": ["以后有需要"]
     },
     {
+      "id": "entity-merge",
+      "type": "extract",
+      "conversation": ["周三的课改到 15:00 了", "哦对，还是原来那间教室"],
+      "expectFacts": [{ "objectAny": ["15:00", "三点"] }]
+    },
+    {
       "id": "recall-classroom",
       "type": "recall",
       "fromCase": "classroom",

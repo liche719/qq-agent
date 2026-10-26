@@ -1106,10 +1106,12 @@ public class MemoryExtractor {
                 .append("\"workConflicts\":[{\"existingId\":0,\"existingContent\":\"\",\"proposedContent\":\"\",\"validUntil\":\"\"}],")
                 .append("\"completedWorkItems\":[{\"existingId\":0,\"reason\":\"\"}],")
                 .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
-                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"relation\":\"NEW\",\"targetSubject\":\"\"}],")
+                .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"relation\":\"NEW\","
+                        + "\"targetSubject\":\"\",\"sourceMessageIds\":[\"msg-1\"]}],")
                 .append("\"duplicates\":[]}\n")
                 .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []；"
-                        + "**facts 不需要 keywords**——事实层靠向量召回和 subject 聚合，关键词没人读）");
+                        + "**facts 不需要 keywords**——事实层靠向量召回和 subject 聚合，关键词没人读；"
+                        + "**但 facts 必须带 sourceMessageIds**（不给的话这条会被降级成「推断」，无法随后续遗忘一起清除））");
         return prompt.toString();
     }
 

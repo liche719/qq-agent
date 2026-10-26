@@ -111,8 +111,10 @@ public class MemoryEvalService {
         }
         int index = 0;
         for (String text : turns) {
+            // 必须给合成消息一个 id：真实链路里模型靠 [sourceMessageIds=...] 标注证据，
+            // 评估这里给空的话，抽出来的事实永远"无证据"，验不出证据链（2026-10-26 踩过）
             conversationMemory.record(caseUser, "user", "eval-" + id + "-" + index, text,
-                    List.of(), List.of(), null);
+                    List.of("eval-msg-" + id + "-" + index), List.of(), null);
             index++;
         }
         boolean ran = extractor.extract(caseUser);
