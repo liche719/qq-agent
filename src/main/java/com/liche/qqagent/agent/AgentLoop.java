@@ -394,6 +394,37 @@ public class AgentLoop {
         taskReflection.markOutcome(ids, outcome);
     }
 
+    /**
+     * 副作用失败时给模型的说明（2026-10-27 P1-7）。
+     *
+     * <p>超时/异常只说明"没拿到结果"，**不说明业务没发生**。对发评论、删文件这类操作，
+     * 盲目重试会产生重复副作用；所以要明确告诉它"状态未知"，并给出查证方式。
+     */
+    private String sideEffectFailureNote(String toolName, String reason) {
+        if (toolRegistry == null || toolName == null) {
+            return "";
+        }
+        boolean sideEffect;
+        try {
+            var policy = toolRegistry.policy(toolName);
+            sideEffect = policy != null && (policy.hasSideEffect() || policy.destructive());
+        } catch (RuntimeException exception) {
+            return "";
+        }
+        if (!sideEffect) {
+            return "";
+        }
+        String how = switch (toolName) {
+            case "commentBilibili" -> "先调 listMyCommentReplies 看这条评论是否已经发出";
+            case "deleteStoredMedia" -> "先调 listStoredMedia 确认文件还在不在";
+            case "sendDownloadedFile", "sendStoredMedia" -> "先调 listStoredMedia 确认文件状态";
+            case "sendVoice" -> "直接问他有没有收到语音";
+            default -> "先查一下它当前的状态，或直接问他";
+        };
+        return "【状态未知】这个操作可能有副作用：可能已经执行成功、也可能没有（" + (reason == null ? "无返回" : reason)
+                + "）。**不要直接重做**，会重复执行；" + how + "。";
+    }
+
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
     private static String summaryOf(List<ContextTurn> history) {
         if (history == null || history.isEmpty()) {
@@ -777,6 +808,13 @@ public class AgentLoop {
                                 } else {
                                     successfulTools.remove(request.name());
                                     failedTools.put(request.name(), outcome);
+                                    // 2026-10-27（P1-7）：有副作用的工具失败 = **状态未知**，不是"没执行"。
+                                    // 直接重试可能重复发评论/重复删除；让模型先查状态或问人。
+                                    String note = sideEffectFailureNote(request.name(), outcome.failureReason());
+                                    if (!note.isEmpty()) {
+                                        outcome = ToolExecutionOutcome.failure(
+                                                note + "｜原始错误：" + outcome.content(), outcome.attempts());
+                                    }
                                 }
                                 messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
                             }

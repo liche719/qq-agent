@@ -111,6 +111,17 @@ Planner 产出 `{steps: [...]}`，注入后按它走；失败时反思给的 `re
 结论：**瓶颈是首跳的思考时间，不是工具 schema 的预填充**（12k tokens 预填充只需几百毫秒）。
 所以先降档，别急着裁工具。降档用面板覆盖（`POST /api/admin/llm/scenarios`），立即生效、可随时回滚。
 
+## 6.6 副作用工具失败 = 状态未知（2026-10-27）
+
+工具超时/异常**只说明没拿到结果，不说明业务没发生**。发评论、删文件这类操作，
+如果模型据此重试，就会重复执行。现在失败结果里会带一句：
+
+> 【状态未知】这个操作可能有副作用：可能已经执行成功、也可能没有（超时）。**不要直接重做**，
+> 先调 listMyCommentReplies 看这条评论是否已经发出。
+
+按工具给了查证方式：`commentBilibili → listMyCommentReplies`、`deleteStoredMedia → listStoredMedia`、
+`sendVoice → 直接问他有没有收到`，其余给通用提示。
+
 ## 7. 排查入口
 
 ```bash
