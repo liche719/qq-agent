@@ -327,7 +327,16 @@ public class ConversationMemoryService {
         if (!validUserId(userId) || target.length() < 6) {
             return 0;
         }
-        return deleteMatching(userId, record -> contentContains(record.getContent(), target));
+        int deleted = deleteMatching(userId, record -> contentContains(record.getContent(), target));
+        // 2026-10-26：老事实没有证据 id，靠关键词再清一遍，否则"忘掉"只删了对话、事实卡还在
+        if (factService != null) {
+            String keyword = rememberedContent == null ? "" : rememberedContent.trim();
+            if (keyword.length() > 24) {
+                keyword = keyword.substring(0, 24);
+            }
+            factService.forgetByContent(userId, keyword);
+        }
+        return deleted;
     }
 
     /** 遗忘级联（2026-10-25）：删对话证据时，把引用这些证据的派生事实一起作废 */

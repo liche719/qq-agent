@@ -233,6 +233,37 @@ public class MemoryFactService {
      * 召回只查 {@code status='ACTIVE'}，旧向量不会再被用到。
      */
     /**
+     * 按内容作废（2026-10-26）：老事实没有证据 id（48/49 条），"忘掉"只能靠关键词匹配。
+     * 只匹配 subject / object / content 里的**完整词**（长度 ≥2），命中即标 SUPERSEDED。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public int forgetByContent(String userId, String keyword) {
+        if (userId == null || userId.isBlank() || keyword == null || keyword.trim().length() < 2) {
+            return 0;
+        }
+        String needle = keyword.trim().toLowerCase(java.util.Locale.ROOT);
+        int count = 0;
+        for (MemoryFact fact : factRepository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, MemoryFact.STATUS_ACTIVE)) {
+            String haystack = ((fact.getSubject() == null ? "" : fact.getSubject()) + " "
+                    + (fact.getObject() == null ? "" : fact.getObject()) + " "
+                    + (fact.getContent() == null ? "" : fact.getContent())).toLowerCase(java.util.Locale.ROOT);
+            if (!haystack.contains(needle)) {
+                continue;
+            }
+            fact.setStatus(MemoryFact.STATUS_SUPERSEDED);
+            fact.setUpdatedAt(java.time.LocalDateTime.now());
+            factRepository.save(fact);
+            changeLogRepository.save(new MemoryChangeLog(userId, "FORGET", CHANGE_LAYER, fact.getId(),
+                    fact.getContent(), fact.getContent(), "用户按内容遗忘", "USER"));
+            count++;
+        }
+        if (count > 0) {
+            log.info("遗忘级联（按内容）：作废事实 {} 条 user={} keyword={}", count, userId, keyword);
+        }
+        return count;
+    }
+
+    /**
      * 遗忘级联（2026-10-25）：用户说"忘掉这句话"时，把证据里含这些消息 id 的事实一起作废。
      *
      * <p>为什么不物理删：事实层留着证据链（谁在什么时候因为哪句话写的），标 SUPERSEDED 就够了，
@@ -272,8 +303,16 @@ public class MemoryFactService {
         fact.setObject(candidate.object());
         fact.setContent(candidate.content());
         fact.setSource(candidate.source());
-        fact.setOrigin(candidate.origin() == null || candidate.origin().isBlank()
-                ? MemoryFact.ORIGIN_STATED : candidate.origin());
+        boolean hasEvidence = candidate.sourceMessageIds() != null && !candidate.sourceMessageIds().isEmpty();
+        String declaredOrigin = candidate.origin() == null || candidate.origin().isBlank()
+                ? MemoryFact.ORIGIN_STATED : candidate.origin();
+        // 没证据的事实不能算「他明确说过」：降级为 INFERRED，注入时会带「（我推断的）」，
+        // 也让"无证据"在数据里可被统计（2026-10-26）
+        if (!hasEvidence && MemoryFact.ORIGIN_STATED.equals(declaredOrigin)) {
+            declaredOrigin = MemoryFact.ORIGIN_INFERRED;
+            log.warn("事实没有证据 id，按 INFERRED 落库 subject={}", candidate.subject());
+        }
+        fact.setOrigin(declaredOrigin);
         fact.setConfidence(Math.max(0, Math.min(100, candidate.confidence())));
         fact.setStatus(MemoryFact.STATUS_ACTIVE);
         fact.setValidFrom(LocalDateTime.now());

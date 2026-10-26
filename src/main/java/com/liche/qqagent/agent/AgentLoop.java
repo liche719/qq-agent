@@ -311,6 +311,12 @@ public class AgentLoop {
         // 记忆块拼在**本轮用户消息**里（2026-09-23）：放系统提示词会让每轮前缀都变，
         // 后面的固定规则与 53 个工具 schema（约 6.8k token）全部按未命中价计费（实测命中率 0% → 97.6%）。
         String memoryBlock = AgentPromptBuilder.memoryBlock(coreSection, workSection);
+        // 2026-10-26：上下文摘要**不能**作为 SystemMessage 插在系统提示后面——它一变，
+        // 后面全部历史与工具 schema 的缓存前缀就作废了。改放进本轮用户消息（和记忆块同处）。
+        String summaryPrefix = summaryOf(history);
+        if (!summaryPrefix.isBlank()) {
+            memoryBlock = summaryPrefix + "\n" + memoryBlock;
+        }
         if (turnTraceStore != null) {
             turnTraceStore.addSection(userId, "【长期核心记忆】", coreSection, 0);
             turnTraceStore.addSection(userId, "【与当前问题相关的工作记忆】", workSection, 0);
@@ -320,8 +326,7 @@ public class AgentLoop {
         if (history != null) {
             for (ContextTurn turn : history) {
                 if ("summary".equals(turn.role())) {
-                    // 2026-10-26：被截掉的那段对话的摘要，当成系统提示放在历史最前面
-                    messages.add(SystemMessage.from(turn.text()));
+                    // 摘要已经在 memoryBlock 里随用户消息带上了，这里跳过（见上面那段注释）
                     continue;
                 }
                 messages.add("assistant".equals(turn.role())
@@ -330,6 +335,23 @@ public class AgentLoop {
         }
         messages.add(buildUserMessage(userText, images, documents, memoryBlock));
         return messages;
+    }
+
+    /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
+    private static String summaryOf(List<ContextTurn> history) {
+        if (history == null || history.isEmpty()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        for (ContextTurn turn : history) {
+            if (turn != null && "summary".equals(turn.role()) && turn.text() != null && !turn.text().isBlank()) {
+                if (text.length() > 0) {
+                    text.append('\n');
+                }
+                text.append(turn.text());
+            }
+        }
+        return text.toString();
     }
 
     // Runs tool rounds until a final answer is available and applies the failure fallback.
