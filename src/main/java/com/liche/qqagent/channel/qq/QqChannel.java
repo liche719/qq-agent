@@ -602,6 +602,16 @@ public class QqChannel implements ChatChannel {
         }
     }
 
+    /** 把 QQ 内联的表情/emoji 标签转成可读文本；连续多个压成一个 */
+    static String cleanInlineTags(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String cleaned = text.replaceAll("<(?:face|emoji)[^>]{0,300}>", "[表情]");
+        cleaned = cleaned.replaceAll("(?:\\[表情]){2,}", "[表情]");
+        return cleaned.replaceAll("[ \t]{2,}", " ").trim();
+    }
+
     private void configureC2cCommandPanel() {
         if (!commandPanelEnabled) return;
         if (!commandPanelConfigured.compareAndSet(false, true)) return;
@@ -695,7 +705,9 @@ public class QqChannel implements ChatChannel {
         // 结构化卡片（message_type=3）：平台渲染进 content 的文本里**没有跳转链接**，
         // 而 ark_data.fields.jump_url 里通常有——转发的 B站/小程序分享全靠它才谈得上"看内容"（2026-10-10 加）
         QqArkCard card = QqArkCard.fromEvent(data);
-        String content = card.applyTo(message.content());
+        // 2026-10-27：QQ 的表情是内联标签（<faceType=1,faceId="5",ext="...">），原样进上下文
+        // 模型只会看到一串乱码（实测它回了一句"这串乱码你自己刷得挺开心啊"）。这里统一转成 [表情]。
+        String content = cleanInlineTags(card.applyTo(message.content()));
         java.util.List<String> images = card.withPreview(payload.images());
         if (!card.isEmpty()) {
             // 只记类型与字段名，不记正文：既要能判断"有没有 jump_url"，又不要把用户转发的内容写进日志

@@ -425,6 +425,27 @@ public class AgentLoop {
                 + "）。**不要直接重做**，会重复执行；" + how + "。";
     }
 
+    /**
+     * 像不像"模板化拒答"（2026-10-27）。
+     *
+     * <p>判据是**模型输出**的特征，不涉及用户说了什么：短、且含固定措辞。
+     * 长回答里偶尔出现"无法回答"是正常表达，不触发。
+     */
+    private static boolean looksLikeCannedRefusal(String text) {
+        if (text == null) {
+            return false;
+        }
+        String trimmed = text.trim();
+        if (trimmed.isEmpty() || trimmed.length() > 120) {
+            return false;
+        }
+        String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
+        return trimmed.contains("无法回答") || trimmed.contains("不能帮助")
+                || trimmed.contains("无法提供帮助") || trimmed.contains("无法协助")
+                || trimmed.contains("抱歉，我无法") || lower.contains("i can't help")
+                || lower.contains("i cannot help");
+    }
+
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
     private static String summaryOf(List<ContextTurn> history) {
         if (history == null || history.isEmpty()) {
@@ -459,6 +480,7 @@ public class AgentLoop {
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
         int reflections = 0;
         List<Long> reflectionIds = new ArrayList<>();
+        boolean refusalRetried = false;
         String planText = "";
         boolean planned = false;
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
@@ -562,6 +584,15 @@ public class AgentLoop {
                     continue;
                 }
                 if (outcome.text() != null) {
+                    // 2026-10-27：上游偶尔吐模板化拒答（"你好，这个问题我无法回答"），而请求本身完全正常。
+                    // 这不是用户的问题，重试一次并明确提示"别输出模板拒答"通常就能过。
+                    if (!refusalRetried && looksLikeCannedRefusal(outcome.text())) {
+                        refusalRetried = true;
+                        log.warn("疑似模板化拒答，重试一次 user={}", userId);
+                        messages.add(UserMessage.from(
+                                "（提示：上面那条是正常请求。请直接回答，或调用工具；不要输出模板化的拒答。）"));
+                        continue;
+                    }
                     String reply = completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
                     markReflectionOutcome(reflectionIds, "SUCCESS");
                     return reply;
