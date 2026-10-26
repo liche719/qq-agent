@@ -1,5 +1,6 @@
 package com.liche.qqagent.controller;
 
+import com.liche.qqagent.agent.AgentEvalService;
 import com.liche.qqagent.memory.MemoryEvalService;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,9 +26,17 @@ import java.util.Map;
 public class AdminEvalController {
 
     private final MemoryEvalService evalService;
+    private final AgentEvalService agentEvalService;
 
-    public AdminEvalController(MemoryEvalService evalService) {
+    public AdminEvalController(MemoryEvalService evalService, AgentEvalService agentEvalService) {
         this.evalService = evalService;
+        this.agentEvalService = agentEvalService;
+    }
+
+    /** 工具选择 + 多轮连续性（2026-10-27）：只读决策，不执行工具、无副作用 */
+    @PostMapping("/agent")
+    public Map<String, Object> agent(@RequestParam(defaultValue = "eval-agent") String userId) {
+        return agentEvalService.run(userId);
     }
 
     @PostMapping("/memory")

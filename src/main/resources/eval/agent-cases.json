@@ -1,0 +1,224 @@
+{
+  "_说明": "Agent 行为评估（2026-10-27）。choice = 只看模型第一反应要调哪个工具（不执行，无副作用）；continuity = 给多轮历史再追问，看是否引用旧信息。每条重复 agent.eval-repeat 次，过半算通过。",
+  "cases": [
+    {
+      "id": "choice-weather",
+      "type": "choice",
+      "prompt": "今天广州天气怎么样",
+      "expectTool": "searchLatestWeb"
+    },
+    {
+      "id": "choice-reminder",
+      "type": "choice",
+      "prompt": "明天早上七点提醒我吃药",
+      "expectTool": "parseReminder"
+    },
+    {
+      "id": "choice-memory",
+      "type": "choice",
+      "prompt": "我周二晚上的课在哪个教室来着",
+      "expectTool": "recallMemoryFacts"
+    },
+    {
+      "id": "choice-draw",
+      "type": "choice",
+      "prompt": "画一只戴帽子的猫",
+      "expectTool": "drawPicture"
+    },
+    {
+      "id": "choice-schedule",
+      "type": "choice",
+      "prompt": "每天早上八点给我发一句今天的天气",
+      "expectTool": "createScheduledTask"
+    },
+    {
+      "id": "choice-webpage",
+      "type": "choice",
+      "prompt": "帮我看看这个页面讲了什么 https://example.com/post",
+      "expectTool": "readWebPage"
+    },
+    {
+      "id": "choice-chat-simple",
+      "type": "choice",
+      "prompt": "在吗",
+      "forbidTool": "searchWeb"
+    },
+    {
+      "id": "choice-chat-emotion",
+      "type": "choice",
+      "prompt": "我今天有点烦",
+      "forbidTool": "searchWeb"
+    },
+    {
+      "id": "choice-math",
+      "type": "choice",
+      "prompt": "37 乘以 12 等于多少",
+      "forbidTool": "searchWeb"
+    },
+    {
+      "id": "choice-no-reminder",
+      "type": "choice",
+      "prompt": "我们等会儿再聊",
+      "forbidTool": "parseReminder"
+    },
+    {
+      "id": "choice-voice-text",
+      "type": "choice",
+      "prompt": "用语音跟我说一句晚安",
+      "expectTool": "sendVoice"
+    },
+    {
+      "id": "choice-search-news",
+      "type": "choice",
+      "prompt": "最近有什么 AI 大模型发布的消息",
+      "expectAnyTool": [
+        "searchLatestWeb",
+        "searchWeb"
+      ]
+    },
+    {
+      "id": "cont-classroom",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "周二晚上的课教室改成 8B304 了"
+        },
+        {
+          "role": "assistant",
+          "text": "记下了，周二晚的课在 8B304。"
+        },
+        {
+          "role": "user",
+          "text": "体育课改到下午三点了"
+        },
+        {
+          "role": "assistant",
+          "text": "好，体育课 15:00。"
+        }
+      ],
+      "question": "我周二那节课在哪个教室？",
+      "expectContains": "8B304"
+    },
+    {
+      "id": "cont-time",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "体育课改到下午三点了"
+        },
+        {
+          "role": "assistant",
+          "text": "好，体育课 15:00。"
+        },
+        {
+          "role": "user",
+          "text": "数字系统综合设计是钟雪峰老师带"
+        },
+        {
+          "role": "assistant",
+          "text": "记下了，任课老师是钟雪峰。"
+        }
+      ],
+      "question": "体育课几点来着？",
+      "expectContains": "15:00"
+    },
+    {
+      "id": "cont-teacher",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "数字系统综合设计是钟雪峰老师带"
+        },
+        {
+          "role": "assistant",
+          "text": "记下了，任课老师是钟雪峰。"
+        },
+        {
+          "role": "user",
+          "text": "我手机号是 13800138000"
+        },
+        {
+          "role": "assistant",
+          "text": "好，记下了。"
+        }
+      ],
+      "question": "数字系统综合设计谁教？",
+      "expectContains": "钟雪峰"
+    },
+    {
+      "id": "cont-phone",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "我手机号是 13800138000"
+        },
+        {
+          "role": "assistant",
+          "text": "好，记下了。"
+        },
+        {
+          "role": "user",
+          "text": "以后叫我阿文就行"
+        },
+        {
+          "role": "assistant",
+          "text": "好，阿文。"
+        }
+      ],
+      "question": "我手机号多少来着？",
+      "expectContains": "13800138000"
+    },
+    {
+      "id": "cont-nickname",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "以后叫我阿文就行"
+        },
+        {
+          "role": "assistant",
+          "text": "好，阿文。"
+        },
+        {
+          "role": "user",
+          "text": "周二晚上的课教室改成 8B304 了"
+        },
+        {
+          "role": "assistant",
+          "text": "记下了。"
+        }
+      ],
+      "question": "你该怎么称呼我？",
+      "expectContains": "阿文"
+    },
+    {
+      "id": "cont-intern",
+      "type": "continuity",
+      "history": [
+        {
+          "role": "user",
+          "text": "寒假打算去深圳找实习，先待两个月"
+        },
+        {
+          "role": "assistant",
+          "text": "深圳，两个月。"
+        },
+        {
+          "role": "user",
+          "text": "投简历大概 11 月 5 号开始"
+        },
+        {
+          "role": "assistant",
+          "text": "好，11 月 5 号。"
+        }
+      ],
+      "question": "我寒假实习打算去哪？",
+      "expectContains": "深圳"
+    }
+  ]
+}
