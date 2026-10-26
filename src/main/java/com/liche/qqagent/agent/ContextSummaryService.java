@@ -75,8 +75,8 @@ public class ContextSummaryService {
                 return null;
             }
             String cleaned = summary.replaceAll("\\s+", " ").trim();
-            if (cleaned.length() > 240) {
-                cleaned = cleaned.substring(0, 240) + "…";
+            if (cleaned.length() > 600) {
+                cleaned = cleaned.substring(0, 600) + "…";
             }
             try {
                 redis.opsForValue().set(cacheKey, cleaned, Duration.ofHours(ttlHours));
@@ -93,9 +93,14 @@ public class ContextSummaryService {
 
     private String buildPrompt(List<ContextTurn> dropped) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("把下面这段较早的对话压成一段中文摘要，给同一个助手之后接着聊用。\n")
-                .append("要求：不超过 150 字；只保留**人、事、结论、还没做完的事**；")
-                .append("不要编造、不要评价、不要分点，直接输出一段话。\n\n");
+        prompt.append("把下面这段较早的对话压成中文摘要，给同一个助手之后接着聊用。\n")
+                .append("**必须按这四个小标题分段**（没有内容就写「无」）：\n")
+                .append("【人物与关系】他是谁、在意谁、称呼与偏好\n")
+                .append("【进行中的事】还没结束的事、卡在哪一步\n")
+                .append("【已定结论】已经确定下来的决定与数值\n")
+                .append("【待办】他要求过但还没做的事\n")
+                .append("总共不超过 400 字；只写事实，不要编造、不要评价。\n")
+                .append("对话里出现过明确计划的，原样保留在【进行中的事】里。\n\n");
         int chars = 0;
         for (ContextTurn turn : dropped) {
             if (turn == null || turn.text() == null || turn.text().isBlank()) {
