@@ -56,6 +56,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
 
+      # 2026-10-26：把测试放进流水线（原来只在 Dockerfile 里 -DskipTests，CI 从没跑过测试）。
+      # 先只跑"确定稳定"的一批；红了就阻断部署，绿了再逐步扩大范围。
+      # 注意：-DskipTests=false 必须显式写，否则会被 job/env 里的默认值带偏。
+      - name: Run stable unit tests
+        run: |
+          set -eu
+          mvn -q -B -DskipTests=false test             -Dtest='TaskReflectionServiceTest,FailureKindTest'             -Dsurefire.failIfNoSpecifiedTests=false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e   # v3
 
