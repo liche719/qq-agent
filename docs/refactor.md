@@ -339,3 +339,18 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 
 **部署后的 6 项常规验证**（`docs/rollback.md` 也有）：镜像 tag、`/api/site/info` 200、
 `Started QqAgentApplication`、`ERROR` 计数 0、`工具注册完成 21 个类 / 64 个工具`、统计接口能出数。
+### 6c 被动分支的"逐字等价"核查（2026-10-28，无需流量的静态证据）
+
+拿 `8aa2d86^` 的 `QqChannel.sendPassive/sendProactive` 与 `QqOutbound` 的实现做归一化 diff，
+**控制流完全一致**，差异只有四类、且都是"换成依赖注入"的机械改写：
+
+| 原实现 | 新实现 | 性质 |
+|---|---|---|
+| `pruneEphemeralCaches(now)` / `ensureToken()` | `deps.prepare()` / `deps.ensureToken()` | 同一个动作，改成回调 |
+| `replyWindow.lastMessageId(u)` 等 | `deps.lastMessageId().apply(u)` 等 | 同一份数据，改成函数 |
+| `postMessage(...)` | `deps.post().post(...)` | 同一 HTTP 出口 |
+| `apiErrorCount++ ; recordApiError(e)` | `deps.onApiError().accept(e)` | 同一个计数与分析 |
+| `sendProactive` 直接抛运行时异常 | `sendProactive` 把受检异常包成运行时再抛 | `Poster` 声明了 `throws Exception`，语义不变 |
+
+**判据没变**：仍是"窗口内带 msg_id → 否则降级主动 → 失败按 `QqSendErrors` 三分类决定是否重发"。
+所以被动分支的风险不在逻辑，只在于"这段代码第一次在真机上跑"。
