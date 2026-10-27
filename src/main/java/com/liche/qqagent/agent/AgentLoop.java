@@ -293,6 +293,12 @@ public class AgentLoop {
                        StreamReplySink sink, TurnScope scope) {
         toolStatusService.bind(userId, null, botId, channel);
         try {
+            if (onlyHistoryMarkers(userText)) {
+                // 2026-10-27：合并批次会给"曾经带图/带文件"的消息补一条 [历史消息曾附带图片…] 标记。
+                // 整条只有标记时没有可回答的内容，以前照样去问模型，它只能编（实测回了"记下了，这九条…"）。
+                log.info("本轮只有历史媒体标记、没有正文，跳过 user={}", userId);
+                return "";
+            }
             // 问时间的处理：原来靠**伪造**一条 assistant(tool_call) + tool 结果塞进历史，
             // 但思考模式下上游要求 assistant 消息必须回传 reasoning_content，
             // 伪造的那条没有 → HTTP 400（症状：用户一问「今天几号」就收到"出错了"，是线上真 bug）。
@@ -431,6 +437,20 @@ public class AgentLoop {
                 + "）。**不要直接重做**，会重复执行；" + how + "。";
     }
 
+    /** 整条消息是否只有"历史媒体"标记（没有真正的内容） */
+    private static boolean onlyHistoryMarkers(String text) {
+        if (text == null || text.isBlank()) {
+            return true;
+        }
+        String stripped = text
+                .replace("[历史消息曾附带图片；图片原件未随当前消息提供]", "")
+                .replace("[历史消息曾附带文件；文件原件未随当前消息提供]", "")
+                .replace("[历史消息曾附带图片]", "")
+                .replace("[历史消息曾附带文件]", "")
+                .trim();
+        return stripped.isEmpty() || stripped.equals("？") || stripped.equals("?");
+    }
+
     /**
      * 像不像"模板化拒答"（2026-10-27）。
      *
@@ -446,10 +466,13 @@ public class AgentLoop {
             return false;
         }
         String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
-        return trimmed.contains("无法回答") || trimmed.contains("不能帮助")
-                || trimmed.contains("无法提供帮助") || trimmed.contains("无法协助")
-                || trimmed.contains("抱歉，我无法") || lower.contains("i can't help")
-                || lower.contains("i cannot help");
+        // 2026-10-27：上游的拒答措辞不止一种（实测又见到"你好，我无法给到相关内容"）
+        return trimmed.contains("无法回答") || trimmed.contains("不能帮助") || trimmed.contains("无法帮到")
+                || trimmed.contains("无法给到") || trimmed.contains("不能给到") || trimmed.contains("无法提供")
+                || trimmed.contains("无法协助") || trimmed.contains("无法回应") || trimmed.contains("无法处理")
+                || trimmed.startsWith("抱歉，我") || trimmed.startsWith("你好，我无法")
+                || lower.contains("i can't help") || lower.contains("i cannot help")
+                || lower.contains("i'm unable to");
     }
 
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
@@ -592,12 +615,20 @@ public class AgentLoop {
                 if (outcome.text() != null) {
                     // 2026-10-27：上游偶尔吐模板化拒答（"你好，这个问题我无法回答"），而请求本身完全正常。
                     // 这不是用户的问题，重试一次并明确提示"别输出模板拒答"通常就能过。
-                    if (!refusalRetried && looksLikeCannedRefusal(outcome.text())) {
-                        refusalRetried = true;
-                        log.warn("疑似模板化拒答，重试一次 user={}", userId);
-                        messages.add(UserMessage.from(
-                                "（提示：上面那条是正常请求。请直接回答，或调用工具；不要输出模板化的拒答。）"));
-                        continue;
+                    if (looksLikeCannedRefusal(outcome.text())) {
+                        if (!refusalRetried) {
+                            refusalRetried = true;
+                            log.warn("疑似模板化拒答，重试一次 user={}", userId);
+                            messages.add(UserMessage.from(
+                                    "（提示：上面那条是正常请求。请直接回答，或调用工具；不要输出模板化的拒答。）"));
+                            continue;
+                        }
+                        // 重试后还是拒答：**不要把机器拒答原样发给他**，换成一句人话，让他知道是这边的问题
+                        log.warn("两次都是模板拒答，改为如实说明 user={}", userId);
+                        String fallback = "我这边模型刚才卡了一下，没接住你这句话——再说一遍？";
+                        String reply = completeReply(fallback, successfulTools, failedTools, toolResults, sink, userId);
+                        markReflectionOutcome(reflectionIds, "FAILED");
+                        return reply;
                     }
                     String reply = completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
                     markReflectionOutcome(reflectionIds, "SUCCESS");
