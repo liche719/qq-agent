@@ -980,45 +980,7 @@ public class AgentLoop {
      * 回复结尾的参考来源。由程序统一附加，不依赖模型是否记得写来源。
      */
     static String appendSearchSources(String reply, Map<String, ToolExecutionOutcome> toolResults) {
-        if (reply == null || reply.isBlank() || toolResults == null || toolResults.isEmpty()) {
-            return reply;
-        }
-        Set<String> sources = new LinkedHashSet<>();
-        for (Map.Entry<String, ToolExecutionOutcome> entry : toolResults.entrySet()) {
-            if (entry.getKey() == null
-                    || !entry.getKey().toLowerCase(java.util.Locale.ROOT).contains("search")) {
-                continue;
-            }
-            String content = entry.getValue() == null ? null : entry.getValue().content();
-            if (content == null || content.isBlank()) {
-                continue;
-            }
-            for (String line : content.split("\n")) {
-                String trimmed = line.strip();
-                if (trimmed.startsWith(com.liche.qqagent.search.SearchTool.SOURCE_MARK)) {
-                    sources.add(trimmed.substring(
-                            com.liche.qqagent.search.SearchTool.SOURCE_MARK.length()).strip());
-                }
-                if (sources.size() >= 5) {
-                    break;
-                }
-            }
-            if (sources.size() >= 5) {
-                break;
-            }
-        }
-        if (sources.isEmpty()) {
-            return reply;
-        }
-        String body = stripEmbeddedSources(reply);
-        if (body.isBlank()) {
-            body = reply;
-        }
-        StringBuilder footer = new StringBuilder(body.stripTrailing()).append("\n\n> _参考来源_");
-        for (String source : sources) {
-            footer.append("\n> ").append(source);
-        }
-        return footer.toString();
+        return ReplySources.append(reply, toolResults);
     }
 
     /**
@@ -1029,21 +991,7 @@ public class AgentLoop {
      * 从最后一个标记开始，后面每一行都以 {@code >} 开头才认为是块，正文里的引用不受影响。
      */
     static String stripEmbeddedSources(String reply) {
-        if (reply == null) {
-            return "";
-        }
-        int index = reply.lastIndexOf("> _参考来源_");
-        if (index < 0) {
-            return reply;
-        }
-        String tail = reply.substring(index);
-        for (String line : tail.split("\n")) {
-            if (!line.isBlank() && !line.stripLeading().startsWith(">")) {
-                return reply;
-            }
-        }
-        String head = reply.substring(0, index).stripTrailing();
-        return head.isBlank() ? reply : head;
+        return ReplySources.stripEmbedded(reply);
     }
 
     static String appendToolFailureNotice(String reply, Map<String, ToolExecutionOutcome> failedTools) {
