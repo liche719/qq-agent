@@ -507,11 +507,9 @@ public class AgentLoop {
         double budgetYuan = scope == null ? dialogBudgetYuan : scope.budgetYuan();
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
-        int reflections = 0;
-        List<Long> reflectionIds = new ArrayList<>();
+        PlanCoordinator guidance = new PlanCoordinator(planService, taskReflection,
+                new PlanCoordinator.PlanConfig(planMode, planMinTools), reflectMaxPerTurn);
         boolean refusalRetried = false;
-        String planText = "";
-        boolean planned = false;
         // 本轮已经播报过进度的工具（同一个工具只报一次，避免刷屏）
         Set<String> announcedTools = new LinkedHashSet<>();
         // 轮内注入次数（用户在它干活时又发来的消息，最多注入 2 次）
@@ -566,48 +564,18 @@ public class AgentLoop {
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
                         toolResults, scope, round, announcedTools);
                 if (outcome.toolCalls()) {
-                    // 真 Planner（2026-10-25）：只在"第一轮就要调多个工具"时规划一次，
-                    // 一句话能办的事一次规划都不做。
-                    // 2026-10-26：只在 round==0 触发会漏掉"每轮只加一个工具"的漂移场景——
-                    // 那种情况 round 0 只有 1 个工具，到 round 1 才凑够 2 个。放宽到前两轮。
-                    if (!planned && planService != null
-                            && "auto".equalsIgnoreCase(planMode) && round <= 1
-                            && distinctTools(successfulTools, failedTools) >= planMinTools) {
-                        planned = true;
-                        List<String> toolsUsed = new ArrayList<>(successfulTools);
-                        toolsUsed.addAll(failedTools.keySet());
-                        PlanService.Plan planOutcome = planService.plan(firstUserText(messages), toolsUsed,
-                                briefResults(failedTools, toolResults));
-                        if (planOutcome.ok()) {
-                            messages.add(UserMessage.from("（系统规划：" + planOutcome.toPromptBlock() + "）"));
-                            planText = String.join(" / ", planOutcome.steps());
-                        }
+                    // 计划与反思都交给 PlanCoordinator 判断；这里只负责把要注入的话加进上下文
+                    String planBlock = guidance.planIfNeeded(round, successfulTools, failedTools, toolResults,
+                            messages, userId);
+                    if (planBlock != null) {
+                        messages.add(UserMessage.from(planBlock));
                     }
-                    if (planText.isBlank() && outcome.text() != null && !outcome.text().isBlank()) {
-                        planText = outcome.text().strip();
-                    }
-                    // 策略性失败才反思（2026-10-25）：工具内部重试过仍失败，或轮次过半一次没成
-                    if (reflections < reflectMaxPerTurn && shouldReflect(round, maxRounds, successfulTools, failedTools)) {
-                        reflections++;
-                        String task = firstUserText(messages);
-                        java.util.Map<String, String> failedReasons = new java.util.LinkedHashMap<>();
-                        java.util.Map<String, FailureKind> failedKinds = new java.util.LinkedHashMap<>();
-                        failedTools.forEach((name, value) -> {
-                            String reason = value == null ? "" : value.failureReason();
-                            failedReasons.put(name, reason);
-                            failedKinds.put(name, FailureKind.classify(reason,
-                                    value == null ? 0 : value.attempts()));
-                        });
-                        TaskReflectionService.Result reflection = taskReflection == null
-                                ? TaskReflectionService.Result.failed("反思服务不可用")
-                                : taskReflection.reflect(userId, task, planText, failedReasons, failedKinds,
-                                        new ArrayList<>(successfulTools), round, maxRounds);
-                        if (reflection.ok()) {
-                            reflectionIds.addAll(reflection.savedIds());
-                            messages.add(UserMessage.from("（系统反思：" + reflection.toPromptBlock() + "）"));
-                            log.info("已注入任务反思 user={} replan={} type={}", userId,
-                                    reflection.replan(), reflection.failureType());
-                        }
+                    guidance.noteInlineText(outcome.text());
+                    String reflectBlock = guidance.reflectIfNeeded(round, maxRounds, successfulTools,
+                            failedTools, messages, userId);
+                    if (reflectBlock != null) {
+                        messages.add(UserMessage.from(reflectBlock));
+                        log.info("已注入任务反思 user={}", userId);
                     }
                     compactOldToolResults(messages);
                     continue;
@@ -627,11 +595,11 @@ public class AgentLoop {
                         log.warn("两次都是模板拒答，改为如实说明 user={}", userId);
                         String fallback = "我这边模型刚才卡了一下，没接住你这句话——再说一遍？";
                         String reply = completeReply(fallback, successfulTools, failedTools, toolResults, sink, userId);
-                        markReflectionOutcome(reflectionIds, "FAILED");
+                        markReflectionOutcome(guidance.reflectionIds(), "FAILED");
                         return reply;
                     }
                     String reply = completeReply(outcome.text(), successfulTools, failedTools, toolResults, sink, userId);
-                    markReflectionOutcome(reflectionIds, "SUCCESS");
+                    markReflectionOutcome(guidance.reflectionIds(), "SUCCESS");
                     return reply;
                 }
                 // 这一轮既没调工具、也没说话。发过语音就视为"已经把话说完"——
@@ -641,7 +609,7 @@ public class AgentLoop {
                     if (turnTraceStore != null) {
                         turnTraceStore.finishTurn(userId, 0);
                     }
-                    markReflectionOutcome(reflectionIds, "SUCCESS");
+                    markReflectionOutcome(guidance.reflectionIds(), "SUCCESS");
                     return "";
                 }
             }
@@ -651,7 +619,7 @@ public class AgentLoop {
             }
             log.warn("工具失败后模型未能完成最终回复 user={}: {}", userId, exception.getMessage());
         }
-        markReflectionOutcome(reflectionIds, "FAILED");
+        markReflectionOutcome(guidance.reflectionIds(), "FAILED");
         return fallbackReply(failedTools, successfulTools, toolResults, sink);
     }
 
@@ -1236,63 +1204,6 @@ public class AgentLoop {
     private java.util.concurrent.ScheduledFuture<?> startProgressHeartbeat(ToolExecutionRequest request,
                                                                          ToolExecutionClass executionClass) {
         return ProgressNarrator.heartbeat(request, executionClass, toolDisplayNames);
-    }
-
-    private static int distinctTools(java.util.Set<String> succeeded,
-                                     java.util.Map<String, ToolExecutionOutcome> failed) {
-        java.util.Set<String> names = new java.util.HashSet<>(succeeded);
-        names.addAll(failed.keySet());
-        return names.size();
-    }
-
-    /** 第一轮的结果摘要（给 Planner 当上下文，别太长） */
-    private static String briefResults(java.util.Map<String, ToolExecutionOutcome> failed,
-                                       java.util.Map<String, ToolExecutionOutcome> results) {
-        StringBuilder text = new StringBuilder();
-        results.forEach((name, outcome) -> {
-            if (outcome != null && outcome.successful()) {
-                text.append(name).append("：成功。");
-            }
-        });
-        failed.forEach((name, outcome) -> {
-            if (outcome != null) {
-                text.append(name).append("：失败（")
-                        .append(outcome.failureReason() == null ? "" : outcome.failureReason()).append("）。");
-            }
-        });
-        String flat = text.toString().replaceAll("\s+", " ").trim();
-        return flat.length() <= 240 ? flat : flat.substring(0, 240) + "…";
-    }
-
-    /**
-     * 要不要触发反思（2026-10-25）：
-     * ① 某个工具内部已经重试过（attempts≥2）还是失败 → 大概率是策略问题；
-     * ② 轮次过半、一次都没成功、但有失败 → 再走下去也是撞墙。
-     */
-    private boolean shouldReflect(int round, int maxRounds, java.util.Set<String> successfulTools,
-                                  java.util.Map<String, ToolExecutionOutcome> failedTools) {
-        if (taskReflection == null || !taskReflection.enabled() || failedTools.isEmpty()) {
-            return false;
-        }
-        for (ToolExecutionOutcome outcome : failedTools.values()) {
-            if (outcome != null && outcome.attempts() >= 2) {
-                return true;
-            }
-        }
-        return round + 1 >= Math.max(1, maxRounds / 2) && successfulTools.isEmpty();
-    }
-
-    /** 这一轮用户到底要什么：取第一条用户消息 */
-    private static String firstUserText(List<ChatMessage> messages) {
-        for (ChatMessage message : messages) {
-            if (message instanceof UserMessage user) {
-                String text = user.singleText();
-                if (text != null && !text.isBlank()) {
-                    return text;
-                }
-            }
-        }
-        return "";
     }
 
     private String progressLabel(ToolExecutionRequest request) {

@@ -44,7 +44,7 @@
 |---|---|---|---|
 | 1 | 工具执行编排 | `AgentLoop` → `ToolRoundExecutor` | ✅ `14b69c2` |
 | 2 | 进度播报 | `AgentLoop` → `ProgressNarrator` | ✅ `e9c10db` |
-| 3 | 计划与反思注入 | `AgentLoop` → `PlanCoordinator`（状态：planned/planText/reflectionIds） | ⬜ |
+| 3 | 计划与反思注入 | `AgentLoop` → `PlanCoordinator`（状态：planned/planText/reflectionIds） | ✅ |
 | 4 | 延迟与埋点 | `AgentLoop` → `TurnMetrics`（首字/总时长/首跳 tokens） | ⬜ |
 | 5 | 进度与额度 | `QqChannel` → `QqStreamProgress`（ProgressSession + TurnReplyBudget + 降级） | ⬜ |
 | 6 | 发送与序号 | `QqChannel` → `QqMessageSender`（msg_seq、长消息拆分、撤回、主动/被动） | ⬜ |
