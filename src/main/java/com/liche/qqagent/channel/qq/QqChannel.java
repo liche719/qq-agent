@@ -147,6 +147,18 @@ public class QqChannel implements ChatChannel {
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile ScheduledExecutorService typingExecutor;
     /** userId -> 最近收到消息的时间戳（用于判断被动窗口） */
+    /** 一次 HTTP 发送（2026-10-27 拆到 QqMessageSender） */
+    private QqMessageSender messageSender;
+
+    private QqMessageSender messageSender() {
+        if (messageSender == null) {
+            messageSender = new QqMessageSender(new QqMessageSender.Gateway(
+                    () -> accessToken, () -> apiBase, this::buildRestClient, () -> objectMapper,
+                    messageSequence::next));
+        }
+        return messageSender;
+    }
+
     /** 被动回复窗口（2026-10-27 拆到 QqReplyWindow） */
     private final QqReplyWindow replyWindow = new QqReplyWindow();
     /** userId -> 最近消息 id（被动回复用） */
@@ -1191,7 +1203,7 @@ public class QqChannel implements ChatChannel {
                 body.put("msg_seq", messageSequence.next());
             }
             try {
-                client.post().uri(messagePath(userId), QqMessages.targetOpenid(userId))
+                client.post().uri(QqMessageSender.path(userId), QqMessages.targetOpenid(userId))
                         .header("Authorization", "QQBot " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(body.toString())
@@ -1206,7 +1218,7 @@ public class QqChannel implements ChatChannel {
                 ObjectNode proactive = objectMapper.createObjectNode();
                 proactive.put("msg_type", 7);
                 proactive.putObject("media").put("file_info", fileInfo);
-                client.post().uri(messagePath(userId), QqMessages.targetOpenid(userId))
+                client.post().uri(QqMessageSender.path(userId), QqMessages.targetOpenid(userId))
                         .header("Authorization", "QQBot " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(proactive.toString())
@@ -1582,13 +1594,7 @@ public class QqChannel implements ChatChannel {
 
     // Sends a QQ message and optionally attaches the passive reply target.
     private String postMessage(String conversationId, String text, boolean markdown, String replyToMsgId) {
-        RestClient client = buildRestClient(apiBase);
-        ObjectNode body = QqMessages.body(objectMapper, text, markdown, replyToMsgId, messageSequence::next);
-        return client.post().uri(messagePath(conversationId), QqMessages.targetOpenid(conversationId))
-                .header("Authorization", "QQBot " + accessToken)
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(body.toString())
-                .retrieve().body(String.class);
+        return messageSender().post(conversationId, text, markdown, replyToMsgId);
     }
 
     private void rememberBotMessageId(String userId, String response) {
@@ -1605,11 +1611,7 @@ public class QqChannel implements ChatChannel {
 
 
 
-    private String messagePath(String conversationId) {
-        return QqMessages.isGroup(conversationId)
-                ? "/v2/groups/{openid}/messages"
-                : "/v2/users/{openid}/messages";
-    }
+
 
     // ============ 流式回复（stream_messages，append 模式） ============
 
