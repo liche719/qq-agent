@@ -698,8 +698,8 @@ public class AgentLoop {
             replyText = replyText.stripTrailing() + "\n\n" + notice;
         }
         replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
-        log.info("轮次延迟 user={} 首字={}ms 总={}ms 工具={}个",
-                userId, TurnLatency.firstTokenMillis(), TurnLatency.totalMillis(), successfulTools.size());
+        TurnMetrics.logTurn(userId, TurnLatency.firstTokenMillis(), TurnLatency.totalMillis(),
+                successfulTools.size());
         TurnLatency.clear();
         String reply = appendToolFooter(replyText, successfulTools, toolDisplayNames);
         reply = appendSearchSources(reply, toolResults);
@@ -884,14 +884,11 @@ public class AgentLoop {
                     @Override
                     public void onCompleteResponse(ChatResponse response) {
                         var firstUsage = response.tokenUsage();
-                        if (firstUsage != null && firstUsage.inputTokenCount() != null) {
-                            // 首跳的 prompt 大小：判断"12.7 秒"里有几成是提示词太长（2026-10-26 P1-2）
-                            log.info("首跳 tokens user={} 输入={} 输出={} 工具 schema={}个",
-                                    userId,
-                                    firstUsage.inputTokenCount(),
-                                    firstUsage.outputTokenCount() == null ? 0 : firstUsage.outputTokenCount(),
-                                    specs == null ? 0 : specs.size());
-                        }
+                        // 首跳 prompt 规模：判断"慢在提示词还是慢在思考"（2026-10-26 P1-2）
+                        TurnMetrics.logCall(userId, round,
+                                firstUsage == null ? null : firstUsage.inputTokenCount(),
+                                firstUsage == null ? null : firstUsage.outputTokenCount(),
+                                specs == null ? 0 : specs.size());
                         if (turnTraceStore != null) {
                             long traceMillis = Math.max(0, (System.nanoTime() - traceStartedNanos) / 1_000_000L);
                             var usage = response.tokenUsage();
