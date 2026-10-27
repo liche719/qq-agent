@@ -426,3 +426,27 @@ docker exec qq-agent-redis redis-cli --scan --pattern "ctx:summary:*" | head -5 
 **2026-10-28 03:15 已修正**：`cacheTag` 改成 **"窗口起点 + 窗口长度"**。
 理由：加上长度后，窗口内容没变时缓存照常命中；窗口变长/变短时 key 必变，**不会再拿到过期摘要**。
 没有证据表明原来"一定"出过问题（要看真实窗口怎么滑动），但这个改动在任何情况下都不会更差。
+## 审计发现：51 个工具方法的参数没有描述（**未改，等决策**）
+
+2026-10-28 扫描全部 65 个工具：**51 个方法的参数没有 `@P("…")` 说明**，只有参数名。
+例如：
+
+```
+commentBilibili(Long rootRpid, Long parentRpid)        ← 两个 id 谁是谁，只能靠名字猜
+recordInterviewRound(4 个 1~5 分)                       ← 四个维度分，没说明各自含义
+selfLesson(7 个参数)                                    ← whatIDid / expected / whatHappened 全靠名字
+```
+
+**为什么没直接补：** 每个参数描述都会进工具 schema，而 schema 已经在 5~6k token（65 个工具）；
+全量补可能再加 1~2k token，**每轮都要付**。这个项目的设计取向一直是"砍 token 优先"
+（工具从 64→核心 35、提示词压到 3950 字），所以这不是"补上就一定更好"。
+
+**建议的选择（需要你定）：**
+
+| 方案 | 收益 | 代价 |
+|---|---|---|
+| A. 全部补 @P | 模型少猜参数含义，传错概率降低 | 每轮多 1~2k token |
+| B. 只补**易混淆**的几个（`commentBilibili`、`recordInterviewRound`、`selfLesson`、`selfQuestNote`） | 收益集中在最容易传错的地方 | 每轮多约 200~300 token |
+| C. 不补，靠工具描述里的示例说明参数 | 零成本 | 复杂工具仍需试错 |
+
+我倾向 **B**：三次调用里错一次的代价，通常比 300 token 高。
