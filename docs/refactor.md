@@ -122,3 +122,19 @@
 **再往后**：`QqMessageSender` 依赖窗口、配额、错误计数三块状态，
 所以顺序应是 `QqReplyWindow`（6a）→ `QqQuota`（6b，主动额度 + apiErrorCount/recordApiError）→
 `QqMessageSender`（6c，`sendPassive`/`sendProactive`/`postMessage`）。
+### 6c 进展（2026-10-27 20:12）
+
+`QqMessageSender` 已就位，**整条链上真正把字节发给 QQ 的地方只剩一处**：
+
+```
+QqChannel.postMessage(...)  →  QqMessageSender.post(...)   ← 唯一 HTTP 出口
+                                 ├─ QqMessages.path()      群 /v2/groups/ · 私聊 /v2/users/
+                                 ├─ QqMessages.body()      markdown / 纯文本、被动才带 msg_id+msg_seq
+                                 └─ QqMessages.targetOpenid()
+```
+
+**还剩**：`sendPassive`（窗口判定 → 主动兜底）与 `sendProactive`（配额）的策略搬移，
+以及 `handleSendFailure`（结果未知/重试分类）——这三块互相咬合，建议一次做完，别分两次。
+
+验证提示：本地 simulator 不走真实发送通道，所以 6c 只能验"构建 + 启动"；
+**被动/主动两条分支要靠真实消息**：窗口内应出现 `[qq] send(passive)`，窗口外应出现 `[qq] send(proactive)`。
