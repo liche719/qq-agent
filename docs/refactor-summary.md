@@ -52,3 +52,22 @@
 | 代码行数 | `QqChannel` −258、`AgentLoop` −185、`MemoryBackupJob` −45 |
 | 重构后启动耗时 | 51.16 秒（重构前实测 50~57 秒，**无退化**） |
 | 生产错误 | 0 ERROR（近 24h） |
+## 六、覆盖率（2026-10-28 用 JaCoCo 实测）
+
+只统计本次拆出来的 21 个类，跑 CI 那 118 个用例：
+
+| 覆盖率 | 类 |
+|---|---|
+| **100%** | `QqMessages`、`QqNumbers`、`QqPanels`、`QqSendErrors`、`Numbers` |
+| 94~98% | `QqTexts`、`ToolRoundExecutor`、`BackupArchives`、`ReplyDelivery` |
+| 77~85% | `QqOutbound`、`ReplySources`、`Texts`、`QqReplyWindow` |
+| 33~67% | `QqProgressSessions`、`ProgressNarrator`、`PlanCoordinator` |
+| 0~23% | `QqPanelSetup`、`QqProgressFrames`（都是纯 HTTP，只能靠真机）、`QqQuotas`、`TurnMetrics`、`QqMessageSender` |
+
+**合计 658 行、覆盖 412 行 = 63%。**
+
+0% 的那几个**不是漏测**，而是它们只做 HTTP 调用（面板注册、进度帧发送）或只打印日志（`TurnMetrics`），
+单测价值低——它们的正确性由生产日志验证（`command panel already exists`、`工具进度（第 N 行）`）。
+
+**没有设覆盖率门槛**：仓库里还有 15 个历史遗留的过期断言（见 `refactor.md`），
+卡覆盖率会让历史债挡住每一次发布。等那批测试清干净再谈门槛。
