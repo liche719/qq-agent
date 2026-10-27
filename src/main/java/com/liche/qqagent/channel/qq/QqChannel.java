@@ -50,7 +50,6 @@ public class QqChannel implements ChatChannel {
     private static final String TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
     private static final String API_BASE = "https://api.sgroup.qq.com";
     private static final String SANDBOX_API_BASE = "https://sandbox.api.sgroup.qq.com";
-    private static final String GROUP_CONVERSATION_PREFIX = "qq-group:";
     private static final int INTENT_FULL = (1 << 0) | (1 << 1) | (1 << 30) | (1 << 12) | (1 << 25) | (1 << 26);
     private final String appId;
     private final String clientSecret;
@@ -806,7 +805,7 @@ public class QqChannel implements ChatChannel {
         if (groupOpenid.isBlank() || memberOpenid.isBlank()) return;
         QqAttachmentParser.Payload payload = message.attachments();
         if (payload.empty() && content.isBlank()) { log.info("[qq] recv group (empty, no attachments) -> {}", groupOpenid); return; }
-        String conversationId = groupConversationId(groupOpenid);
+        String conversationId = QqMessages.groupConversationId(groupOpenid);
         String memberContent = "【群成员 " + memberOpenid + "】" + (content.isBlank() ? "[图片]" : content);
         rememberReplyWindow(conversationId, msgId);
         InboundMessage inbound = payload.empty()
@@ -1025,7 +1024,7 @@ public class QqChannel implements ChatChannel {
 
     @Override
     public boolean supportsProactiveCare(String userId) {
-        return !isGroupConversation(userId);
+        return !QqMessages.isGroup(userId);
     }
 
     @Override
@@ -1060,7 +1059,7 @@ public class QqChannel implements ChatChannel {
             boolean sent = sendWithPassiveFirst(userId, replyToMsgId, text);
             return recordTextSend(started, sent);
         } finally {
-            if (!isGroupConversation(userId)) {
+            if (!QqMessages.isGroup(userId)) {
                 stopTyping(userId);
             }
             // 清理未使用的流式会话（确认流程等未走 agent 的回复不会触发 onDone）
@@ -1089,7 +1088,7 @@ public class QqChannel implements ChatChannel {
     public boolean sendMediaReplyFrom(String botId, String userId, String replyToMsgId, OutboundMedia media) {
         long started = System.nanoTime();
         boolean chunkedAttempt = false;
-        if (isGroupConversation(userId) || media == null || media.localFile() == null || !Files.isRegularFile(media.localFile())) {
+        if (QqMessages.isGroup(userId) || media == null || media.localFile() == null || !Files.isRegularFile(media.localFile())) {
             return false;
         }
         try {
@@ -1159,7 +1158,7 @@ public class QqChannel implements ChatChannel {
                     turnReplyBudget.used(userId, replyToMsgId));
             return false;
         }
-        if (isGroupConversation(userId) || userId == null || userId.isBlank()
+        if (QqMessages.isGroup(userId) || userId == null || userId.isBlank()
                 || audioUrl == null || audioUrl.isBlank()) {
             return false;
         }
@@ -1170,7 +1169,7 @@ public class QqChannel implements ChatChannel {
             upload.put("file_type", 3);
             upload.put("url", audioUrl);
             upload.put("srv_send_msg", false);
-            String uploadBody = client.post().uri("/v2/users/{openid}/files", targetOpenid(userId))
+            String uploadBody = client.post().uri("/v2/users/{openid}/files", QqMessages.targetOpenid(userId))
                     .header("Authorization", "QQBot " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(upload.toString())
@@ -1192,7 +1191,7 @@ public class QqChannel implements ChatChannel {
                 body.put("msg_seq", messageSequence.next());
             }
             try {
-                client.post().uri(messagePath(userId), targetOpenid(userId))
+                client.post().uri(messagePath(userId), QqMessages.targetOpenid(userId))
                         .header("Authorization", "QQBot " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(body.toString())
@@ -1207,7 +1206,7 @@ public class QqChannel implements ChatChannel {
                 ObjectNode proactive = objectMapper.createObjectNode();
                 proactive.put("msg_type", 7);
                 proactive.putObject("media").put("file_info", fileInfo);
-                client.post().uri(messagePath(userId), targetOpenid(userId))
+                client.post().uri(messagePath(userId), QqMessages.targetOpenid(userId))
                         .header("Authorization", "QQBot " + accessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(proactive.toString())
@@ -1225,7 +1224,7 @@ public class QqChannel implements ChatChannel {
 
     @Override
     public boolean deleteMessage(String botId, String userId, String messageId) {
-        if (isGroupConversation(userId) || userId == null || userId.isBlank()
+        if (QqMessages.isGroup(userId) || userId == null || userId.isBlank()
                 || messageId == null || messageId.isBlank()) return false;
         try {
             ensureToken();
@@ -1284,7 +1283,7 @@ public class QqChannel implements ChatChannel {
 
     @Override
     public void progressLine(String botId, String userId, String replyToMsgId, String line) {
-        if (isGroupConversation(userId) || line == null || line.isBlank()
+        if (QqMessages.isGroup(userId) || line == null || line.isBlank()
                 || replyToMsgId == null || replyToMsgId.isBlank()) {
             return;
         }
@@ -1584,8 +1583,8 @@ public class QqChannel implements ChatChannel {
     // Sends a QQ message and optionally attaches the passive reply target.
     private String postMessage(String conversationId, String text, boolean markdown, String replyToMsgId) {
         RestClient client = buildRestClient(apiBase);
-        ObjectNode body = buildMessageBody(text, markdown, replyToMsgId);
-        return client.post().uri(messagePath(conversationId), targetOpenid(conversationId))
+        ObjectNode body = QqMessages.body(objectMapper, text, markdown, replyToMsgId, messageSequence::next);
+        return client.post().uri(messagePath(conversationId), QqMessages.targetOpenid(conversationId))
                 .header("Authorization", "QQBot " + accessToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body.toString())
@@ -1602,38 +1601,12 @@ public class QqChannel implements ChatChannel {
     }
 
     // Builds the request payload shared by passive and proactive QQ sends.
-    private ObjectNode buildMessageBody(String text, boolean markdown, String replyToMsgId) {
-        ObjectNode body = objectMapper.createObjectNode();
-        if (markdown) {
-            body.putObject("markdown").put("content", text);
-            body.put("msg_type", 2);
-        } else {
-            body.put("content", text);
-            body.put("msg_type", 0);
-        }
-        if (replyToMsgId != null && !replyToMsgId.isBlank()) {
-            body.put("msg_id", replyToMsgId);
-            body.put("msg_seq", messageSequence.next());
-        }
-        return body;
-    }
 
-    private String groupConversationId(String groupOpenid) {
-        return GROUP_CONVERSATION_PREFIX + groupOpenid;
-    }
 
-    private boolean isGroupConversation(String conversationId) {
-        return conversationId != null && conversationId.startsWith(GROUP_CONVERSATION_PREFIX);
-    }
 
-    private String targetOpenid(String conversationId) {
-        return isGroupConversation(conversationId)
-                ? conversationId.substring(GROUP_CONVERSATION_PREFIX.length())
-                : conversationId;
-    }
 
     private String messagePath(String conversationId) {
-        return isGroupConversation(conversationId)
+        return QqMessages.isGroup(conversationId)
                 ? "/v2/groups/{openid}/messages"
                 : "/v2/users/{openid}/messages";
     }
@@ -1663,7 +1636,7 @@ public class QqChannel implements ChatChannel {
 
     @Override
     public StreamReplySink createStreamSink(String userId, String msgId) {
-        if (isGroupConversation(userId)) {
+        if (QqMessages.isGroup(userId)) {
             return null;
         }
         pruneEphemeralCaches(System.currentTimeMillis());
