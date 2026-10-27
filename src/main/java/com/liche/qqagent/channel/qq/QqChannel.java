@@ -148,6 +148,38 @@ public class QqChannel implements ChatChannel {
     private volatile ScheduledExecutorService typingExecutor;
     /** userId -> 最近收到消息的时间戳（用于判断被动窗口） */
     /** 一次 HTTP 发送（2026-10-27 拆到 QqMessageSender） */
+    /** 发送编排（2026-10-27 拆到 QqOutbound；窗口/配额/HTTP/错误分类都已各自独立） */
+    private QqOutbound outbound;
+
+    private QqOutbound outbound() {
+        if (outbound == null) {
+            outbound = new QqOutbound(new QqOutbound.Deps(
+                    passiveWindowMillis,
+                    () -> pruneEphemeralCaches(System.currentTimeMillis()),
+                    this::ensureToken,
+                    replyWindow::lastMessageId,
+                    replyWindow::lastReceivedAt,
+                    replyWindow::receivedAt,
+                    (userId, text, markdown, replyToMsgId) -> postMessage(userId, text, markdown, replyToMsgId),
+                    this::rememberBotMessageId,
+                    this::proactiveQuotaAllows,
+                    ignored -> {
+                        if (proactiveQuota != null) {
+                            proactiveQuota.record();
+                        }
+                    },
+                    this::quotaSuffix,
+                    error -> {
+                        apiErrorCount.incrementAndGet();
+                        recordApiError(error);
+                    },
+                    sendResultUnknownCount::incrementAndGet,
+                    this::extractMessageId,
+                    (userId, messageId) -> deleteMessage(null, userId, messageId)));
+        }
+        return outbound;
+    }
+
     private QqMessageSender messageSender;
 
     private QqMessageSender messageSender() {
@@ -1429,28 +1461,7 @@ public class QqChannel implements ChatChannel {
     }
 
     private boolean sendPassive(String userId, String replyToMsgId, String text, boolean markdown) {
-        boolean withinWindow = false;
-        try {
-            pruneEphemeralCaches(System.currentTimeMillis());
-            ensureToken();
-            String targetMsgId = replyToMsgId == null || replyToMsgId.isBlank()
-                    ? replyWindow.lastMessageId(userId) : replyToMsgId;
-            Long recvAt = replyToMsgId == null || replyToMsgId.isBlank()
-                    ? replyWindow.lastReceivedAt(userId) : replyWindow.receivedAt(userId, replyToMsgId);
-            withinWindow = targetMsgId != null
-                    && recvAt != null
-                    && (System.currentTimeMillis() - recvAt) < passiveWindowMillis;
-            if (!withinWindow) {
-                return sendProactive(userId, text, markdown);
-            }
-            rememberBotMessageId(userId, postMessage(userId, text, markdown, targetMsgId));
-            log.info("[qq] send(passive) -> {} ({} chars)", userId, text == null ? 0 : text.length());
-            return true;
-        } catch (Exception e) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(e);
-            return handleSendFailure(userId, text, markdown, withinWindow, e);
-        }
+        return outbound().sendPassive(userId, replyToMsgId, text, markdown);
     }
 
     /**
@@ -1459,16 +1470,7 @@ public class QqChannel implements ChatChannel {
      * 而不是发出去等平台拒绝——那样只会得到一条看不懂的接口错误。
      */
     private boolean sendProactive(String userId, String text, boolean markdown) {
-        if (!proactiveQuotaAllows(userId)) {
-            return false;
-        }
-        ensureToken();
-        rememberBotMessageId(userId, postMessage(userId, text, markdown, null));
-        if (proactiveQuota != null) {
-            proactiveQuota.record();
-        }
-        log.info("[qq] send(proactive) -> {} ({} chars{})", userId, text == null ? 0 : text.length(), quotaSuffix());
-        return true;
+        return outbound().sendProactive(userId, text, markdown);
     }
 
     private boolean proactiveQuotaAllows(String userId) {
@@ -1498,27 +1500,7 @@ public class QqChannel implements ChatChannel {
      * </ul>
      */
     private boolean handleSendFailure(String userId, String text, boolean markdown, boolean wasPassive, Exception cause) {
-        String orphanMessageId = extractMessageId(cause);
-        if (!orphanMessageId.isBlank()) {
-            deleteMessage(null, userId, orphanMessageId);
-        } else if (!isDefiniteRejection(cause) && !neverReachedServer(cause)) {
-            sendResultUnknownCount.incrementAndGet();
-            log.warn("[qq] {}发送结果未知（{}），不再重发以免重复 user={}{}",
-                    wasPassive ? "被动" : "主动", cause.getClass().getSimpleName(), userId, quotaSuffix());
-            return wasPassive;
-        }
-        String reason = !orphanMessageId.isBlank() ? "响应里带消息 id，已撤回"
-                : isDefiniteRejection(cause) ? "服务端明确拒收" : "连接未建立，肯定没送达";
-        log.warn("[qq] {}发送失败（{}）user={}: {} → 重发一次主动消息{}", wasPassive ? "被动" : "主动", reason,
-                userId, cause.getMessage(), quotaSuffix());
-        try {
-            return sendProactive(userId, text, markdown);
-        } catch (Exception retryFailure) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(retryFailure);
-            log.warn("[qq] 重发失败 user={}: {}", userId, retryFailure.getMessage());
-            return false;
-        }
+        return outbound().handleSendFailure(userId, text, markdown, wasPassive, cause);
     }
 
     /** 服务端明确拒收（4xx）＝ 这条消息没有被受理，重发不会产生重复 */
