@@ -277,31 +277,7 @@ public class MemoryBackupJob {
 
     /** 重写压缩包里的一个条目：其余条目原样搬运，只有目标条目换成新内容 */
     private void rewriteArchiveEntry(Path archive, String entryName, Path replacement) throws IOException {
-        Path temporary = Files.createTempFile(backupDir, ".backup-", ".zip.tmp");
-        try {
-            try (ZipFile zip = new ZipFile(archive.toFile());
-                 ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(temporary))) {
-                var entries = zip.entries();
-                while (entries.hasMoreElements()) {
-                    ZipEntry entry = entries.nextElement();
-                    if (entry.isDirectory()) {
-                        continue;
-                    }
-                    out.putNextEntry(new ZipEntry(entry.getName()));
-                    if (entry.getName().equals(entryName)) {
-                        Files.copy(replacement, out);
-                    } else {
-                        try (InputStream input = zip.getInputStream(entry)) {
-                            input.transferTo(out);
-                        }
-                    }
-                    out.closeEntry();
-                }
-            }
-            move(temporary, archive, StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temporary);
-        }
+        BackupArchives.rewriteEntry(backupDir, archive, entryName, replacement);
     }
 
     private void backupUser(Path dayDir, String userId) throws IOException {

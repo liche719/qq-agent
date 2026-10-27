@@ -72,4 +72,40 @@ final class BackupArchives {
     static String name(Path archive) {
         return archive == null ? "" : archive.getFileName().toString();
     }
+
+    /**
+     * 用 replacement 覆盖 zip 里的某个条目，其余条目原样保留（2026-10-28 从 MemoryBackupJob 搬来）。
+     *
+     * <p>用于"忘掉记忆"时改写历史备份里的 `state.json`：**必须原地重写整个包**，
+     * 因为 zip 不能局部覆盖。仍然走"临时文件 + 原子替换"，中途失败不会把原包写坏。
+     *
+     * <p>注意：条目顺序会按原 zip 的遍历顺序保留；目录条目跳过（原本就没有）。
+     */
+    static void rewriteEntry(Path backupDir, Path archive, String entryName, Path replacement) throws IOException {
+        Path temporary = Files.createTempFile(backupDir, ".backup-", ".zip.tmp");
+        try {
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive.toFile());
+                 ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(temporary))) {
+                var entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (entry.isDirectory()) {
+                        continue;
+                    }
+                    out.putNextEntry(new ZipEntry(entry.getName()));
+                    if (entry.getName().equals(entryName)) {
+                        Files.copy(replacement, out);
+                    } else {
+                        try (java.io.InputStream input = zip.getInputStream(entry)) {
+                            input.transferTo(out);
+                        }
+                    }
+                    out.closeEntry();
+                }
+            }
+            Files.move(temporary, archive, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
 }

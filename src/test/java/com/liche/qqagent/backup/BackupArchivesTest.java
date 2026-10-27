@@ -60,3 +60,49 @@ class BackupArchivesTest {
                 "读不到目录要返回 null，调用方据此区分「没有备份」和「读不到」");
     }
 }
+
+/** 追加用例：改写 zip 里的单个条目（"忘掉记忆"要就地改历史备份）。 */
+class BackupRewriteTest {
+
+    @org.junit.jupiter.api.Test
+    void replacesOnlyTheTargetEntry(@org.junit.jupiter.api.io.TempDir java.nio.file.Path backupDir)
+            throws Exception {
+        java.nio.file.Path dayDir = backupDir.resolve("20261028");
+        java.nio.file.Files.createDirectories(dayDir.resolve("user-a"));
+        java.nio.file.Files.writeString(dayDir.resolve("user-a/state.json"), "{\"old\":true}");
+        java.nio.file.Files.writeString(dayDir.resolve("index.txt"), "keep-me");
+        java.nio.file.Path archive = backupDir.resolve("20261028.zip");
+        BackupArchives.zipDay(backupDir, dayDir, archive);
+
+        java.nio.file.Path replacement = backupDir.resolve("new-state.json");
+        java.nio.file.Files.writeString(replacement, "{\"new\":true}");
+        BackupArchives.rewriteEntry(backupDir, archive, "user-a/state.json", replacement);
+
+        try (var zip = new java.util.zip.ZipFile(archive.toFile())) {
+            assertEquals("{\"new\":true}",
+                    new String(zip.getInputStream(zip.getEntry("user-a/state.json")).readAllBytes()));
+            assertEquals("keep-me",
+                    new String(zip.getInputStream(zip.getEntry("index.txt")).readAllBytes()));
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void leavesTemporaryFilesBehind(@org.junit.jupiter.api.io.TempDir java.nio.file.Path backupDir)
+            throws Exception {
+        java.nio.file.Path dayDir = backupDir.resolve("20261028");
+        java.nio.file.Files.createDirectories(dayDir);
+        java.nio.file.Files.writeString(dayDir.resolve("a.txt"), "a");
+        java.nio.file.Path archive = backupDir.resolve("20261028.zip");
+        BackupArchives.zipDay(backupDir, dayDir, archive);
+        java.nio.file.Path replacement = backupDir.resolve("r.txt");
+        java.nio.file.Files.writeString(replacement, "r");
+
+        BackupArchives.rewriteEntry(backupDir, archive, "a.txt", replacement);
+
+        try (var listing = java.nio.file.Files.list(backupDir)) {
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    listing.noneMatch(p -> p.getFileName().toString().endsWith(".tmp")),
+                    "改写后不能留下临时文件");
+        }
+    }
+}
