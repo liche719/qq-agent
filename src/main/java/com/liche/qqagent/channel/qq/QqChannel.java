@@ -633,17 +633,12 @@ public class QqChannel implements ChatChannel {
                             .queryParam("limit", "50")
                             .build())
                     .header("Authorization", "QQBot " + accessToken).retrieve().body(String.class);
-            if (existing != null && existing.contains("qq-agent-c2c-v2")) {
+            if (existing != null && existing.contains(QqPanels.REMARK)) {
                 log.info("QQ C2C command panel already exists");
                 return;
             }
             // 2026-10-25 用户要求：指令面板只留三项（提醒并进定时任务，复盘/关怀整块删掉）
-            List<Map<String, Object>> items = List.of(
-                    Map.of("type", "command", "name", "定时任务", "desc", "查看提醒和定时任务"),
-                    Map.of("type", "command", "name", "设置助手人设", "desc", "调整说话方式"),
-                    Map.of("type", "command", "name", "帮助", "desc", "查看使用说明"));
-            Map<String, Object> panel = Map.of("items", items, "remark", "qq-agent-c2c-v2");
-            Map<String, Object> payload = Map.of("scope", "c2c", "target_type", "all", "panel", panel);
+            Map<String, Object> payload = QqPanels.commandPanelPayload();
             String payloadJson = objectMapper.writeValueAsString(payload);
             buildRestClient(apiBase).post().uri("/v2/panels")
                     .header("Authorization", "QQBot " + accessToken)
@@ -682,11 +677,7 @@ public class QqChannel implements ChatChannel {
         try {
             ensureToken();
             // 2026-10-25 用户要求：快捷菜单也只剩三项
-            List<Map<String, Object>> items = List.of(
-                    Map.of("type", "send_message", "name", "定时任务", "send_message", "查看提醒"),
-                    Map.of("type", "send_message", "name", "设人设", "send_message", "设置助手人设"),
-                    Map.of("type", "send_message", "name", "帮助", "send_message", "帮助"));
-            Map<String, Object> payload = Map.of("menu", Map.of("items", items));
+            Map<String, Object> payload = QqPanels.customMenuPayload();
             buildRestClient(apiBase).put().uri("/v2/menu")
                     .header("Authorization", "QQBot " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
