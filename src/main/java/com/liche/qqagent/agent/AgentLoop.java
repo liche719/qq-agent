@@ -797,9 +797,7 @@ public class AgentLoop {
 
     /** 报一句进度（同一轮同一个工具只报一次） */
     private void announce(ToolExecutionRequest request, Set<String> announcedTools) {
-        if (announcedTools != null && !SILENT_TOOLS.contains(request.name()) && announcedTools.add(request.name())) {
-            TurnProgress.hint(progressLabel(request));
-        }
+        ProgressNarrator.announce(request, announcedTools, toolDisplayNames);
     }
 
     /** 执行单个工具：异常一律转成失败结果，绝不让它逃出去 */
@@ -1237,25 +1235,7 @@ public class AgentLoop {
 
     private java.util.concurrent.ScheduledFuture<?> startProgressHeartbeat(ToolExecutionRequest request,
                                                                          ToolExecutionClass executionClass) {
-        if (executionClass != ToolExecutionClass.SLOW_EXTERNAL) {
-            return null;
-        }
-        java.util.function.Consumer<String> sender = TurnProgress.progressSender();
-        if (sender == null) {
-            return null;
-        }
-        String display = toolDisplayNames.getOrDefault(request.name(), request.name());
-        java.util.concurrent.atomic.AtomicInteger beats = new java.util.concurrent.atomic.AtomicInteger();
-        return HEARTBEAT.scheduleAtFixedRate(() -> {
-            if (beats.incrementAndGet() > 3) {
-                return;
-            }
-            try {
-                sender.accept("还在" + display + "…");
-            } catch (RuntimeException ignored) {
-                // 进度是尽力而为，发不出去不能影响工具
-            }
-        }, 30, 30, java.util.concurrent.TimeUnit.SECONDS);
+        return ProgressNarrator.heartbeat(request, executionClass, toolDisplayNames);
     }
 
     private static int distinctTools(java.util.Set<String> succeeded,
@@ -1316,36 +1296,10 @@ public class AgentLoop {
     }
 
     private String progressLabel(ToolExecutionRequest request) {
-        String display = toolDisplayNames.getOrDefault(request.name(), request.name());
-        String detail = progressDetail(request.arguments());
-        return detail == null ? display : display + "：" + detail;
+        return ProgressNarrator.label(request, toolDisplayNames);
     }
 
-    private static final com.fasterxml.jackson.databind.ObjectMapper PROGRESS_JSON =
-            new com.fasterxml.jackson.databind.ObjectMapper();
 
-    private static String progressDetail(String arguments) {
-        if (arguments == null || arguments.isBlank()) {
-            return null;
-        }
-        try {
-            com.fasterxml.jackson.databind.JsonNode node = PROGRESS_JSON.readTree(arguments);
-            for (String field : new String[]{"title", "query", "bvid", "url", "text", "content", "keyword", "name"}) {
-                String value = node.path(field).asText("");
-                if (value.isBlank()) {
-                    continue;
-                }
-                String cleaned = value.replaceFirst("^https?://", "").replaceAll("\\s+", " ").trim();
-                if (cleaned.isEmpty()) {
-                    continue;
-                }
-                return cleaned.length() <= 24 ? cleaned : cleaned.substring(0, 24) + "…";
-            }
-        } catch (Exception ignored) {
-            // 参数不是 JSON 或结构不同：只显示工具名
-        }
-        return null;
-    }
 
     /**
      * 把注入进来的用户消息也记进对话记忆（2026-10-22）。
