@@ -323,3 +323,19 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 3. **配额记账正确**（"今日主动 1 条"——`QqQuotas.suffix` 也在工作）。
 
 **仍未验证的只剩被动分支**（带 `msg_id`、走窗口判定那条），它需要一条真实的用户消息。
+## 验证清单（2026-10-28 补全，以后改发送/回复都照这个走）
+
+**核心原则：能在生产自证的，不要等人配合。**
+
+| 想验证什么 | 怎么做 | 看什么 |
+|---|---|---|
+| 发送链路（主动） | `POST /api/admin/actions/alerts/test`（带 `X-Agent-Admin-Key`） | 日志 `[QqOutbound] [qq] send(proactive) … 今日主动 N 条` |
+| 发送链路（被动） | **必须**有真实用户消息 | 日志 `[QqOutbound] [qq] send(passive) …` |
+| 进度帧 | 发一句会调工具的话（如"搜一下今天天气"） | 日志 `工具进度（第 N 行）`，且**没有** `progress frame failed` |
+| 面板/菜单注册 | 重启容器（网关 READY 时自动跑） | 日志 `command panel already exists` / `custom menu configured` |
+| 工具是否健康 | `GET /api/admin/tools/stats?days=1` | 成功率、平均耗时；对比重构前基线 |
+| 反思是否触发 | `GET /api/admin/reflections/stats?days=N` | 只在"策略性失败"时才有记录，空是正常的 |
+| 回复长度 | `conversation_memory` 里 `role='assistant'` 的 `length(content)` 分位 | 看 **p90**，不看平均（长回复才是体感来源） |
+
+**部署后的 6 项常规验证**（`docs/rollback.md` 也有）：镜像 tag、`/api/site/info` 200、
+`Started QqAgentApplication`、`ERROR` 计数 0、`工具注册完成 21 个类 / 64 个工具`、统计接口能出数。
