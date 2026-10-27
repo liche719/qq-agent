@@ -208,3 +208,42 @@ QqChannel.postMessage(...)  →  QqMessageSender.post(...)   ← 唯一 HTTP 出
 **结论**：CI 里只跑精选的 **19 个测试类**（本次新增的 + 3 个历史稳定类），
 **不要**把 `mvn test` 全量当门禁——它会因为一批过期断言长期变红，红久了就没人看，门禁等于没有。
 真要把全量修绿，应当单独开一轮"清理过期测试"，而不是夹在重构里做。
+## 第 30 轮收尾（2026-10-27 22:40）
+
+**目标里的 10 步：完成 7 步半，剩 4 项，全部已写清做法与阻塞原因。**
+30 轮自动推进到此为止（目标上限），后续由人决定何时继续。
+
+### 数字
+
+| 指标 | 起点 | 现在 |
+|---|---|---|
+| `QqChannel` | 2036 行 | **1864 行** |
+| `AgentLoop` | 1523 行 | **1385 行** |
+| 新类 | — | **14 个** |
+| 测试类 | 3（CI） | **19（CI）** |
+| 生产 | 可用 | `3038be1`，`site=200`，3 小时 0 ERROR |
+
+### 完成清单（提交可单独 revert）
+
+```
+14b69c2 ToolRoundExecutor      e9c10db ProgressNarrator
+beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
+0f72c0e QqProgressSessions     fd15efa QqProgressFrames
+35d77b5 QqReplyWindow          12609b2 QqMessages
+7b5d9b8 QqMessageSender        3038be1 QqPanels
+1eaedfc→8d8cbc6 support/Texts（13/16 clip）
+6987c7b 修复"静默不回"（真实事故，pitfall 94）
+```
+
+### 剩余 4 项（按建议顺序）
+
+1. **6c 策略**：`sendPassive`/`sendProactive`/`handleSendFailure` 一次搬完 → 真发一条消息看 `[qq] send(passive)`；
+2. **7 剩余**：面板的 GET 查重 + POST/PUT；
+3. **8**：`AgentOrchestrator` → `ReplyComposer`（气泡/语音时序/来源附注）→ 真机看外观；
+4. **10**：`MemoryBackupJob` → `BackupWriter`/`BackupRestore`（涉及数据，单独一轮）。
+
+### 唯一未消除的风险
+
+**21:22 起零真实消息**，因此三处改动仍属"改完未验证"：
+① 静默不回修复；② 6a 被动/主动分支；③ 5b 进度帧。
+一条消息即可全部验证——这是继续动手前唯一必须先做的事。
