@@ -163,25 +163,7 @@ public class MemoryBackupJob {
 
     /** 当天目录打成压缩包；里面就是 user-&lt;hash&gt;/state.json 明文，解压即可读 */
     private void zipDay(Path dayDir, Path archive) throws IOException {
-        if (!Files.isDirectory(dayDir)) {
-            return;
-        }
-        Files.createDirectories(archive.getParent());
-        Path temporary = Files.createTempFile(backupDir, ".backup-", ".zip.tmp");
-        try {
-            try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(temporary));
-                 Stream<Path> walk = Files.walk(dayDir)) {
-                for (Path file : walk.filter(Files::isRegularFile).sorted().toList()) {
-                    String name = dayDir.relativize(file).toString().replace('\\', '/');
-                    out.putNextEntry(new ZipEntry(name));
-                    Files.copy(file, out);
-                    out.closeEntry();
-                }
-            }
-            move(temporary, archive, StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(temporary);
-        }
+        BackupArchives.zipDay(backupDir, dayDir, archive);
     }
 
     /** Redacts a forgotten memory from every existing local backup for the same user. */
@@ -249,15 +231,12 @@ public class MemoryBackupJob {
 
     /** 所有历史备份压缩包（backup/&lt;yyyyMMdd&gt;.zip）；列不出来时返回 null（调用方据此报"没做全"） */
     private List<Path> backupDayArchives() {
-        try (Stream<Path> paths = Files.list(backupDir)) {
-            return paths.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().matches("\\d{8}\\.zip"))
-                    .sorted(Comparator.comparing(Path::toString))
-                    .toList();
-        } catch (IOException exception) {
-            log.warn("列出历史备份失败 reason={}", exception.getClass().getSimpleName());
+        List<Path> archives = BackupArchives.dayArchives(backupDir);
+        if (archives == null) {
+            log.warn("列出历史备份失败（目录读不到）");
             return null;
         }
+        return archives;
     }
 
     /** 备份状态的改写逻辑（忘掉记忆 / 清理对话证据）都作用在一个普通文件上 */
