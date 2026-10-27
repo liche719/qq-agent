@@ -195,3 +195,16 @@ QqChannel.postMessage(...)  →  QqMessageSender.post(...)   ← 唯一 HTTP 出
 我加的"整条只有历史媒体标记就跳过"守卫，让用户发的消息**完全没有回复**（`replyChars=0`），
 而 `site=200`、64 工具、0 ERROR 全部正常。修法已上线（`6987c7b`）+ 记进 pitfalls 94。
 所以剩下的步骤做完后，**必须真发一条消息**，看 `[qq] send(passive)` 出现才算完。
+### 全套测试不能当门禁（2026-10-27 22:35 实测）
+
+`mvn test` 跑全量：**223 个用例，14 失败 + 1 错误**，全部是**历史遗留**（与本次整理无关）：
+
+| 失败类 | 现象 | 性质 |
+|---|---|---|
+| `SearchToolTest` | 期望上限 10，实际 6 | 配置早已改小，测试没跟着改 |
+| `MediaToolContextServiceTest` | 期望抛 `IllegalStateException`，实际正常返回 | 行为 10 月改过，测试过期 |
+| `WebFileToolTest` / `ReminderServiceTest` / `CommandRegistryTest` | 断言与现行行为不符 | 同上 |
+
+**结论**：CI 里只跑精选的 **19 个测试类**（本次新增的 + 3 个历史稳定类），
+**不要**把 `mvn test` 全量当门禁——它会因为一批过期断言长期变红，红久了就没人看，门禁等于没有。
+真要把全量修绿，应当单独开一轮"清理过期测试"，而不是夹在重构里做。
