@@ -180,6 +180,9 @@ agent:
   eval-enabled: ${AGENT_EVAL_ENABLED:false}
 
   # 工具结果清空（2026-10-26）：本轮内旧工具结果换占位符，和"历史压缩"是两个独立杠杆。
+  # 工具并行（2026-10-27 P1-3）：只有"只读 + FAST"的工具会和同批并行；有副作用的一律串行。
+  tool-parallel-size: ${AGENT_TOOL_PARALLEL_SIZE:3}
+  tool-parallel-timeout-seconds: ${AGENT_TOOL_PARALLEL_TIMEOUT_SECONDS:120}
   context-clearing-enabled: ${AGENT_CONTEXT_CLEARING_ENABLED:true}
   context-clearing-keep: ${AGENT_CONTEXT_CLEARING_KEEP:4}
   context-clearing-threshold-chars: ${AGENT_CONTEXT_CLEARING_THRESHOLD_CHARS:12000}

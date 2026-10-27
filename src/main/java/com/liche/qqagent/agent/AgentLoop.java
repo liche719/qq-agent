@@ -4,6 +4,7 @@ import com.liche.qqagent.tool.ToolRegistry;
 import com.liche.qqagent.tool.ToolSetTrimmer;
 import com.liche.qqagent.tool.ToolStatusService;
 import com.liche.qqagent.tool.ToolExecutionOutcome;
+import com.liche.qqagent.tool.ToolPolicySnapshot;
 import com.liche.qqagent.tool.ToolExecutionClass;
 import com.liche.qqagent.document.ExtractedDocument;
 import com.liche.qqagent.media.MediaToolContextService;
@@ -166,6 +167,11 @@ public class AgentLoop {
     /** 工具结果清空（2026-10-26 P1-4）：长任务里旧工具结果一直占上下文，压缩之外还要"清旧" */
     @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-enabled:true}")
     private boolean contextClearingEnabled = true;
+    /** 并行执行只读工具（2026-10-27 P1-3）：并发上限与单次等待上限 */
+    @org.springframework.beans.factory.annotation.Value("${agent.tool-parallel-size:3}")
+    private int toolParallelSize = 3;
+    @org.springframework.beans.factory.annotation.Value("${agent.tool-parallel-timeout-seconds:120}")
+    private long parallelTimeoutSeconds = 120;
     @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-keep:4}")
     private int contextClearingKeep = 4;
     @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-threshold-chars:12000}")
@@ -711,6 +717,155 @@ public class AgentLoop {
         return reply;
     }
 
+
+    /**
+     * 执行这一轮模型要调的工具（2026-10-27 P1-3 从流式回调里挪出来）。
+     *
+     * <p>原先是写在 {@code onCompleteResponse} 的回调线程里跑的：慢工具（B 站视频 68~83 秒）
+     * 会一直占着流式连接，而且 {@code for} 循环串行——三个互不依赖的搜索要排队。
+     * 现在放到主线程执行，并在这里按 {@code allowParallel} 决定串/并行（有副作用的一律串行）。
+     */
+    /** 并行执行的线程池：只用来跑"只读 + FAST"的工具，不碰有副作用的 */
+    private java.util.concurrent.ExecutorService toolParallelPool;
+
+    private java.util.concurrent.ExecutorService toolParallelPool() {
+        if (toolParallelPool == null) {
+            synchronized (this) {
+                if (toolParallelPool == null) {
+                    toolParallelPool = java.util.concurrent.Executors.newFixedThreadPool(
+                            Math.max(1, Math.min(4, toolParallelSize)),
+                            runnable -> {
+                                Thread thread = new Thread(runnable, "tool-parallel");
+                                thread.setDaemon(true);
+                                return thread;
+                            });
+                }
+            }
+        }
+        return toolParallelPool;
+    }
+
+    /** 这个工具能不能和别的工具同时跑（2026-10-27）：只读 + FAST 才并行，有副作用一律串行 */
+    private boolean parallelSafe(ToolExecutionRequest request) {
+        try {
+            ToolPolicySnapshot policy = toolRegistry.policy(request.name());
+            return policy != null && policy.allowParallel() && !policy.hasSideEffect()
+                    && !policy.destructive() && policy.executionClass() == ToolExecutionClass.FAST;
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    /**
+     * 执行这一轮模型要调的工具（2026-10-27 P1-3，从流式回调里挪出来）。
+     *
+     * <p>挪出来的原因：原先在 {@code onCompleteResponse} 回调线程里跑，慢工具（B 站视频 68~83 秒）
+     * 会把流式连接一直占住。现在放主线程跑，并按 {@code allowParallel} 把**连续的只读 FAST 工具**
+     * 并行执行；只要中间夹了一个有副作用的，就退回串行，保证副作用顺序不乱。
+     */
+    private void executeToolRequests(List<ToolExecutionRequest> requests, List<ChatMessage> messages, String userId,
+                                     Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
+                                     Map<String, ToolExecutionOutcome> toolResults,
+                                     TurnScope scope, Set<String> announcedTools) {
+        int index = 0;
+        while (index < requests.size()) {
+            int end = index;
+            while (end < requests.size() && parallelSafe(requests.get(end))) {
+                end++;
+            }
+            if (end - index > 1) {
+                // lambda 只能捕获 effectively-final 的变量，这里先把这一批固定下来
+                List<ToolExecutionRequest> batch = requests.subList(index, end);
+                runParallelBatch(batch, outcomes -> {
+                    for (int i = 0; i < batch.size(); i++) {
+                        recordOutcome(batch.get(i), outcomes.get(i), messages,
+                                successfulTools, failedTools, toolResults);
+                    }
+                }, userId, scope, announcedTools);
+                index = end;
+                continue;
+            }
+            // 单个工具（或有副作用）：串行
+            ToolExecutionRequest request = requests.get(index);
+            announce(request, announcedTools);
+            ToolExecutionOutcome outcome = executeOne(request, userId, scope);
+            recordOutcome(request, outcome, messages, successfulTools, failedTools, toolResults);
+            index++;
+        }
+    }
+
+    /** 并行跑一批只读工具；结果按原顺序回填 */
+    private void runParallelBatch(List<ToolExecutionRequest> batch,
+                                  java.util.function.Consumer<List<ToolExecutionOutcome>> consumer,
+                                  String userId, TurnScope scope, Set<String> announcedTools) {
+        for (ToolExecutionRequest request : batch) {
+            announce(request, announcedTools);
+        }
+        List<java.util.concurrent.Future<ToolExecutionOutcome>> futures = new java.util.ArrayList<>();
+        for (ToolExecutionRequest request : batch) {
+            futures.add(toolParallelPool().submit(() -> executeOne(request, userId, scope)));
+        }
+        List<ToolExecutionOutcome> outcomes = new java.util.ArrayList<>();
+        for (int i = 0; i < futures.size(); i++) {
+            try {
+                outcomes.add(futures.get(i).get(parallelTimeoutSeconds, TimeUnit.SECONDS));
+            } catch (Exception exception) {
+                log.warn("并行工具执行失败 name={}: {}", batch.get(i).name(), exception.getMessage());
+                outcomes.add(ToolExecutionOutcome.failure("并行执行失败：" + exception.getMessage(), 0));
+            }
+        }
+        log.info("并行执行 {} 个只读工具：{}", batch.size(),
+                batch.stream().map(ToolExecutionRequest::name).toList());
+        consumer.accept(outcomes);
+    }
+
+    /** 报一句进度（同一轮同一个工具只报一次） */
+    private void announce(ToolExecutionRequest request, Set<String> announcedTools) {
+        if (announcedTools != null && !SILENT_TOOLS.contains(request.name()) && announcedTools.add(request.name())) {
+            TurnProgress.hint(progressLabel(request));
+        }
+    }
+
+    /** 执行单个工具：异常一律转成失败结果，绝不让它逃出去 */
+    private ToolExecutionOutcome executeOne(ToolExecutionRequest request, String userId, TurnScope scope) {
+        ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
+        java.util.concurrent.ScheduledFuture<?> heartbeat = startProgressHeartbeat(request, executionClass);
+        try {
+            return toolRegistry.isProvidedBy(request.name(), scope)
+                    ? executeTool(request, userId)
+                    : ToolExecutionOutcome.failure("这个工具不在当前作用域里，换一个：" + request.name(), 0);
+        } catch (RuntimeException exception) {
+            log.warn("工具执行抛出异常，转为失败结果 name={} user={}: {}",
+                    request.name(), userId, exception.getMessage());
+            return ToolExecutionOutcome.failure("工具执行异常：" + exception.getMessage(), 0);
+        } finally {
+            if (heartbeat != null) {
+                heartbeat.cancel(false);
+            }
+        }
+    }
+
+    /** 记录结果：成功/失败分类、副作用状态未知提示、写回消息 */
+    private void recordOutcome(ToolExecutionRequest request, ToolExecutionOutcome raw,
+                               List<ChatMessage> messages, Set<String> successfulTools,
+                               Map<String, ToolExecutionOutcome> failedTools,
+                               Map<String, ToolExecutionOutcome> toolResults) {
+        ToolExecutionOutcome outcome = raw;
+        if (outcome.successful()) {
+            successfulTools.add(request.name());
+            failedTools.remove(request.name());
+            toolResults.put(request.name(), outcome);
+        } else {
+            successfulTools.remove(request.name());
+            failedTools.put(request.name(), outcome);
+            String note = sideEffectFailureNote(request.name(), outcome.failureReason());
+            if (!note.isEmpty()) {
+                outcome = ToolExecutionOutcome.failure(note + "｜原始错误：" + outcome.content(), outcome.attempts());
+            }
+        }
+        messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
+    }
+
     /**
      * 轮次/预算耗尽时的兜底开场白（2026-10-22 改）：原来只说"这次处理没有完成"，
      * 他既不知道卡在哪、也不知道是不是白等。现在带上**失败的那个工具和原因**，
@@ -764,6 +919,9 @@ public class AgentLoop {
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicReference<Boolean> hasTools = new AtomicReference<>(false);
+        // 2026-10-27（P1-3）：回调里**只收集请求**，工具执行挪到 latch.await 之后的主线程。
+        // 好处：慢工具不再占着流式连接；也为按 allowParallel 并行做准备。
+        List<ToolExecutionRequest> pendingRequests = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         final long traceStartedNanos = System.nanoTime();
         // 第一跳要规划（读意图、选工具），用 DIALOG_FIRST 那一档；后面几跳只是填参数/看结果/收尾。
@@ -804,52 +962,7 @@ public class AgentLoop {
                         messages.add(ai);
                         if (ai.hasToolExecutionRequests()) {
                             hasTools.set(true);
-                            for (ToolExecutionRequest request : ai.toolExecutionRequests()) {
-                                ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
-                                // 每个工具第一次跑时先报一句进度（2026-10-22 用户要求"每个工具都能看到说明"）；
-                                // 同一轮同一个工具只报一次，避免连续调用刷屏
-                                if (!SILENT_TOOLS.contains(request.name()) && announcedTools.add(request.name())) {
-                                    TurnProgress.hint(progressLabel(request));
-                                }
-                                ToolExecutionOutcome outcome;
-                                java.util.concurrent.ScheduledFuture<?> heartbeat =
-                                        startProgressHeartbeat(request, executionClass);
-                                try {
-                                    outcome = toolRegistry.isProvidedBy(request.name(), scope)
-                                            ? executeTool(request, userId)
-                                            : ToolExecutionOutcome.failure(
-                                                    "这个工具不在当前作用域里，换一个：" + request.name(), 0);
-                                } catch (RuntimeException exception) {
-                                    // 2026-10-25：工具抛异常原来会逃出回调 → latch 不计数 → 干等 120 秒。
-                                    // 现在一律转成失败结果交还给模型，它自己决定换方法还是收尾。
-                                    log.warn("工具执行抛出异常，转为失败结果 name={} user={}: {}",
-                                            request.name(), userId, exception.getMessage());
-                                    outcome = ToolExecutionOutcome.failure(
-                                            "工具执行异常：" + exception.getMessage(), 0);
-                                } finally {
-                                    if (heartbeat != null) {
-                                        heartbeat.cancel(false);
-                                    }
-                                }
-                                log.debug("工具策略 name={} class={} user={}", request.name(), executionClass, userId);
-                                if (outcome.successful()) {
-                                    successfulTools.add(request.name());
-                                    failedTools.remove(request.name());
-                                    toolResults.put(request.name(), outcome);
-                                } else {
-                                    successfulTools.remove(request.name());
-                                    failedTools.put(request.name(), outcome);
-                                    // 2026-10-27（P1-7）：有副作用的工具失败 = **状态未知**，不是"没执行"。
-                                    // 直接重试可能重复发评论/重复删除；让模型先查状态或问人。
-                                    String note = sideEffectFailureNote(request.name(), outcome.failureReason());
-                                    if (!note.isEmpty()) {
-                                        outcome = ToolExecutionOutcome.failure(
-                                                note + "｜原始错误：" + outcome.content(), outcome.attempts());
-                                    }
-                                }
-                                messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
-                            }
-                            addReadableMedia(messages);
+                            pendingRequests.addAll(ai.toolExecutionRequests());
                         }
                         latch.countDown();
                     }
@@ -884,6 +997,11 @@ public class AgentLoop {
         }
         // 关键：本轮若有工具调用（即使输出了过程文本），必须继续下一轮，
         // 让模型基于工具结果生成最终回复；工具轮的过程文本不应作为回复发送给用户
+        if (!pendingRequests.isEmpty()) {
+            executeToolRequests(pendingRequests, messages, userId, successfulTools, failedTools,
+                    toolResults, scope, announcedTools);
+            addReadableMedia(messages);
+        }
         if (Boolean.TRUE.equals(hasTools.get())) {
             // 把工具轮里的过程文本带出去：多步任务时模型会先写"计划：1)…"，反思要用它判断该不该重规划
             String withTools = acc.get().toString();
