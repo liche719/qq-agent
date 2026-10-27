@@ -138,3 +138,24 @@ QqChannel.postMessage(...)  →  QqMessageSender.post(...)   ← 唯一 HTTP 出
 
 验证提示：本地 simulator 不走真实发送通道，所以 6c 只能验"构建 + 启动"；
 **被动/主动两条分支要靠真实消息**：窗口内应出现 `[qq] send(passive)`，窗口外应出现 `[qq] send(proactive)`。
+### 第 9 步实际结果（2026-10-27 22:10）
+
+**16 份 `clip` → 13 份收敛 + 3 份刻意保留。** 分四批迁移，每批独立提交、独立测试：
+
+| 批 | 语义 | 文件 | 目标方法 |
+|---|---|---|---|
+| 1 | `substring(0,max-1)+…`（总长=max） | BiliCommentGuard / BilibiliActivity / ProactiveCheckinActivity | `Texts.clip` |
+| 1 | `substring(0,max)+…`（总长=max+1） | ImageGenClient / TtsClient / VideoUnderstandService | `Texts.clipWide` |
+| 2 | 先压平空白再裁 | AgentEvalService / PlanService / TaskReflectionService | `Texts.clipFlat` |
+| 2 | **保留 null** | BackgroundTaskTool | `Texts.clipOrNull` |
+| 3 | 先 trim 再裁 | BiliCommentTool | `Texts.clipTrimmed` |
+| 3 | null→""、`substring(0,max)+…` | DrawPictureTool / DiscoverToolsTool | `clipWide` / `clipFlat` |
+
+**刻意保留的 3 个**（并写明原因，避免以后有人"顺手统一"）：
+
+- `BilibiliTool`：同样是压平后裁，但**没有 null 检查**（传 null 会 NPE）。迁过去会顺带改行为，按"只搬不改"原则不动。
+- `TurnTraceStore`：固定 `MAX_PREVIEW`，是内部跟踪专用，语义独特。
+- `LlmHealthState`：固定 160 字、**只替换换行符不压平连续空白**，是刻意的（健康详情要保留缩进感）。
+
+**过程中被测试抓到的真错误**：`clipFlat` 的正则写成 `"\s+"`（少一层转义）→ Java 当普通字符 `s` 匹配 →
+压平完全失效。是"多行原文应压成一行"那条用例抓出来的，修复后 6 个用例全绿。
