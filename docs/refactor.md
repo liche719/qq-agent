@@ -289,7 +289,7 @@ beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
 | 5b | `QqProgressFrames` | ✅ | 生产日志 `工具进度（第 1 行）` + 0 次 frame failed |
 | 6a | `QqReplyWindow` | ✅ | 生产日志 `send(passive)` 正常 |
 | 6b | `QqMessages` | ✅ | 单测 3 例（msg_seq / 群私聊端点） |
-| 6c | `QqOutbound` + `QqMessageSender` | 🟡 **代码就绪，待真实消息** | 单测 5 例（含"读超时不重发"） |
+| 6c | `QqOutbound` + `QqMessageSender` | 🟡 **主动路径已生产验证；被动路径待一条真实消息** | 单测 5 例 + 生产日志 `[QqOutbound] send(proactive) ... 今日主动 1 条` |
 | 7 | `QqPanels` + `QqPanelSetup` | ✅ | 生产日志 `command panel already exists` / `custom menu configured` |
 | 8 | `ReplySources` | ✅ | 单测 4 例（绝不误裁正文引用） |
 | 8(余) | `flushDeferredVoice` / 交付失败标记 | ⛔ **判定不拆** | 各十几行、无逻辑密度，且依赖 `VoiceOutbox` 静态状态；拆了风险大于收益 |
@@ -301,3 +301,25 @@ beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
 
 **唯一未闭环**：6c 的真实消息验证。部署后连续多轮 `recv=0 / send(passive)=0`，
 没有流量就无从确认；代码与单测都已就绪。
+### 6c 的生产验证（2026-10-28 01:24，不需要用户发消息）
+
+用运维告警的测试接口触发了一次真实发送：
+
+```bash
+curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Admin-Key: $KEY"
+{"accepted":true,"message":"测试告警已发送"}
+```
+
+生产日志：
+
+```
+01:24:46.388 INFO [QqOutbound] [qq] send(proactive) -> 9C81… (40 chars，今日主动 1 条)
+01:24:46.397 INFO [AlertNotifier] 已推送运维告警：【运维告警】测试消息…
+```
+
+**这证明了三件事**：
+1. `QqOutbound` 这个新类**真的在生产路径上**（日志类名），不是"写完没接上"；
+2. 主动发送链路通（消息实际送达）；
+3. **配额记账正确**（"今日主动 1 条"——`QqQuotas.suffix` 也在工作）。
+
+**仍未验证的只剩被动分支**（带 `msg_id`、走窗口判定那条），它需要一条真实的用户消息。
