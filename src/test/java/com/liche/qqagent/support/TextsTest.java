@@ -65,3 +65,25 @@ class TextsTrimmedTest {
                 com.liche.qqagent.support.Texts.clipTrimmed(null, 10));
     }
 }
+
+/** 追加用例：flatClip（压平 + 总长=max），对应原来 self/ 包两份逐字相同的 brief。 */
+class TextsFlatClipTest {
+
+    @org.junit.jupiter.api.Test
+    void flattensThenCapsAtMax() {
+        org.junit.jupiter.api.Assertions.assertEquals("甲 乙 丙",
+                com.liche.qqagent.support.Texts.flatClip("甲\n\n乙\t丙", 200));
+        // 200 上限时总长仍是 200（不是 201）
+        String longText = "字".repeat(500);
+        org.junit.jupiter.api.Assertions.assertEquals(200,
+                com.liche.qqagent.support.Texts.flatClip(longText, 200).length());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                com.liche.qqagent.support.Texts.flatClip(longText, 200).endsWith("…"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void nullBecomesEmpty() {
+        org.junit.jupiter.api.Assertions.assertEquals("",
+                com.liche.qqagent.support.Texts.flatClip(null, 200));
+    }
+}

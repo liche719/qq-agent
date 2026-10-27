@@ -95,4 +95,18 @@ public final class Texts {
         }
         return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(1, max - 1)) + "…";
     }
+
+    /**
+     * 压平空白后裁到 max（**总长正好 max**）。
+     *
+     * <p>对应原来 `self/` 包里两份逐字相同的 `brief`：`flat = replaceAll("\s+"," ").trim()`，
+     * 超长取 `substring(0, max-1) + "…"`。用于"给面板看的一行摘要"。
+     */
+    public static String flatClip(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replaceAll("\s+", " ").trim();
+        return clip(flat, max);
+    }
 }

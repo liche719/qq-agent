@@ -257,11 +257,7 @@ public class BilibiliActivity implements SelfActivity {
     }
 
     private static String brief(String reply) {
-        if (reply == null) {
-            return "";
-        }
-        String flat = reply.replaceAll("\\s+", " ").trim();
-        return flat.length() <= 200 ? flat : flat.substring(0, 199) + "…";
+        return com.liche.qqagent.support.Texts.flatClip(reply, 200);
     }
 
     private static String clip(String text, int max) {
