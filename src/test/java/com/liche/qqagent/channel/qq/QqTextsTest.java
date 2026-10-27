@@ -70,3 +70,23 @@ class QqTextsSplitTest {
         org.junit.jupiter.api.Assertions.assertEquals("[2/2]\nb", labeled.get(1));
     }
 }
+
+/** 上传文件类型判定（2026-10-27 从 QqChannel 抽出）：判错会让图片/语音发错通道。 */
+class QqTextsFileTypeTest {
+
+    @org.junit.jupiter.api.Test
+    void mapsKnownTypes() {
+        org.junit.jupiter.api.Assertions.assertEquals(1, QqTexts.fileType("image/png"));
+        org.junit.jupiter.api.Assertions.assertEquals(1, QqTexts.fileType("IMAGE/JPEG"));
+        org.junit.jupiter.api.Assertions.assertEquals(2, QqTexts.fileType("video/mp4"));
+        org.junit.jupiter.api.Assertions.assertEquals(3, QqTexts.fileType("audio/amr"));
+        org.junit.jupiter.api.Assertions.assertEquals(3, QqTexts.fileType("application/silk"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void fallsBackToOther() {
+        org.junit.jupiter.api.Assertions.assertEquals(4, QqTexts.fileType(null));
+        org.junit.jupiter.api.Assertions.assertEquals(4, QqTexts.fileType("application/pdf"));
+        org.junit.jupiter.api.Assertions.assertEquals(4, QqTexts.fileType("image/gif"));
+    }
+}

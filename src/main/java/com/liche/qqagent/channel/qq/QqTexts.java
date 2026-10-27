@@ -86,4 +86,17 @@ final class QqTexts {
         }
         return labeled;
     }
+
+    /**
+     * 上传文件时 QQ 的 file_type：1 图片 / 2 视频 / 3 语音 / 4 其它（2026-10-27 从 channel 搬来）。
+     *
+     * <p>判错会导致图片被当成"文件"发出去、或者语音发不出来，所以单独抽出来测。
+     */
+    static int fileType(String contentType) {
+        String normalized = contentType == null ? "" : contentType.toLowerCase();
+        if (normalized.startsWith("image/png") || normalized.startsWith("image/jpeg")) return 1;
+        if (normalized.startsWith("video/mp4")) return 2;
+        if (normalized.startsWith("audio/") || normalized.contains("silk")) return 3;
+        return 4;
+    }
 }

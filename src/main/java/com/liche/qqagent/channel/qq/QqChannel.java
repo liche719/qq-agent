@@ -1404,11 +1404,7 @@ public class QqChannel implements ChatChannel {
     }
 
     private int qqFileType(String contentType) {
-        String normalized = contentType == null ? "" : contentType.toLowerCase();
-        if (normalized.startsWith("image/png") || normalized.startsWith("image/jpeg")) return 1;
-        if (normalized.startsWith("video/mp4")) return 2;
-        if (normalized.startsWith("audio/") || normalized.contains("silk")) return 3;
-        return 4;
+        return QqTexts.fileType(contentType);
     }
 
     // bounded / parseBackoff 已挪到 QqNumbers（2026-10-27）
