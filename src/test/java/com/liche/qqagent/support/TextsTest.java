@@ -87,3 +87,35 @@ class TextsFlatClipTest {
                 com.liche.qqagent.support.Texts.flatClip(null, 200));
     }
 }
+
+/** 追加用例：异常摘要两种语义（2026-10-28 去重 4 处 shortReason）。 */
+class TextsErrorReasonTest {
+
+    @org.junit.jupiter.api.Test
+    void usesMessageWhenPresent() {
+        org.junit.jupiter.api.Assertions.assertEquals("超时",
+                com.liche.qqagent.support.Texts.errorReason(new RuntimeException("超时"), 60));
+    }
+
+    @org.junit.jupiter.api.Test
+    void fallsBackToTypeWhenMessageIsNull() {
+        org.junit.jupiter.api.Assertions.assertEquals("IllegalStateException",
+                com.liche.qqagent.support.Texts.errorReason(new IllegalStateException(), 60));
+    }
+
+    @org.junit.jupiter.api.Test
+    void blankMessageDiffersBetweenTheTwoVariants() {
+        // errorReason：空串消息仍用它（只是显示为空白）；errorReasonOrType：空串也回落成类型
+        org.junit.jupiter.api.Assertions.assertEquals("",
+                com.liche.qqagent.support.Texts.errorReason(new RuntimeException(""), 60));
+        org.junit.jupiter.api.Assertions.assertEquals("RuntimeException",
+                com.liche.qqagent.support.Texts.errorReasonOrType(new RuntimeException("  "), 60));
+    }
+
+    @org.junit.jupiter.api.Test
+    void clipsWide() {
+        String longMessage = "x".repeat(100);
+        org.junit.jupiter.api.Assertions.assertEquals(61,
+                com.liche.qqagent.support.Texts.errorReason(new RuntimeException(longMessage), 60).length());
+    }
+}

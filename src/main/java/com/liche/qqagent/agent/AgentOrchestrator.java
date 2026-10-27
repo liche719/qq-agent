@@ -751,8 +751,7 @@ public class AgentOrchestrator {
     }
 
     private String shortReason(Exception e) {
-        String text = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-        return text.length() <= 80 ? text : text.substring(0, 80) + "…";
+        return com.liche.qqagent.support.Texts.errorReason(e, 80);
     }
 
     /** 一个视频的读取结果：能喂给模型的帧图 + 给模型看的说明 + 是否算失败 */

@@ -470,8 +470,7 @@ public class BilibiliTool implements AgentToolProvider {
     }
 
     private static String shortReason(Exception e) {
-        String text = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-        return text.length() <= 60 ? text : text.substring(0, 60) + "…";
+        return com.liche.qqagent.support.Texts.errorReason(e, 60);
     }
 
     private BilibiliClient.Page pickPage(BilibiliClient.VideoInfo info, BilibiliClient.VideoRef ref) {

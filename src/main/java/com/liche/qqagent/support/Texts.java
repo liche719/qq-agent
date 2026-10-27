@@ -109,4 +109,35 @@ public final class Texts {
         String flat = text.replaceAll("\\s+", " ").trim();
         return clip(flat, max);
     }
+
+    /**
+     * 异常的一句话摘要（**消息为空就用异常类型**，再裁到 max）。
+     *
+     * <p>对应 `AgentOrchestrator`（80）与 `BilibiliTool`（60）里那两份同形实现。
+     * 判据是 `getMessage() == null`——注意不是 `isBlank()`，两者对"空串消息"的处理不同，
+     * 所以另有一个 {@link #errorReasonOrType}。
+     */
+    public static String errorReason(Throwable error, int max) {
+        if (error == null) {
+            return "";
+        }
+        String text = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        return clipWide(text, max);
+    }
+
+    /**
+     * 异常摘要（**消息为空或全空白**都用类型），对应 `BackgroundTaskTool` / `BiliCommentTool` 那两份。
+     *
+     * <p>与 {@link #errorReason} 的差别只在空串判定，别混用。
+     */
+    public static String errorReasonOrType(Throwable error, int max) {
+        if (error == null) {
+            return "";
+        }
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return clipWide(message, max);
+    }
 }

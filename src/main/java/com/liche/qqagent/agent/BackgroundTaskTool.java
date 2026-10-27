@@ -256,11 +256,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
     }
 
     private static String shortReason(Throwable error) {
-        String message = error.getMessage();
-        if (message == null || message.isBlank()) {
-            return error.getClass().getSimpleName();
-        }
-        return message.length() > 60 ? message.substring(0, 60) + "…" : message;
+        return com.liche.qqagent.support.Texts.errorReasonOrType(error, 60);
     }
     private void markRunning(Long id) {
         updateStatus(id, BackgroundTask.STATUS_RUNNING, row -> row.setStartedAt(java.time.LocalDateTime.now()));

@@ -273,10 +273,6 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
     }
 
     private static String shortReason(Exception exception) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank()) {
-            return exception.getClass().getSimpleName();
-        }
-        return message.length() > 60 ? message.substring(0, 60) + "…" : message;
+        return com.liche.qqagent.support.Texts.errorReasonOrType(exception, 60);
     }
 }
