@@ -159,3 +159,39 @@ QqChannel.postMessage(...)  →  QqMessageSender.post(...)   ← 唯一 HTTP 出
 
 **过程中被测试抓到的真错误**：`clipFlat` 的正则写成 `"\s+"`（少一层转义）→ Java 当普通字符 `s` 匹配 →
 压平完全失效。是"多行原文应压成一行"那条用例抓出来的，修复后 6 个用例全绿。
+## 交接说明（2026-10-27 22:25，写在第 28 轮收尾前）
+
+**已完成 7 个半步骤**，全部有独立提交、经过构建 + 部署 6 项验证、镜像打成 `stable`：
+
+| 步 | 产物 | 提交 |
+|---|---|---|
+| 1 | `ToolRoundExecutor`（并行/串行编排、顺序回填） | `14b69c2` |
+| 2 | `ProgressNarrator`（进度行、心跳、静默工具） | `e9c10db` |
+| 3 | `PlanCoordinator`（计划/反思判据与状态） | `beb6c41` |
+| 4 | `TurnMetrics`（每跳 token、首字/总延迟） | `ead9fb9` |
+| 5 | `QqProgressSessions`（12 行上限、dead 后仍攒） | `0f72c0e` |
+| 5b | `QqProgressFrames`（进度帧 HTTP） | `fd15efa` |
+| 6a | `QqReplyWindow`（被动窗口三张表 + 淘汰） | `35d77b5` |
+| 6b | `QqMessages`（消息体、群/私聊目标） | `12609b2` |
+| 6c(传输) | `QqMessageSender`（唯一 HTTP 出口） | `7b5d9b8` |
+| 7(半) | `QqPanels`（面板/菜单载荷） | `3038be1` |
+| 9 | `support/Texts`（13/16 个 clip 收敛） | `1eaedfc`→`8d8cbc6` |
+
+**行数**：`QqChannel` 2036 → 1864；`AgentLoop` 1523 → 1385。
+**测试**：18 个类，CI 每次部署前必跑，红即阻断。
+
+### 剩余步骤怎么继续（给别人/给未来的自己）
+
+| 步骤 | 做法 | 为什么还没做 |
+|---|---|---|
+| 6c 策略 | `sendPassive`/`sendProactive`/`handleSendFailure` **一次搬完**（依赖 replyWindow + quota + 错误分类，拆开会出双份状态，第 14 轮实测踩过） | 需真机验证被动/主动分支 |
+| 7 剩余 | 面板 GET-查重 → POST/PUT 那段 HTTP | 同上 |
+| 8 | `AgentOrchestrator` → `ReplyComposer`（气泡拆分/语音时序/来源附注） | 改的是回复外观，必须真机看 |
+| 10 | `MemoryBackupJob` → `BackupWriter`/`BackupRestore` | 涉及备份数据，风险最高，建议单独一轮 |
+
+### 一条硬提醒
+
+**"部署成功"不等于"功能验证"**。这一批里已经发生过一次真实事故：
+我加的"整条只有历史媒体标记就跳过"守卫，让用户发的消息**完全没有回复**（`replyChars=0`），
+而 `site=200`、64 工具、0 ERROR 全部正常。修法已上线（`6987c7b`）+ 记进 pitfalls 94。
+所以剩下的步骤做完后，**必须真发一条消息**，看 `[qq] send(passive)` 出现才算完。
