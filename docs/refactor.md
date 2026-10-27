@@ -374,3 +374,31 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 
 **过程记录**：第一版传 `Function<String, ChatChannel>`，测试里要 `new ChatChannel(){…}` 实现全部抽象方法，
 太别扭；改成最小 `VoiceSender` 后，生产侧一行 lambda 适配，测试也干净。
+## 去重审计结论（2026-10-28 02:20）
+
+对整个 `src/main/java` 做过一轮"同名方法 + 同形方法"审计，**能合的都合了，剩下的都是有意的差异**。
+这份清单的价值是：以后有人看到"怎么还有好几份类似代码"，先看这里，别直接统一。
+
+### 已合并
+
+| 组 | 数量 | 去处 |
+|---|---|---|
+| `clip(...)` | 13/16 | `support/Texts.clip` / `clipWide` / `clipFlat` / `clipTrimmed` / `clipOrNull` |
+| `bounded(...)` | 5/5 | `support/Numbers.bounded` |
+| `brief(...)` | 2/2 | `Texts.flatClip` |
+| `shortReason(...)` | 4/4 | `Texts.errorReason` / `errorReasonOrType`（两种空消息语义） |
+| `requireCurrentUser()` | **9/9** | `ToolStatusService.requireCurrentUserId()` |
+
+### **刻意不合并**（附原因，别再动）
+
+| 组 | 数量 | 为什么不能合 |
+|---|---|---|
+| `normalize(...)` | 7 | 语义各不相同：小写+去标点 / 小写+保留空白 / 原样返回 / trim+大写。合并就是改行为 |
+| `clip(...)` 残留 | 3 | `BilibiliTool` 缺 null 检查（合了会顺带改行为）；`TurnTraceStore` 自定义预览长度；`LlmHealthState` 只替换换行不压平 |
+| `randomBuvid()` | 2 | 两份实现不同（一份 `Random` 拼 32 位十六进制、一份用 `UUID` 截取）。这是 B 站协议参数，**不能凭"看着像"合并** |
+| `readable(bytes)` | 2 | 一份按 `1024` 进制输出 KB、一份从 MB 起算并带 Locale；输出格式不同，面板与自助页各自依赖 |
+| `trimTo(...)` | 2 | 一个先 `strip()` 再截断且**不加省略号**，另一个不 strip；对 null 的返回也不同 |
+| `trim(...)` | 3 | 一个 strip+省略号、一个替换换行、一个替换换行后截 200 |
+
+**判断标准**：先问"两份输入相同会不会给出相同输出"。答案是"不一定"就**不合**，
+哪怕名字一模一样——同名不同义比重复代码更危险。
