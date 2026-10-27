@@ -27,3 +27,27 @@ class TextsTest {
         assertEquals("…", Texts.clipWide("abc", 0));
     }
 }
+
+/** 追加用例：压平空白 与 保留 null 两种语义（2026-10-27 第二批迁移）。 */
+class TextsExtraTest {
+
+    @org.junit.jupiter.api.Test
+    void clipFlatCollapsesWhitespaceFirst() {
+        // 多行原文直接裁会把换行带进日志；这里必须先压成一行
+        org.junit.jupiter.api.Assertions.assertEquals("甲 乙 丙",
+                com.liche.qqagent.support.Texts.clipFlat("甲\n\n乙\t丙", 20));
+        org.junit.jupiter.api.Assertions.assertEquals("甲 乙…",
+                com.liche.qqagent.support.Texts.clipFlat("甲  乙  丙丁", 3));
+        org.junit.jupiter.api.Assertions.assertEquals("",
+                com.liche.qqagent.support.Texts.clipFlat(null, 20));
+    }
+
+    @org.junit.jupiter.api.Test
+    void clipOrNullKeepsNull() {
+        org.junit.jupiter.api.Assertions.assertNull(com.liche.qqagent.support.Texts.clipOrNull(null, 10));
+        org.junit.jupiter.api.Assertions.assertEquals("abc",
+                com.liche.qqagent.support.Texts.clipOrNull("abc", 10));
+        org.junit.jupiter.api.Assertions.assertEquals("abcd…",
+                com.liche.qqagent.support.Texts.clipOrNull("abcdefg", 4));
+    }
+}

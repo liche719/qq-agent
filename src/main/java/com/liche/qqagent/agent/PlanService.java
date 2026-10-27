@@ -117,10 +117,6 @@ public class PlanService {
     }
 
     private static String clip(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        String flat = text.replaceAll("\\s+", " ").trim();
-        return flat.length() <= max ? flat : flat.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipFlat(text, max);
     }
 }

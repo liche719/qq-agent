@@ -298,10 +298,7 @@ public class BackgroundTaskTool implements AgentToolProvider {
     }
 
     private static String clip(String value, int max) {
-        if (value == null) {
-            return null;
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "\u2026";
+        return com.liche.qqagent.support.Texts.clipOrNull(value, max);
     }
 
     /**

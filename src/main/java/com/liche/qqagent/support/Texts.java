@@ -45,4 +45,37 @@ public final class Texts {
         }
         return text.length() <= max ? text : text.substring(0, max) + "…";
     }
+
+    /**
+     * 先压平空白（连续空白→一个空格、去首尾）再裁，超长用 `…`（总长最多 max+1）。
+     *
+     * <p>对应原实现：`flat = text.replaceAll("\\s+", " ").trim(); flat.length() <= max ? flat : flat.substring(0, max) + "…"`。
+     * 用于"给模型/日志看的单行摘要"——多行原文直接裁会把换行带进去。
+     */
+    public static String clipFlat(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replaceAll("\\s+", " ").trim();
+        if (max <= 0) {
+            return "…";
+        }
+        return flat.length() <= max ? flat : flat.substring(0, max) + "…";
+    }
+
+    /**
+     * 裁剪但**保留 null**（不把 null 变成空串）。
+     *
+     * <p>对应原实现：`null -> null`。调用方用 null 表示"没有内容"，与空串语义不同，
+     * 所以单独一个方法，不能拿 {@link #clipWide} 顶替。
+     */
+    public static String clipOrNull(String text, int max) {
+        if (text == null) {
+            return null;
+        }
+        if (max <= 0) {
+            return "…";
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "…";
+    }
 }
