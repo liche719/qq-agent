@@ -60,3 +60,27 @@ class ProgressNarratorTest {
         assertFalse(announced.add(req.name()));
     }
 }
+
+/** 追加用例：心跳只在"慢外部工具"且当前真的有进度通道时才起。 */
+class ProgressNarratorHeartbeatTest {
+
+    @org.junit.jupiter.api.Test
+    void fastToolHasNoHeartbeat() {
+        org.junit.jupiter.api.Assertions.assertNull(
+                ProgressNarrator.heartbeat(initReq(), com.liche.qqagent.tool.ToolExecutionClass.FAST,
+                        java.util.Map.of()));
+    }
+
+    @org.junit.jupiter.api.Test
+    void slowToolWithoutProgressChannelHasNoHeartbeat() {
+        // 没有绑定通道时（比如后台任务、测试）不能起定时任务，否则就是空转
+        org.junit.jupiter.api.Assertions.assertNull(
+                ProgressNarrator.heartbeat(initReq(), com.liche.qqagent.tool.ToolExecutionClass.SLOW_EXTERNAL,
+                        java.util.Map.of()));
+    }
+
+    private static dev.langchain4j.agent.tool.ToolExecutionRequest initReq() {
+        return dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                .id("1").name("readBilibiliVideo").arguments("{}").build();
+    }
+}

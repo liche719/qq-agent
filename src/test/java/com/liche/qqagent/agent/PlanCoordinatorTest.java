@@ -52,3 +52,54 @@ class PlanCoordinatorTest {
         assertTrue(brief.length() <= 241);
     }
 }
+
+/** 追加用例：没有服务/没开规划时**什么都不做**（这些守卫以前没测）。 */
+class PlanCoordinatorGuardsTest {
+
+    @org.junit.jupiter.api.Test
+    void noPlanServiceMeansNoPlanning() {
+        PlanCoordinator coordinator = new PlanCoordinator(null, null,
+                new PlanCoordinator.PlanConfig("auto", 2), 1);
+        org.junit.jupiter.api.Assertions.assertNull(
+                coordinator.planIfNeeded(0, java.util.Set.of("a", "b"), java.util.Map.of(),
+                        java.util.Map.of(), java.util.List.of(), "u1"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void planningOffModeDoesNothing() {
+        // mode=off（或任何非 auto）时一次都不该规划
+        PlanCoordinator coordinator = new PlanCoordinator(null, null,
+                new PlanCoordinator.PlanConfig("off", 2), 1);
+        org.junit.jupiter.api.Assertions.assertNull(
+                coordinator.planIfNeeded(0, java.util.Set.of("a", "b"), java.util.Map.of(),
+                        java.util.Map.of(), java.util.List.of(), "u1"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void singleToolDoesNotTriggerPlanning() {
+        // 只用了 1 个工具 → 不值得多花一次规划调用
+        PlanCoordinator coordinator = new PlanCoordinator(null, null,
+                new PlanCoordinator.PlanConfig("auto", 2), 1);
+        org.junit.jupiter.api.Assertions.assertNull(
+                coordinator.planIfNeeded(0, java.util.Set.of("a"), java.util.Map.of(),
+                        java.util.Map.of(), java.util.List.of(), "u1"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void lateRoundDoesNotTriggerPlanning() {
+        PlanCoordinator coordinator = new PlanCoordinator(null, null,
+                new PlanCoordinator.PlanConfig("auto", 2), 1);
+        org.junit.jupiter.api.Assertions.assertNull(
+                coordinator.planIfNeeded(3, java.util.Set.of("a", "b"), java.util.Map.of(),
+                        java.util.Map.of(), java.util.List.of(), "u1"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void reflectIsSkippedWhenBudgetExhaustedOrServiceMissing() {
+        PlanCoordinator noService = new PlanCoordinator(null, null,
+                new PlanCoordinator.PlanConfig("auto", 2), 0);
+        org.junit.jupiter.api.Assertions.assertNull(noService.reflectIfNeeded(4, 8,
+                java.util.Set.of(), java.util.Map.of("x", com.liche.qqagent.tool.ToolExecutionOutcome.failure("t", 2)),
+                java.util.List.of(), "u1"));
+    }
+}
