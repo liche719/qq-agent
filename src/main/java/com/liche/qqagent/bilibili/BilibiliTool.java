@@ -282,15 +282,6 @@ public class BilibiliTool implements AgentToolProvider {
         }
     }
 
-    /**
-     * 找回「我以前看过什么」。
-     *
-     * <p>用户的原话：刷完了就过去了，想再回来找的时候找不到。所以给它一个按内容查的入口
-     * ——标题、摘要、它自己的看法三处都匹配。
-     */
-    @Tool(value = "翻你自己看过的 B 站视频。query 传关键词（比如「git 记忆」「听懂不会做」），留空就是看最近看过的。"
-            + "返回 BV 号、标题、你看的时候记的摘要和看法。想再看一遍就把 BV 号传给 readBilibiliVideo。")
-    @ToolExecutionPolicy(ToolExecutionClass.FAST)
     /** 按 bvid 去重，保留**最新**那条（列表是按 id 倒序来的，所以先见到的就是最新的） */
     private java.util.List<BiliViewLog> dedupByBvid(java.util.List<BiliViewLog> rows) {
         java.util.Map<String, BiliViewLog> seen = new java.util.LinkedHashMap<>();
@@ -301,6 +292,20 @@ public class BilibiliTool implements AgentToolProvider {
         return new java.util.ArrayList<>(seen.values());
     }
 
+    /**
+     * 找回「我以前看过什么」。
+     *
+     * <p>用户的原话：刷完了就过去了，想再回来找的时候找不到。所以给它一个按内容查的入口
+     * ——标题、摘要、它自己的看法三处都匹配。
+     *
+     * <p><b>2026-10-28 修正</b>：`@Tool` / `@ToolExecutionPolicy` 原来被错挂在下面的私有方法
+     * `dedupByBvid` 上（javadoc 在这里、注解在上面），而注册只扫 `getMethods()`（public），
+     * 于是这个工具**从来没被注册进工具集**——表现就是"模型说它不能回看自己看过的视频"。
+     * 注解挪回来之后，工具数从 64 变回 65。
+     */
+    @Tool(value = "翻你自己看过的 B 站视频。query 传关键词（比如「git 记忆」「听懂不会做」），留空就是看最近看过的。"
+            + "返回 BV 号、标题、你看的时候记的摘要和看法。想再看一遍就把 BV 号传给 readBilibiliVideo。")
+    @ToolExecutionPolicy(ToolExecutionClass.FAST)
     public ToolBusinessResult recallWatchedVideos(String query, Integer limit) {
         int size = Math.max(1, Math.min(20, limit == null ? 8 : limit));
         java.util.List<BiliViewLog> rows;
