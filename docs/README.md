@@ -22,6 +22,7 @@
 | 动记忆提取的触发/窗口/成本 | [`memory-extraction.md`](memory-extraction.md) |
 | 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
 | 动自主模块「它自己」 | [`self-layer-plan.md`](self-layer-plan.md) |
+| **代码整理清单（拆类/去重）** | [`refactor.md`](refactor.md) |
 | **回滚 / 每一步怎么退** | [`rollback.md`](rollback.md) |
 | 动部署 / CI / 密钥 | [`deploy-security.md`](deploy-security.md) + `pitfalls.md` 的「部署与 CI」 |
 | 动备份 | [`backup.md`](backup.md) |
