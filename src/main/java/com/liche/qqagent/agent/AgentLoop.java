@@ -457,7 +457,7 @@ public class AgentLoop {
      * <p>判据是**模型输出**的特征，不涉及用户说了什么：短、且含固定措辞。
      * 长回答里偶尔出现"无法回答"是正常表达，不触发。
      */
-    private static boolean looksLikeCannedRefusal(String text) {
+    static boolean looksLikeCannedRefusal(String text) {
         if (text == null) {
             return false;
         }
