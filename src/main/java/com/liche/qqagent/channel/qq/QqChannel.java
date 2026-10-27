@@ -206,40 +206,40 @@ public class QqChannel implements ChatChannel {
         this.clientSecret = clientSecret;
         this.apiBase = sandbox ? SANDBOX_API_BASE : API_BASE;
         this.groupEnabled = groupEnabled;
-        this.apiConnectTimeoutSeconds = bounded(apiConnectTimeoutSeconds, 1, 120,
+        this.apiConnectTimeoutSeconds = QqNumbers.bounded(apiConnectTimeoutSeconds, 1, 120,
                 5);
-        this.apiReadTimeoutSeconds = bounded(apiReadTimeoutSeconds, 1, 600, 15);
-        this.websocketConnectTimeoutSeconds = bounded(websocketConnectTimeoutSeconds, 1, 120,
+        this.apiReadTimeoutSeconds = QqNumbers.bounded(apiReadTimeoutSeconds, 1, 600, 15);
+        this.websocketConnectTimeoutSeconds = QqNumbers.bounded(websocketConnectTimeoutSeconds, 1, 120,
                 10);
-        this.passiveWindowMillis = bounded(passiveWindowMillis, 1_000, 3_600_000, 60 * 60 * 1000L);
-        this.typingKeepaliveMillis = bounded(typingKeepaliveMillis, 1_000, 60_000, 30_000L);
-        this.ephemeralCacheTtlMillis = bounded(ephemeralCacheTtlMillis, 1_000, 86_400_000,
+        this.passiveWindowMillis = QqNumbers.bounded(passiveWindowMillis, 1_000, 3_600_000, 60 * 60 * 1000L);
+        this.typingKeepaliveMillis = QqNumbers.bounded(typingKeepaliveMillis, 1_000, 60_000, 30_000L);
+        this.ephemeralCacheTtlMillis = QqNumbers.bounded(ephemeralCacheTtlMillis, 1_000, 86_400_000,
                 30 * 60 * 1000L);
-        this.streamStateTtlMillis = bounded(streamStateTtlMillis, 1_000, 86_400_000,
+        this.streamStateTtlMillis = QqNumbers.bounded(streamStateTtlMillis, 1_000, 86_400_000,
                 10 * 60 * 1000L);
-        this.maxConversationCacheEntries = bounded(maxConversationCacheEntries, 1, 100_000,
+        this.maxConversationCacheEntries = QqNumbers.bounded(maxConversationCacheEntries, 1, 100_000,
                 2_048);
-        this.maxMessageCacheEntries = bounded(maxMessageCacheEntries, 1, 200_000,
+        this.maxMessageCacheEntries = QqNumbers.bounded(maxMessageCacheEntries, 1, 200_000,
                 4_096);
         QqRuntimeProperties policies = runtimeProperties == null ? new QqRuntimeProperties() : runtimeProperties;
-        this.reconnectDelayMillis = bounded(policies.getReconnectDelayMs(), 250, 300_000,
+        this.reconnectDelayMillis = QqNumbers.bounded(policies.getReconnectDelayMs(), 250, 300_000,
                 QqRuntimeProperties.DEFAULT_RECONNECT_DELAY_MS);
-        this.reconnectBackoffMillis = parseBackoff(policies.getReconnectBackoffMs());
-        this.tokenDefaultExpireSeconds = bounded(policies.getTokenDefaultExpireSeconds(), 60, 86_400,
+        this.reconnectBackoffMillis = QqNumbers.parseBackoff(policies.getReconnectBackoffMs());
+        this.tokenDefaultExpireSeconds = QqNumbers.bounded(policies.getTokenDefaultExpireSeconds(), 60, 86_400,
                 QqRuntimeProperties.DEFAULT_TOKEN_EXPIRE_SECONDS);
-        this.tokenRefreshLeadMillis = bounded(policies.getTokenRefreshLeadMs(), 0, 3_600_000,
+        this.tokenRefreshLeadMillis = QqNumbers.bounded(policies.getTokenRefreshLeadMs(), 0, 3_600_000,
                 QqRuntimeProperties.DEFAULT_TOKEN_REFRESH_LEAD_MS);
-        this.defaultHeartbeatMillis = bounded(policies.getDefaultHeartbeatMs(), 1_000, 600_000,
+        this.defaultHeartbeatMillis = QqNumbers.bounded(policies.getDefaultHeartbeatMs(), 1_000, 600_000,
                 QqRuntimeProperties.DEFAULT_HEARTBEAT_MS);
         this.heartbeatIntervalMillis = this.defaultHeartbeatMillis;
-        this.inputNotifySeconds = bounded(policies.getInputNotifySeconds(), 1, 60,
+        this.inputNotifySeconds = QqNumbers.bounded(policies.getInputNotifySeconds(), 1, 60,
                 QqRuntimeProperties.DEFAULT_INPUT_NOTIFY_SECONDS);
-        this.markdownMaxChars = bounded(policies.getMarkdownMaxChars(), 256, 100_000,
+        this.markdownMaxChars = QqNumbers.bounded(policies.getMarkdownMaxChars(), 256, 100_000,
                 QqRuntimeProperties.DEFAULT_MARKDOWN_MAX_CHARS);
         this.userAgent = policies.getUserAgent() == null || policies.getUserAgent().isBlank()
                 ? QqRuntimeProperties.DEFAULT_USER_AGENT : policies.getUserAgent().trim();
         this.inboundRateLimiter = new QqInboundRateLimiter(
-                bounded(policies.getInboundRateLimitPerMinute(), 0, 100_000,
+                QqNumbers.bounded(policies.getInboundRateLimitPerMinute(), 0, 100_000,
                         QqRuntimeProperties.DEFAULT_INBOUND_RATE_LIMIT_PER_MINUTE),
                 INBOUND_RATE_WINDOW_MILLIS, this.maxConversationCacheEntries);
         this.proactiveQuota = proactiveQuota;
@@ -1411,37 +1411,7 @@ public class QqChannel implements ChatChannel {
         return 4;
     }
 
-    private static long bounded(long value, long minimum, long maximum, long fallback) {
-        return value < minimum || value > maximum ? fallback : value;
-    }
-
-    private static int bounded(int value, int minimum, int maximum, int fallback) {
-        return value < minimum || value > maximum ? fallback : value;
-    }
-
-    private static long[] parseBackoff(String value) {
-        if (value == null || value.isBlank()) {
-            return new long[]{2_000L, 5_000L, 10_000L, 30_000L};
-        }
-        java.util.ArrayList<Long> values = new java.util.ArrayList<>();
-        for (String part : value.split(",")) {
-            try {
-                long parsed = Long.parseLong(part.trim());
-                if (parsed >= 250 && parsed <= 600_000) {
-                    values.add(parsed);
-                }
-            } catch (NumberFormatException ignored) {
-            }
-        }
-        if (values.isEmpty()) {
-            return new long[]{2_000L, 5_000L, 10_000L, 30_000L};
-        }
-        long[] result = new long[values.size()];
-        for (int index = 0; index < values.size(); index++) {
-            result[index] = values.get(index);
-        }
-        return result;
-    }
+    // bounded / parseBackoff 已挪到 QqNumbers（2026-10-27）
 
     /**
      * 优先被动回复（带 msg_id，私聊 60 分钟窗口内有效）；失败则降级主动消息。
