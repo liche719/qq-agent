@@ -362,15 +362,11 @@ public class AgentOrchestrator {
      */
     /** 同步主动任务里补发暂存语音（不带 msg_id，走主动消息） */
     private void flushDeferredVoice(InboundMessage msg) {
-        String audioUrl = VoiceOutbox.drain();
-        if (audioUrl == null || msg == null) {
-            return;
-        }
-        ChatChannel channel = channelFor(msg.channel());
-        if (channel != null) {
-            boolean sent = channel.sendVoiceReplyFrom(msg.botId(), msg.userId(), null, audioUrl);
-            log.info("同步任务补发语音 user={} sent={}", msg.userId(), sent);
-        }
+        ReplyDelivery.flushDeferredVoice(VoiceOutbox::drain, channelName -> {
+            ChatChannel resolved = channelFor(channelName);
+            return resolved == null ? null
+                    : (botId, userId, audioUrl) -> resolved.sendVoiceReplyFrom(botId, userId, null, audioUrl);
+        }, msg, log::info);
     }
 
     private void resumePendingBatches(String userId) {
@@ -391,12 +387,17 @@ public class AgentOrchestrator {
     }
 
     private void markReplyDeliveryFailed(String taskId, InboundMessageBatch batch, String reason) {
-        if (taskStateStore != null) {
-            taskStateStore.fail(taskId, batch.userId(), batch.replyToMsgId(), reason);
-            taskStateStore.step(taskId, "REPLY_DELIVERY_FAILED");
-        }
-        log.error("agent_reply_delivery_failed task={} user={} replyTo={} reason={}",
-                taskId, batch.userId(), batch.replyToMsgId(), reason);
+        ReplyDelivery.markFailed(taskStateStore == null ? null : new ReplyDelivery.TaskMarks() {
+            @Override
+            public void fail(String id, String userId, String replyTo, String why) {
+                taskStateStore.fail(id, userId, replyTo, why);
+            }
+
+            @Override
+            public void step(String id, String step) {
+                taskStateStore.step(id, step);
+            }
+        }, taskId, batch.userId(), batch.replyToMsgId(), reason, log::error);
     }
 
     /** 同步入口：模拟器调试用，直接返回回复文本 */
