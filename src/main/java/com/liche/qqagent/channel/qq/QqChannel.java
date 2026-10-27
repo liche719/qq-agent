@@ -1290,26 +1290,8 @@ public class QqChannel implements ChatChannel {
      * <p>为什么不撤回：撤回不退还发送时已扣的额度，撤了只是把信息藏起来；
      * 留着当作"这一轮干了什么"的工作记录。
      */
-    private static final class ProgressSession {
-        final int msgSeq;
-        int index;
-        final StringBuilder text = new StringBuilder();
-        volatile String messageId;
-        volatile String replyToMsgId;
-        /** 平台已经拒绝过这一轮（msg_id 失效/流式已收尾）：别再重试，静默降级 */
-        volatile boolean dead;
-        /** 流式被平台拒了，改用普通消息发一次就够（2026-10-25） */
-        volatile boolean fallbackUsed;
-        /** 降级时已经发出去多少字符，收尾补发剩下的 */
-        volatile int fallbackSentChars;
-        volatile String botId;
-
-        ProgressSession(int msgSeq) {
-            this.msgSeq = msgSeq;
-        }
-    }
-
-    private final java.util.Map<String, ProgressSession> progressSessions = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 进度会话的状态与文本规则（2026-10-27 拆到 QqProgressSessions，HTTP 仍在本类） */
+    private final QqProgressSessions progressSessions = new QqProgressSessions();
 
     @Override
     public void progressLine(String botId, String userId, String replyToMsgId, String line) {
@@ -1317,41 +1299,24 @@ public class QqChannel implements ChatChannel {
                 || replyToMsgId == null || replyToMsgId.isBlank()) {
             return;
         }
-        ProgressSession existing = progressSessions.get(userId);
+        QqProgressSessions.Session existing = progressSessions.get(userId);
         if (existing == null
                 && !turnReplyBudget.tryAcquire(userId, replyToMsgId, TurnReplyBudget.Kind.PROGRESS)) {
             // 额度已经用完：宁可不显示进度，也要把最后一条留给最终回复
             log.info("[qq] 跳过进度条：这一轮额度已用完 user={}", userId);
             return;
         }
-        ProgressSession session = progressSessions.computeIfAbsent(userId,
-                ignored -> new ProgressSession(messageSequence.next()));
-        synchronized (session) {
-            if (session.dead) {
-                // 流式没了：继续把行攒起来，收尾时一次补发（2026-10-25）
-                if (session.text.length() > 0) {
-                    session.text.append('\n');
-                }
-                session.text.append("· ").append(line.trim());
-                return;
-            }
-            session.botId = botId;
-            session.replyToMsgId = replyToMsgId;
-            // 心跳会往同一行里补"还在…"，总行数封顶，别让进度条变成流水账
-            if (session.text.length() > 0 && session.text.toString().split("\n").length >= 12) {
-                return;
-            }
-            if (session.text.length() > 0) {
-                session.text.append('\n');
-            }
-            session.text.append("· ").append(line.trim());
+        QqProgressSessions.Session session = progressSessions.computeIfAbsent(userId, messageSequence::next);
+        session.botId = botId;
+        session.replyToMsgId = replyToMsgId;
+        if (progressSessions.appendLine(session, line)) {
             sendProgressFrame(userId, replyToMsgId, session, 1);
         }
     }
 
     @Override
     public void closeProgress(String botId, String userId, boolean recall) {
-        ProgressSession session = progressSessions.remove(userId);
+        QqProgressSessions.Session session = progressSessions.remove(userId);
         if (session == null) {
             return;
         }
@@ -1387,7 +1352,7 @@ public class QqChannel implements ChatChannel {
         }
     }
 
-    private void sendProgressFrame(String userId, String replyToMsgId, ProgressSession session, int inputState) {
+    private void sendProgressFrame(String userId, String replyToMsgId, QqProgressSessions.Session session, int inputState) {
         try {
             ensureToken();
             RestClient client = buildRestClient(apiBase);
@@ -1438,7 +1403,7 @@ public class QqChannel implements ChatChannel {
     @org.springframework.beans.factory.annotation.Value("${qq.progress-fallback-enabled:false}")
     private boolean progressFallbackEnabled = false;
 
-    private void sendProgressFallback(String userId, ProgressSession session) {
+    private void sendProgressFallback(String userId, QqProgressSessions.Session session) {
         if (!progressFallbackEnabled || session.fallbackUsed || session.text.length() == 0) {
             return;
         }
