@@ -756,25 +756,15 @@ public class AgentLoop {
      * 会一直占着流式连接，而且 {@code for} 循环串行——三个互不依赖的搜索要排队。
      * 现在放到主线程执行，并在这里按 {@code allowParallel} 决定串/并行（有副作用的一律串行）。
      */
-    /** 并行执行的线程池：只用来跑"只读 + FAST"的工具，不碰有副作用的 */
-    private java.util.concurrent.ExecutorService toolParallelPool;
-
-    private java.util.concurrent.ExecutorService toolParallelPool() {
-        if (toolParallelPool == null) {
-            synchronized (this) {
-                if (toolParallelPool == null) {
-                    toolParallelPool = java.util.concurrent.Executors.newFixedThreadPool(
-                            Math.max(1, Math.min(4, toolParallelSize)),
-                            runnable -> {
-                                Thread thread = new Thread(runnable, "tool-parallel");
-                                thread.setDaemon(true);
-                                return thread;
-                            });
-                }
-            }
+    /** 工具执行编排（2026-10-27 拆到 ToolRoundExecutor；这里只提供"能不能并行"和"怎么执行"） */
+    private ToolRoundExecutor toolRoundExecutor() {
+        if (toolRoundExecutor == null) {
+            toolRoundExecutor = new ToolRoundExecutor(toolParallelSize, parallelTimeoutSeconds);
         }
-        return toolParallelPool;
+        return toolRoundExecutor;
     }
+
+    private volatile ToolRoundExecutor toolRoundExecutor;
 
     /** 这个工具能不能和别的工具同时跑（2026-10-27）：只读 + FAST 才并行，有副作用一律串行 */
     private boolean parallelSafe(ToolExecutionRequest request) {
@@ -790,64 +780,19 @@ public class AgentLoop {
     /**
      * 执行这一轮模型要调的工具（2026-10-27 P1-3，从流式回调里挪出来）。
      *
-     * <p>挪出来的原因：原先在 {@code onCompleteResponse} 回调线程里跑，慢工具（B 站视频 68~83 秒）
-     * 会把流式连接一直占住。现在放主线程跑，并按 {@code allowParallel} 把**连续的只读 FAST 工具**
-     * 并行执行；只要中间夹了一个有副作用的，就退回串行，保证副作用顺序不乱。
+     * <p>编排交给 {@link ToolRoundExecutor}（并行分段、顺序回填），这里只提供三个动作：
+     * 报进度、执行单个工具、记录结果。
      */
     private void executeToolRequests(List<ToolExecutionRequest> requests, List<ChatMessage> messages, String userId,
                                      Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                      Map<String, ToolExecutionOutcome> toolResults,
                                      TurnScope scope, Set<String> announcedTools) {
-        int index = 0;
-        while (index < requests.size()) {
-            int end = index;
-            while (end < requests.size() && parallelSafe(requests.get(end))) {
-                end++;
-            }
-            if (end - index > 1) {
-                // lambda 只能捕获 effectively-final 的变量，这里先把这一批固定下来
-                List<ToolExecutionRequest> batch = requests.subList(index, end);
-                runParallelBatch(batch, outcomes -> {
-                    for (int i = 0; i < batch.size(); i++) {
-                        recordOutcome(batch.get(i), outcomes.get(i), messages,
-                                successfulTools, failedTools, toolResults);
-                    }
-                }, userId, scope, announcedTools);
-                index = end;
-                continue;
-            }
-            // 单个工具（或有副作用）：串行
-            ToolExecutionRequest request = requests.get(index);
-            announce(request, announcedTools);
-            ToolExecutionOutcome outcome = executeOne(request, userId, scope);
-            recordOutcome(request, outcome, messages, successfulTools, failedTools, toolResults);
-            index++;
-        }
-    }
-
-    /** 并行跑一批只读工具；结果按原顺序回填 */
-    private void runParallelBatch(List<ToolExecutionRequest> batch,
-                                  java.util.function.Consumer<List<ToolExecutionOutcome>> consumer,
-                                  String userId, TurnScope scope, Set<String> announcedTools) {
-        for (ToolExecutionRequest request : batch) {
-            announce(request, announcedTools);
-        }
-        List<java.util.concurrent.Future<ToolExecutionOutcome>> futures = new java.util.ArrayList<>();
-        for (ToolExecutionRequest request : batch) {
-            futures.add(toolParallelPool().submit(() -> executeOne(request, userId, scope)));
-        }
-        List<ToolExecutionOutcome> outcomes = new java.util.ArrayList<>();
-        for (int i = 0; i < futures.size(); i++) {
-            try {
-                outcomes.add(futures.get(i).get(parallelTimeoutSeconds, TimeUnit.SECONDS));
-            } catch (Exception exception) {
-                log.warn("并行工具执行失败 name={}: {}", batch.get(i).name(), exception.getMessage());
-                outcomes.add(ToolExecutionOutcome.failure("并行执行失败：" + exception.getMessage(), 0));
-            }
-        }
-        log.info("并行执行 {} 个只读工具：{}", batch.size(),
-                batch.stream().map(ToolExecutionRequest::name).toList());
-        consumer.accept(outcomes);
+        toolRoundExecutor().run(requests, new ToolRoundExecutor.Hooks(
+                this::parallelSafe,
+                request -> executeOne(request, userId, scope),
+                request -> announce(request, announcedTools),
+                (request, outcome) -> recordOutcome(request, outcome, messages,
+                        successfulTools, failedTools, toolResults)));
     }
 
     /** 报一句进度（同一轮同一个工具只报一次） */
