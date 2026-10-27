@@ -292,7 +292,7 @@ beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
 | 6c | `QqOutbound` + `QqMessageSender` | 🟡 **主动路径已生产验证；被动路径待一条真实消息** | 单测 5 例 + 生产日志 `[QqOutbound] send(proactive) ... 今日主动 1 条` |
 | 7 | `QqPanels` + `QqPanelSetup` | ✅ | 生产日志 `command panel already exists` / `custom menu configured` |
 | 8 | `ReplySources` | ✅ | 单测 4 例（绝不误裁正文引用） |
-| 8(余) | `flushDeferredVoice` / 交付失败标记 | ⛔ **判定不拆** | 各十几行、无逻辑密度，且依赖 `VoiceOutbox` 静态状态；拆了风险大于收益 |
+| 8(余) | `ReplyDelivery`（语音补发 / 交付失败标记） | ✅ | 5 例（通道解析不到时**不抛异常**、存储缺失仍记日志） |
 | 9 | `support/Texts` | 🟡 13/16 | 3 个刻意保留（各有独特语义，见上文） |
 | 10 | `BackupArchives` | ✅ | 单测 6 例（真打包、只替换目标条目、不留临时文件） |
 
@@ -361,3 +361,16 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 没有引入额外 bean 初始化开销。
 
 运行期指标（首字延迟、工具耗时）需要真实对话才能量，当前窗口内无流量，暂无数据。
+### 第 8 步最终做法（2026-10-28 01:37）
+
+原先我判断"`flushDeferredVoice` / 交付失败标记不值得拆"（各十几行、无逻辑密度），
+后来还是拆了，**理由变了**：不是它们复杂，而是它们**出错时最难发现**——
+
+- 语音不补发：用户只觉得"它没说话"，不会报错；
+- 状态不标失败：面板上任务永远显示"进行中"，运维看不出卡住。
+
+抽成 `ReplyDelivery` 后，用 `TaskMarks` / `VoiceSender` 两个最小接口隔离了 channel 与 Redis 依赖，
+5 个用例能覆盖"通道解析不到时不能抛异常""存储缺失仍要记日志"这类边界——这些以前只能靠真机撞。
+
+**过程记录**：第一版传 `Function<String, ChatChannel>`，测试里要 `new ChatChannel(){…}` 实现全部抽象方法，
+太别扭；改成最小 `VoiceSender` 后，生产侧一行 lambda 适配，测试也干净。
