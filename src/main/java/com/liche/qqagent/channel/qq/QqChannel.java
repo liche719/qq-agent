@@ -1531,8 +1531,7 @@ public class QqChannel implements ChatChannel {
 
     /** 服务端明确拒收（4xx）＝ 这条消息没有被受理，重发不会产生重复 */
     private boolean isDefiniteRejection(Throwable error) {
-        return error instanceof RestClientResponseException response
-                && response.getStatusCode().is4xxClientError();
+        return QqSendErrors.definiteRejection(error);
     }
 
     /**
@@ -1545,19 +1544,7 @@ public class QqChannel implements ChatChannel {
      * 读超时是 "Read timed out"。
      */
     private boolean neverReachedServer(Throwable error) {
-        Throwable cause = error;
-        for (int depth = 0; cause != null && depth < 5; depth++, cause = cause.getCause()) {
-            if (cause instanceof java.net.ConnectException
-                    || cause instanceof java.net.UnknownHostException
-                    || cause instanceof java.net.NoRouteToHostException) {
-                return true;
-            }
-            if (cause instanceof java.net.SocketTimeoutException && cause.getMessage() != null
-                    && cause.getMessage().toLowerCase(java.util.Locale.ROOT).contains("connect")) {
-                return true;
-            }
-        }
-        return false;
+        return QqSendErrors.neverReachedServer(error);
     }
 
     private String extractMessageId(Exception exception) {
