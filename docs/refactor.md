@@ -94,3 +94,31 @@
 **剩余步骤的共同难点**：都要给 channel 抽一个"HTTP 网关"接口（token/client/seq/被动优先/主动兜底），
 一次搬 200~300 行，而且**本地 simulator 不走真实发送通道**，只能靠部署后观察真实对话。
 建议在上下文充足时一次做完，不要在疲劳状态下开工。
+### 第 6 步的详细拆法（2026-10-27 实测后补写）
+
+**先说结论：这一步不能像前面几步那样"搬一半"。**
+
+我试过把被动回复窗口的三张表（`lastMsgIds`/`lastRecvAt`/`receivedAtByMessage`）抽成一个
+`QqReplyWindow` 类，只改"写入 + 读取"两处调用——**立刻发现这会制造"双份状态"**：
+
+| 调用点 | 如果只改一部分会怎样 |
+|---|---|
+| `rememberReceivedMessage` 写新类 | 旧表不再更新 |
+| `sendPassive` 读新类 | 暂时正常 |
+| 缓存淘汰 / `clearCaches` / `replyWindowContains` / 第 1696 行的到达时间查询 | **仍读旧表 → 永远空** |
+
+也就是说：**状态类一旦被两处读写，必须一次替换到底**，否则会出现"记得住但查不到"这种最难查的 bug。
+我当场回滚了这次尝试（`git checkout` 还原 + 删掉半成品类），仓库回到干净状态。
+
+**正确的拆法（一次提交完成，别中途停）：**
+
+1. 新建 `QqReplyWindow`，一次提供全套 API：`remember / receivedAt / lastMessageId / lastReceivedAt /
+   prune(now, ttl) / evictOverflow(maxConversations, maxMessages) / contains(conversationId) / clear()`；
+2. **同一提交内**改掉全部 8 处引用（含缓存淘汰、清空、`containsKey`、第 1696 行的查询）；
+3. 删掉三张旧表字段；
+4. 编译 + 单测（窗口过期、淘汰、清空）；
+5. 部署后**必须发一条真实消息**验证被动/主动判定（simulator 不走这条路径）。
+
+**再往后**：`QqMessageSender` 依赖窗口、配额、错误计数三块状态，
+所以顺序应是 `QqReplyWindow`（6a）→ `QqQuota`（6b，主动额度 + apiErrorCount/recordApiError）→
+`QqMessageSender`（6c，`sendPassive`/`sendProactive`/`postMessage`）。
