@@ -443,7 +443,7 @@ public class AgentLoop {
     }
 
     /** 整条消息是否只有"历史媒体"标记（没有真正的内容） */
-    private static boolean onlyHistoryMarkers(String text) {
+    static boolean onlyHistoryMarkers(String text) {
         if (text == null || text.isBlank()) {
             return true;
         }
