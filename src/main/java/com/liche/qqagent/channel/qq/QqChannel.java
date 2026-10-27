@@ -148,12 +148,11 @@ public class QqChannel implements ChatChannel {
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile ScheduledExecutorService typingExecutor;
     /** userId -> 最近收到消息的时间戳（用于判断被动窗口） */
-    private final ConcurrentMap<String, Long> lastRecvAt = new ConcurrentHashMap<>();
+    /** 被动回复窗口（2026-10-27 拆到 QqReplyWindow） */
+    private final QqReplyWindow replyWindow = new QqReplyWindow();
     /** userId -> 最近消息 id（被动回复用） */
-    private final ConcurrentMap<String, String> lastMsgIds = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> lastBotMsgIds = new ConcurrentHashMap<>();
     /** conversationId + msgId -> 接收时间，用于指定消息的被动回复窗口判断。 */
-    private final ConcurrentMap<String, Long> receivedAtByMessage = new ConcurrentHashMap<>();
     /** userId -> 输入状态续期任务 */
     private final ConcurrentMap<String, ScheduledFuture<?>> typingTasks = new ConcurrentHashMap<>();
     /** Only short-lived, per-user copies of received messages, used when QQ quote lookup is temporarily unavailable. */
@@ -870,18 +869,14 @@ public class QqChannel implements ChatChannel {
             return;
         }
         long now = System.currentTimeMillis();
-        lastMsgIds.put(conversationId, messageId);
-        lastRecvAt.put(conversationId, now);
-        receivedAtByMessage.put(replyCacheKey(conversationId, messageId), now);
+        replyWindow.remember(conversationId, messageId, now);
         pruneEphemeralCaches(now);
     }
 
     private void pruneEphemeralCaches(long now) {
         pendingPages.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
         inboundRateLimiter.prune(now);
-        lastRecvAt.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
-        lastMsgIds.keySet().removeIf(conversationId -> !lastRecvAt.containsKey(conversationId));
-        receivedAtByMessage.entrySet().removeIf(entry -> now - entry.getValue() >= ephemeralCacheTtlMillis);
+        replyWindow.prune(now, ephemeralCacheTtlMillis);
         receivedMessages.entrySet().removeIf(entry -> entry.getValue().expiresAt() <= now);
         typingTasks.entrySet().removeIf(entry -> entry.getValue().isCancelled() || entry.getValue().isDone());
         streamStates.entrySet().removeIf(entry -> now - entry.getValue().createdAtMillis >= streamStateTtlMillis);
@@ -891,30 +886,13 @@ public class QqChannel implements ChatChannel {
     }
 
     private void trimConversationCache() {
-        int overflow = lastRecvAt.size() - maxConversationCacheEntries;
-        if (overflow <= 0) {
-            return;
+        for (String conversationId : replyWindow.evictConversations(maxConversationCacheEntries)) {
+            stopTyping(conversationId);
         }
-        lastRecvAt.entrySet().stream()
-                .sorted(Comparator.comparingLong(Map.Entry::getValue))
-                .limit(overflow)
-                .forEach(entry -> {
-                    if (lastRecvAt.remove(entry.getKey(), entry.getValue())) {
-                        lastMsgIds.remove(entry.getKey());
-                        stopTyping(entry.getKey());
-                    }
-                });
     }
 
     private void trimMessageCache() {
-        int overflow = receivedAtByMessage.size() - maxMessageCacheEntries;
-        if (overflow <= 0) {
-            return;
-        }
-        receivedAtByMessage.entrySet().stream()
-                .sorted(Comparator.comparingLong(Map.Entry::getValue))
-                .limit(overflow)
-                .forEach(entry -> receivedAtByMessage.remove(entry.getKey(), entry.getValue()));
+        replyWindow.evictMessages(maxMessageCacheEntries);
     }
 
     private void trimQuoteCache() {
@@ -946,10 +924,6 @@ public class QqChannel implements ChatChannel {
         List<String> parts = new java.util.ArrayList<>();
         node.fields().forEachRemaining(entry -> parts.add(entry.getKey() + ":" + describeJsonShape(entry.getValue(), depth + 1)));
         return "{" + String.join(",", parts) + "}";
-    }
-
-    private String replyCacheKey(String conversationId, String messageId) {
-        return conversationId + ':' + messageId;
     }
 
     // ============ 「正在输入」状态（C2C 长回复体验） ============
@@ -1046,7 +1020,7 @@ public class QqChannel implements ChatChannel {
     @Override
     public String botIdForUser(String userId) {
         pruneEphemeralCaches(System.currentTimeMillis());
-        return lastMsgIds.containsKey(userId) ? "qq" : null;
+        return replyWindow.contains(userId) ? "qq" : null;
     }
 
     @Override
@@ -1457,9 +1431,10 @@ public class QqChannel implements ChatChannel {
         try {
             pruneEphemeralCaches(System.currentTimeMillis());
             ensureToken();
-            String targetMsgId = replyToMsgId == null || replyToMsgId.isBlank() ? lastMsgIds.get(userId) : replyToMsgId;
+            String targetMsgId = replyToMsgId == null || replyToMsgId.isBlank()
+                    ? replyWindow.lastMessageId(userId) : replyToMsgId;
             Long recvAt = replyToMsgId == null || replyToMsgId.isBlank()
-                    ? lastRecvAt.get(userId) : receivedAtByMessage.get(replyCacheKey(userId, replyToMsgId));
+                    ? replyWindow.lastReceivedAt(userId) : replyWindow.receivedAt(userId, replyToMsgId);
             withinWindow = targetMsgId != null
                     && recvAt != null
                     && (System.currentTimeMillis() - recvAt) < passiveWindowMillis;
@@ -1693,7 +1668,7 @@ public class QqChannel implements ChatChannel {
         }
         pruneEphemeralCaches(System.currentTimeMillis());
         String replyToMsgId = msgId;
-        Long recvAt = receivedAtByMessage.get(replyCacheKey(userId, msgId));
+        Long recvAt = replyWindow.receivedAt(userId, msgId);
         boolean withinWindow = replyToMsgId != null
                 && recvAt != null
                 && (System.currentTimeMillis() - recvAt) < passiveWindowMillis;
@@ -1910,9 +1885,7 @@ public class QqChannel implements ChatChannel {
         stopHeartbeat();
         if (typingExecutor != null) { typingExecutor.shutdownNow(); typingExecutor = null; }
         typingTasks.clear();
-        lastRecvAt.clear();
-        lastMsgIds.clear();
-        receivedAtByMessage.clear();
+        replyWindow.clear();
         receivedMessages.clear();
         streamStates.clear();
         inboundRateLimiter.clear();
