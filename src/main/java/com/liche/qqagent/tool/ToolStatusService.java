@@ -73,6 +73,20 @@ public class ToolStatusService {
         return context == null ? null : context.userId;
     }
 
+    /**
+     * 取当前用户，取不到就抛（2026-10-28 去重：原来 9 个工具类各写了一份同样实现）。
+     *
+     * <p>工具只能在这个上下文里跑；没有上下文说明调用链有问题（比如从调度器直接调了工具），
+     * 所以是异常而不是返回 null——早点炸比静默写错数据好。
+     */
+    public String requireCurrentUserId() {
+        String userId = currentUserId();
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalStateException("当前用户上下文不可用，无法执行该操作。");
+        }
+        return userId;
+    }
+
     public void push(String text) {
         StatusContext context = current.get();
         if (!progressEnabled || context == null || context.sent || channels.isEmpty()) {

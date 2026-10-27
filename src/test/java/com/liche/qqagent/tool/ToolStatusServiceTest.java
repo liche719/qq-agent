@@ -1,30 +1,27 @@
 package com.liche.qqagent.tool;
 
-import com.liche.qqagent.channel.ChatChannel;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
+/**
+ * 当前用户上下文（2026-10-28 去重：9 个工具类各写了一份 requireCurrentUser）。
+ * 这里只测"取不到就抛"这条——它是工具在错误上下文里跑时的唯一防线。
+ */
 class ToolStatusServiceTest {
 
     @Test
-    void sendsAtMostOneStatusAcrossNestedAgentScope() {
-        ChatChannel channel = mock(ChatChannel.class);
-        when(channel.channel()).thenReturn("qq");
-        ToolStatusService service = new ToolStatusService(List.of(channel));
+    void returnsNullOutsideATurn() {
+        ToolStatusService service = new ToolStatusService(java.util.List.of());
+        assertNull(service.currentUserId(), "没绑定上下文时 currentUserId 返回 null");
+    }
 
-        service.bind("u1", "message-1", "qq", "qq");
-        service.push("正在读取文件…");
-        service.bind("u1", "message-1", "qq", "qq");
-        service.push("正在搜索…");
-        service.unbind();
-        service.unbind();
-
-        verify(channel, times(1)).sendTextReplyFrom("qq", "u1", "message-1", "正在读取文件…");
+    @Test
+    void requireFailsOutsideATurn() {
+        ToolStatusService service = new ToolStatusService(java.util.List.of());
+        IllegalStateException error = assertThrows(IllegalStateException.class, service::requireCurrentUserId);
+        assertEquals("当前用户上下文不可用，无法执行该操作。", error.getMessage());
     }
 }

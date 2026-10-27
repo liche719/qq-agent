@@ -78,10 +78,6 @@ public class ReminderTool implements AgentToolProvider {
     }
 
     private String requireCurrentUser() {
-        String userId = statusService.currentUserId();
-        if (userId == null || userId.isBlank()) {
-            throw new IllegalStateException("当前用户上下文不存在");
-        }
-        return userId;
+        return statusService.requireCurrentUserId();
     }
 }
