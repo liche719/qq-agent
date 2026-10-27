@@ -247,3 +247,33 @@ beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
 **21:22 起零真实消息**，因此三处改动仍属"改完未验证"：
 ① 静默不回修复；② 6a 被动/主动分支；③ 5b 进度帧。
 一条消息即可全部验证——这是继续动手前唯一必须先做的事。
+## 6c 与第 7 步完成（2026-10-28 01:00）
+
+### 6c：发送编排（`QqOutbound`）
+
+`sendPassive` / `sendProactive` / `handleSendFailure` **一次性**搬进 `QqOutbound`（提交 `8aa2d86`）。
+依赖全部通过 `Deps` record 注入（窗口、HTTP、配额、错误分类），类里不碰任何 Spring bean。
+
+新增 `QqOutboundTest` 5 个用例，锁住最容易错的行为：
+
+| 用例 | 守的行为 |
+|---|---|
+| `sendsPassivelyInsideWindow` | 窗口内带 `msg_id` 发，且 prepare/ensureToken 真的被调用 |
+| `fallsBackToProactiveOutsideWindow` | 窗口外自动降级成主动消息 |
+| `connectFailureRetriesOnce` | 连接没建起来 → 重发一次（安全） |
+| `resultUnknownDoesNotResend` | **读超时 → 不重发**，且被动路径返回 true，避免上层再发一遍 |
+| `orphanMessageIdIsRecalledBeforeResend` | 响应带消息 id → 先撤回再重发 |
+
+### 第 7 步：面板/菜单注册（`QqPanelSetup`）
+
+提交 `1093e47`。**生产日志已验证**（启动即跑，不需要人工触发）：
+
+```
+01:00:13.938 [QqPanelSetup] QQ C2C command panel already exists   ← GET 查重生效，不重复建
+01:00:14.913 [QqPanelSetup] QQ C2C custom menu configured          ← PUT /v2/menu 成功
+```
+
+顺手删掉两处死代码：`commandPanelConfigured` 字段、`logPanelApiFailure` 方法。
+
+**仍欠的验证**：6c 部署后**还没有真实消息跑过**（`send(passive)` 计数 0）。
+这条一验，6c 就算闭环。
