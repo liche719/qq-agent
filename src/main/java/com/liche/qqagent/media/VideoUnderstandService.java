@@ -164,10 +164,7 @@ public class VideoUnderstandService {
     }
 
     private static String clip(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipWide(value, max);
     }
 
     /** 看视频的结果：成没成 / 它说了什么 / 花了多少 token / 用了多久 */

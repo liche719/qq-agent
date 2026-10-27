@@ -265,10 +265,7 @@ public class BilibiliActivity implements SelfActivity {
     }
 
     private static String clip(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        return text.length() <= max ? text : text.substring(0, max - 1) + "…";
+        return com.liche.qqagent.support.Texts.clip(text, max);
     }
 
     /**

@@ -101,10 +101,7 @@ public class ImageGenClient {
     }
 
     private static String clip(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipWide(value, max);
     }
 
     /** 生图结果：成没成 / 图片地址 / 平台侧 id / 耗时 */

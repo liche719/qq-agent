@@ -154,10 +154,7 @@ public class TtsClient {
     }
 
     private static String clip(String value, int max) {
-        if (value == null) {
-            return "";
-        }
-        return value.length() <= max ? value : value.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipWide(value, max);
     }
 
     /** 合成结果：成没成 / 音频地址 / 计费字符数 / 耗时 */
