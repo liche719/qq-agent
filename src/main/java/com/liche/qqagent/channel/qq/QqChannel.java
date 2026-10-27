@@ -1326,8 +1326,8 @@ public class QqChannel implements ChatChannel {
         synchronized (session) {
             if (session.dead) {
                 // 流式降级：把首帧之后累积的行补发一条（最多再一条，不刷屏）
-                if (session.fallbackUsed && session.text.length() > session.fallbackSentChars) {
-                    String rest = session.text.substring(session.fallbackSentChars).trim();
+                if (progressSessions.needsFlush(session)) {
+                    String rest = progressSessions.unflushedText(session);
                     if (!rest.isEmpty() && session.botId != null && session.replyToMsgId != null) {
                         try {
                             sendTextReplyResultFrom(session.botId, userId, session.replyToMsgId, rest);

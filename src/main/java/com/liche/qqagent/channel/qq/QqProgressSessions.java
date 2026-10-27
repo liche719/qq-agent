@@ -77,6 +77,28 @@ final class QqProgressSessions {
         }
     }
 
+
+    /** 降级之后还有没有"没补发出去的行"（2026-10-27 从 channel 搬来） */
+    boolean needsFlush(Session session) {
+        return session != null && session.dead && session.fallbackUsed
+                && session.text.length() > session.fallbackSentChars;
+    }
+
+    /** 还没补发的那段文本（首帧之后累积的） */
+    String unflushedText(Session session) {
+        if (session == null || session.text.length() <= session.fallbackSentChars) {
+            return "";
+        }
+        return session.text.substring(session.fallbackSentChars).trim();
+    }
+
+    /** 记下"已经补发到这里" */
+    void markFlushed(Session session) {
+        if (session != null) {
+            session.fallbackSentChars = session.text.length();
+        }
+    }
+
     private void appendRaw(Session session, String line) {
         if (session.text.length() > 0) {
             session.text.append('\n');
