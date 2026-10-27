@@ -111,11 +111,7 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
 
     /** 截断（按列宽留出省略号） */
     private static String clip(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        String trimmed = text.trim();
-        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(1, max - 1)) + "…";
+        return com.liche.qqagent.support.Texts.clipTrimmed(text, max);
     }
 
     /**

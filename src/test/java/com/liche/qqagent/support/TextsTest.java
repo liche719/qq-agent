@@ -51,3 +51,17 @@ class TextsExtraTest {
                 com.liche.qqagent.support.Texts.clipOrNull("abcdefg", 4));
     }
 }
+
+/** 追加用例：clipTrimmed（先 trim 再裁，总长正好 max）。 */
+class TextsTrimmedTest {
+
+    @org.junit.jupiter.api.Test
+    void trimsThenClips() {
+        org.junit.jupiter.api.Assertions.assertEquals("abc",
+                com.liche.qqagent.support.Texts.clipTrimmed("  abc\n", 10));
+        org.junit.jupiter.api.Assertions.assertEquals("abc…",
+                com.liche.qqagent.support.Texts.clipTrimmed("abcdefg", 4));
+        org.junit.jupiter.api.Assertions.assertEquals("",
+                com.liche.qqagent.support.Texts.clipTrimmed(null, 10));
+    }
+}

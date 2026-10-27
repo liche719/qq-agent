@@ -78,4 +78,21 @@ public final class Texts {
         }
         return text.length() <= max ? text : text.substring(0, max) + "…";
     }
+
+    /**
+     * 先 trim 再裁，超长时用 `…`（**总长正好 max**）。
+     *
+     * <p>对应原实现：`trimmed = text.trim(); length <= max ? trimmed : trimmed.substring(0, max-1) + "…"`。
+     * 与 {@link #clip} 的区别只是先去掉首尾空白——用户输入常带尾随换行。
+     */
+    public static String clipTrimmed(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        if (max <= 0) {
+            return "";
+        }
+        return trimmed.length() <= max ? trimmed : trimmed.substring(0, Math.max(1, max - 1)) + "…";
+    }
 }

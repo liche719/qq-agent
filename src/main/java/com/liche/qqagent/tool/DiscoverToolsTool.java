@@ -60,10 +60,6 @@ public class DiscoverToolsTool implements AgentToolProvider {
     }
 
     private static String clip(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        String oneLine = text.replaceAll("\\s+", " ").trim();
-        return oneLine.length() <= max ? oneLine : oneLine.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipFlat(text, max);
     }
 }

@@ -111,10 +111,7 @@ public class DrawPictureTool implements AgentToolProvider {
     }
 
     private static String clip(String text, int max) {
-        if (text == null) {
-            return "";
-        }
-        return text.length() <= max ? text : text.substring(0, max) + "…";
+        return com.liche.qqagent.support.Texts.clipWide(text, max);
     }
 
     /** 只有**自主画**才受额度限制；用户明确让它画的一律放行（2026-10-21 用户要求） */
