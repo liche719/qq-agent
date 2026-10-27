@@ -30,7 +30,7 @@
 - 包结构：agent / alert / backup / channel / command / config / controller / document / exception / log / media / memory / network / reminder / search / tool / user（`alert` 为 2026-09-12 新增的运维告警推送）
 - 已有测试在 `src/test/java`（历史遗留）。除非用户明确要求，不要新增或运行全套测试。
 - 代码分析报告：`docs/archive/code-analysis-2026-09-02/`（**2026-09-02 的旧分析，部分结论已过期**，已存档）。
-- **规模现状**：工具 **64 个 / 21 个类**（2026-10-22 生产启动日志 `21 个类 / 64 个工具`；新增 `DiscoverToolsTool`）、系统提示词 **34 条**（编号 1–34，**15 已并入 9、20 空号**；31 画图止损、32 别像汇报、33 控制长度、34 记忆只查不写；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
+- **规模现状**：工具 **65 个 / 21 个类**（2026-10-28 生产日志 `21 个类 / 65 个工具`；10-28 修好一个**从未注册**的工具 `recallWatchedVideos`，见 `docs/pitfalls.md` 第 96 条）、系统提示词 **34 条**（编号 1–34，**15 已并入 9、20 空号**；31 画图止损、32 别像汇报、33 控制长度、34 记忆只查不写；2026-10-22 压缩重写 4800→3750 字，之后又加到约 3950 字）。取用数据与取舍记录在 `docs/tools-and-prompt-inventory.md` §8。
 - 待办清单在 `docs/todo.md`；**动结构性改动前先给方案等确认**（§0）。
 
 ## 1.5 凭据索引（只写位置，不写明文；原本在第 8 节，挪到前面是因为文件超过 harness 的 64KB 读取上限、末尾会被截掉）
@@ -187,7 +187,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
 
 - **4 个容器**：`qq-agent` + `qq-agent-{postgres,redis,searxng}`，应用跑 `production`（`ddl-auto: validate`，冷启动约半分钟）。
 - **面板**：`https://liche.cloud/`（标准 443、浏览器绿锁）；IP 访问证书名不匹配，别用。
-- **规模**：工具 **64 个 / 21 个类**、系统提示词 **34 条**（31 画图止损、32 别像汇报、33 控制长度、34 记忆只查不写）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
+- **规模**：工具 **65 个 / 21 个类**、系统提示词 **34 条**（31 画图止损、32 别像汇报、33 控制长度、34 记忆只查不写）。取用记录见 `docs/tools-and-prompt-inventory.md` §8。
 - **自主模块「它自己」**（`self/`，**只属于机主那一个 openid**）：
   - **它有自己的一块地方**：`self-workspace/`（宿主机）→ `/app/self-workspace`（容器），
     5 个 `selfWork*` 工具，单文件 ≤16 MB、总量 ≤1 GB，路径出不了根目录、**不执行命令**。
@@ -208,7 +208,7 @@ curl -sk -H 'X-Agent-Admin-Key: <口令>' https://127.0.0.1/api/admin/overview  
     合成 msg_id 被拒时自动改投主动消息。
   - **轮内注入**：他干活时插话不另起一轮，`TurnSteering` 在每次调模型前塞进上下文（每轮≤2 次）；
     没赶上的轮末合并成下一轮。实测「停」1 秒后被注入并生效。
-  - **工具按需解锁**：默认只发核心 **34/64** 个，缺了用 `discoverTools` 搜（本轮生效）；
+  - **工具按需解锁**：默认只发核心 **35/65** 个，缺了用 `discoverTools` 搜（本轮生效）；
     每轮省约 2.8k token。开关 `AGENT_TOOLS_PROGRESSIVE=false`。
   - **搜索条数**：`count` 可选，默认 6、上限 15；原文摘录封顶 3000 字。
   - **文字不再等 2.5 秒**：合并窗口 300ms（带图仍 5 秒等齐）。

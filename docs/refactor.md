@@ -338,7 +338,7 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 | 回复长度 | `conversation_memory` 里 `role='assistant'` 的 `length(content)` 分位 | 看 **p90**，不看平均（长回复才是体感来源） |
 
 **部署后的 6 项常规验证**（`docs/rollback.md` 也有）：镜像 tag、`/api/site/info` 200、
-`Started QqAgentApplication`、`ERROR` 计数 0、`工具注册完成 21 个类 / 64 个工具`、统计接口能出数。
+`Started QqAgentApplication`、`ERROR` 计数 0、`工具注册完成 21 个类 / 65 个工具`、统计接口能出数。
 ### 6c 被动分支的"逐字等价"核查（2026-10-28，无需流量的静态证据）
 
 拿 `8aa2d86^` 的 `QqChannel.sendPassive/sendProactive` 与 `QqOutbound` 的实现做归一化 diff，
