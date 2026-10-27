@@ -103,6 +103,7 @@ readBilibiliVideo 拿不到字幕
 **唯一还要做的：拆类**（用户明确说"代码太乱了，肯定要做"）
 
 - 目标：`QqChannel` 2024 行、`AgentLoop` 1252 行（2026-10-26 统计）
+- 进度（2026-10-27）：① `AgentLoop` 已拆出 `ToolRoundExecutor`（工具执行编排，step 1/4）✅
 - 建议顺序：① `QqChannel` 拆出进度/额度（`QqStreamProgress`）、发送与 seq（`QqMessageSender`）、指令面板（`QqPanelConfig`）；
   ② `AgentLoop` 拆出工具执行（`ToolRoundExecutor`）、计划协调（`PlanCoordinator`）
 - 纪律：**每拆一步单独提交 + 跑一次评估基线（agent 18 条 / 记忆 19 条）**，分数不降才继续
