@@ -31,8 +31,12 @@ class ContextSummaryCacheTagTest {
 
     @Test
     void prefersTheFirstMessageId() {
-        assertEquals("m-1", service().cacheTag(List.of(
+        // 键 = 窗口起点 + 窗口长度（长度是为了"窗口变长时不要拿到过期摘要"）
+        assertEquals("m-1:2", service().cacheTag(List.of(
                 turn("a", List.of("m-1")), turn("b", List.of("m-2")))));
+        // 起点相同但窗口更长 → 必须换 key，否则会命中"少了后几条"的旧摘要
+        assertNotEquals(service().cacheTag(List.of(turn("a", List.of("m-1")))),
+                service().cacheTag(List.of(turn("a", List.of("m-1")), turn("b", List.of("m-2")))));
     }
 
     @Test

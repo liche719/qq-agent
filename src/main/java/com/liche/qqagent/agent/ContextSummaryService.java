@@ -120,12 +120,27 @@ public class ContextSummaryService {
     }
 
     /** 缓存标记：用最早那条消息 id；没有 id 就退化成文本哈希，保证"同一段对话只花一次" */
+    /**
+     * 摘要的缓存键（2026-10-28 修正）：**窗口起点 + 窗口长度**。
+     *
+     * <p>原来只用"窗口第一条消息的 id"。问题在于被截掉的那段是滑动窗口：
+     * 如果起点不变而又有新的轮次被截进来（窗口变长），key 不变 → 会拿到**过期摘要**，
+     * 模型于是丢掉最近被截掉的那几轮。加上长度后：
+     * <ul>
+     *   <li>窗口内容没变 → key 不变，缓存照常命中；</li>
+     *   <li>窗口变长/变短 → key 变化，强制重新摘要（正是需要的）。</li>
+     * </ul>
+     * 没有证据表明原来"一定"出过问题（要看真实窗口怎么滑动），但加上长度**在任何情况下都不会更差**。
+     */
     String cacheTag(List<ContextTurn> dropped) {
         ContextTurn first = dropped.get(0);
+        String start;
         if (first != null && first.sourceMessageIds() != null && !first.sourceMessageIds().isEmpty()) {
-            return first.sourceMessageIds().get(0);
+            start = first.sourceMessageIds().get(0);
+        } else {
+            start = Integer.toHexString(String.join("|",
+                    dropped.stream().map(ContextTurn::text).filter(t -> t != null).toList()).hashCode());
         }
-        return Integer.toHexString(String.join("|",
-                dropped.stream().map(ContextTurn::text).filter(t -> t != null).toList()).hashCode());
+        return start + ":" + dropped.size();
     }
 }
