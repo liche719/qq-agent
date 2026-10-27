@@ -1497,17 +1497,7 @@ public class QqChannel implements ChatChannel {
 
     /** 粗略判断文本是否含 Markdown 语法（标题/加粗/列表/引用/代码/分隔线） */
     private boolean looksLikeMarkdown(String text) {
-        if (text == null || text.isBlank()) return false;
-        if (text.length() > markdownMaxChars) return false;
-        String[] lines = text.split("\\r?\\n");
-        int md = 0;
-        for (String line : lines) {
-            String t = line.trim();
-            if (t.startsWith("#") || t.startsWith("-") || t.startsWith("*") || t.startsWith(">")) md++;
-            else if (t.matches("^\\d+\\.\\s.*")) md++;
-            else if (t.contains("**") || t.contains("`")) md++;
-        }
-        return md >= 2 || text.contains("> _调用工具：");
+        return QqTexts.markdownLike(text, markdownMaxChars);
     }
 
     private boolean sendPassive(String userId, String replyToMsgId, String text, boolean markdown) {
