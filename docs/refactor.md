@@ -8,6 +8,7 @@
 ### 1. 超大文件（>600 行）
 
 ```
+（2026-10-27 13:17 最新：AgentLoop 已在三步拆分后从 1523 → 1385 行）
 2036  channel/qq/QqChannel.java          ← 最乱：收发、面板、进度、额度、分页、引用解析全在一起
 1477  agent/AgentLoop.java               ← 对话循环 + 计划 + 反思 + 工具编排（已拆出两块）
 1331  memory/MemoryExtractor.java        ← 提示词拼装 + 解析 + 落库判定
@@ -45,7 +46,7 @@
 | 1 | 工具执行编排 | `AgentLoop` → `ToolRoundExecutor` | ✅ `14b69c2` |
 | 2 | 进度播报 | `AgentLoop` → `ProgressNarrator` | ✅ `e9c10db` |
 | 3 | 计划与反思注入 | `AgentLoop` → `PlanCoordinator`（状态：planned/planText/reflectionIds） | ✅ |
-| 4 | 延迟与埋点 | `AgentLoop` → `TurnMetrics`（首字/总时长/首跳 tokens） | ⬜ |
+| 4 | 延迟与埋点 | `AgentLoop` → `TurnMetrics`（首字/总时长/每跳 tokens） | ✅ |
 | 5 | 进度与额度 | `QqChannel` → `QqStreamProgress`（ProgressSession + TurnReplyBudget + 降级） | ⬜ |
 | 6 | 发送与序号 | `QqChannel` → `QqMessageSender`（msg_seq、长消息拆分、撤回、主动/被动） | ⬜ |
 | 7 | 指令面板 | `QqChannel` → `QqPanelConfigurator`（指令面板 + 快捷菜单） | ⬜ |
