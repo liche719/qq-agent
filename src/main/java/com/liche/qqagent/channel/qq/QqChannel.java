@@ -1293,6 +1293,21 @@ public class QqChannel implements ChatChannel {
     /** 进度会话的状态与文本规则（2026-10-27 拆到 QqProgressSessions，HTTP 仍在本类） */
     private final QqProgressSessions progressSessions = new QqProgressSessions();
 
+    /** 进度帧的 HTTP 发送（2026-10-27 拆到 QqProgressFrames；降级仍在本类决定） */
+    private QqProgressFrames progressFrames;
+
+    private QqProgressFrames progressFrames() {
+        if (progressFrames == null) {
+            progressFrames = new QqProgressFrames(new QqProgressFrames.Gateway(
+                    this::ensureToken,
+                    () -> accessToken,
+                    () -> apiBase,
+                    this::buildRestClient,
+                    () -> objectMapper));
+        }
+        return progressFrames;
+    }
+
     @Override
     public void progressLine(String botId, String userId, String replyToMsgId, String line) {
         if (isGroupConversation(userId) || line == null || line.isBlank()
@@ -1352,46 +1367,13 @@ public class QqChannel implements ChatChannel {
         }
     }
 
-    private void sendProgressFrame(String userId, String replyToMsgId, QqProgressSessions.Session session, int inputState) {
-        try {
-            ensureToken();
-            RestClient client = buildRestClient(apiBase);
-            ObjectNode body = objectMapper.createObjectNode();
-            body.put("input_mode", "replace");
-            body.put("input_state", inputState);
-            body.put("content_type", "markdown");
-            body.put("content_raw", session.text.toString());
-            if (replyToMsgId != null && !replyToMsgId.isBlank()) {
-                body.put("msg_id", replyToMsgId);
-            }
-            body.put("msg_seq", session.msgSeq);
-            body.put("index", session.index++);
-            if (session.messageId != null) {
-                body.put("stream_msg_id", session.messageId);
-            }
-            String response = client.post().uri("/v2/users/{openid}/stream_messages", userId)
-                    .header("Authorization", "QQBot " + accessToken)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body.toString())
-                    .retrieve().body(String.class);
-            if (session.messageId == null && response != null) {
-                String id = objectMapper.readTree(response).path("id").asText("");
-                if (!id.isBlank()) {
-                    session.messageId = id;
-                }
-            }
-        } catch (Exception exception) {
-            String message = exception.getMessage() == null ? "" : exception.getMessage();
-            if (message.contains("40034019") || message.contains("40034024")) {
-                // 流式已收尾 / msg_id 失效：流式这条路走不通了（沙箱环境常见）。
-                // 2026-10-25 修：不再静默丢进度，改成用**普通被动消息发一次**，至少让他看得见在干什么。
-                session.dead = true;
-                log.warn("[qq] progress stream rejected user={} reason={} -> 改用普通消息",
-                        userId, message.contains("40034024") ? "msg_id 失效" : "流式已收尾");
-                sendProgressFallback(userId, session);
-            } else {
-                log.warn("[qq] progress frame failed user={}: {}", userId, message);
-            }
+    private void sendProgressFrame(String userId, String replyToMsgId, QqProgressSessions.Session session,
+                                   int inputState) {
+        QqProgressFrames.Result result = progressFrames().send(userId, replyToMsgId, session, inputState);
+        if (result == QqProgressFrames.Result.REJECTED) {
+            // 流式这条路走不通了：用普通消息发一次，至少让他看得见在干什么
+            session.dead = true;
+            sendProgressFallback(userId, session);
         }
     }
 

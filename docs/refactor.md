@@ -48,7 +48,7 @@
 | 3 | 计划与反思注入 | `AgentLoop` → `PlanCoordinator`（状态：planned/planText/reflectionIds） | ✅ |
 | 4 | 延迟与埋点 | `AgentLoop` → `TurnMetrics`（首字/总时长/每跳 tokens） | ✅ |
 | 5 | 进度会话状态 | `QqChannel` → `QqProgressSessions`（会话/12 行上限/文本规则；HTTP 仍留 channel） | ✅ |
-| 5b | 进度发送与降级 | `QqChannel` → `QqStreamProgress`（帧发送 + 额度 + 降级补发） | ⬜ |
+| 5b | 进度帧发送 | `QqChannel` → `QqProgressFrames`（body/msg_seq/index/首次取 stream_msg_id；降级仍留 channel） | ✅ |
 | 6 | 发送与序号 | `QqChannel` → `QqMessageSender`（msg_seq、长消息拆分、撤回、主动/被动） | ⬜ |
 | 7 | 指令面板 | `QqChannel` → `QqPanelConfigurator`（指令面板 + 快捷菜单） | ⬜ |
 | 8 | 回复流水线 | `AgentOrchestrator` → `ReplyComposer`（气泡拆分 + 语音时序 + 来源附注） | ⬜ |
