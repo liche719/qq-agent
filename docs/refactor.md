@@ -72,3 +72,25 @@
 - **不重写记忆三层**（`memory` / `memory_fact` / `conversation_memory` 的边界是设计，不是乱）；
 - **不合并 `MemoryService` / `MemoryFactService`**：一个管中长期记忆、一个管事实层，合并会让"取代链"和"TTL"互相污染；
 - **不动 `self/` 包**（48 个类看着多，但都是小类、职责单一，属于正常分层）。
+## 进度快照（2026-10-27 18:05）
+
+| # | 内容 | 状态 | 提交 |
+|---|---|---|---|
+| 1 | `AgentLoop` → `ToolRoundExecutor` | ✅ | `14b69c2` |
+| 2 | `AgentLoop` → `ProgressNarrator` | ✅ | `e9c10db` |
+| 3 | `AgentLoop` → `PlanCoordinator` | ✅ | `beb6c41` |
+| 4 | `AgentLoop` → `TurnMetrics` | ✅ | `ead9fb9` |
+| 5 | `QqChannel` → `QqProgressSessions` | ✅ | `0f72c0e` |
+| 5b | `QqChannel` → `QqProgressFrames` | ✅（待真机流量验证） | `fd15efa` |
+| 6 | `QqChannel` → `QqMessageSender` | 🟡 纯逻辑已抽出（`QqTexts`/`QqNumbers`），**发送动作未搬** | `cf297ed` |
+| 7 | 指令面板 | ⬜ | — |
+| 8 | 回复流水线 | ⬜ | — |
+| 9 | 24 处 `clip` 收敛 | ⬜ | — |
+| 10 | 备份拆分 | ⬜ | — |
+
+**行数变化**：`AgentLoop` 1523 → 1385；`QqChannel` 2036 → 1925。
+**测试**：CI 里 9 个测试类（含新增 `ToolRoundExecutorTest`/`PlanCoordinatorTest`/`QqTexts*`/`QqNumbersTest`）。
+
+**剩余步骤的共同难点**：都要给 channel 抽一个"HTTP 网关"接口（token/client/seq/被动优先/主动兜底），
+一次搬 200~300 行，而且**本地 simulator 不走真实发送通道**，只能靠部署后观察真实对话。
+建议在上下文充足时一次做完，不要在疲劳状态下开工。
