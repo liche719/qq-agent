@@ -1458,23 +1458,9 @@ public class QqChannel implements ChatChannel {
 
     private boolean sendLongMessage(String userId, String replyToMsgId, String text) {
         int limit = Math.max(256, maxMessageChars);
-        List<String> parts = new java.util.ArrayList<>();
-        int offset = 0;
-        while (offset < text.length()) {
-            int end = Math.min(text.length(), offset + limit);
-            if (end < text.length()) {
-                int breakAt = Math.max(offset + 1, text.lastIndexOf('\n', end));
-                if (breakAt > offset + limit / 2) end = breakAt;
-            }
-            String part = text.substring(offset, end).trim();
-            if (!part.isBlank()) parts.add(part);
-            offset = end;
-        }
+        List<String> parts = QqTexts.splitForSending(text, limit);
         if (parts.isEmpty()) return true;
-        List<String> labeledPages = new java.util.ArrayList<>();
-        for (int index = 0; index < parts.size(); index++) {
-            labeledPages.add("[" + (index + 1) + "/" + parts.size() + "]\n" + parts.get(index));
-        }
+        List<String> labeledPages = QqTexts.labelPages(parts);
         String firstPage = labeledPages.getFirst();
         if (labeledPages.size() > 1) {
             firstPage += "\n\n发送“继续”查看下一页。";

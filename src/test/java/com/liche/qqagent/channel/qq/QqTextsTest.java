@@ -35,3 +35,38 @@ class QqTextsTest {
         assertTrue(QqTexts.markdownLike("好的\n> _调用工具：搜索_", 1000));
     }
 }
+
+/** 长消息切分：切错会导致页数爆炸或长行被硬切断语义。 */
+class QqTextsSplitTest {
+
+    @org.junit.jupiter.api.Test
+    void splitsAtLineBreaksWhenPossible() {
+        String text = "第一段内容\n".repeat(10);
+        var parts = QqTexts.splitForSending(text, 40);
+        org.junit.jupiter.api.Assertions.assertTrue(parts.size() > 1);
+        // 每页都不该包含下一段的开头（说明是在换行处断的）
+        for (String part : parts) {
+            org.junit.jupiter.api.Assertions.assertFalse(part.startsWith("\n"));
+            org.junit.jupiter.api.Assertions.assertTrue(part.length() <= 40);
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void shortTextStaysOnePage() {
+        var parts = QqTexts.splitForSending("就一句话", 100);
+        org.junit.jupiter.api.Assertions.assertEquals(1, parts.size());
+    }
+
+    @org.junit.jupiter.api.Test
+    void blankInputProducesNoPages() {
+        org.junit.jupiter.api.Assertions.assertTrue(QqTexts.splitForSending("", 100).isEmpty());
+        org.junit.jupiter.api.Assertions.assertTrue(QqTexts.splitForSending(null, 100).isEmpty());
+    }
+
+    @org.junit.jupiter.api.Test
+    void labelsPagesWithNumbers() {
+        var labeled = QqTexts.labelPages(java.util.List.of("a", "b"));
+        org.junit.jupiter.api.Assertions.assertEquals("[1/2]\na", labeled.get(0));
+        org.junit.jupiter.api.Assertions.assertEquals("[2/2]\nb", labeled.get(1));
+    }
+}

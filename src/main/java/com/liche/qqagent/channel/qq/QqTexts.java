@@ -1,19 +1,25 @@
 package com.liche.qqagent.channel.qq;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 纯文本判断（2026-10-27 从 {@code QqChannel} 拆出，第 6 步的第一个小片）。
+ * QQ 文本处理的纯函数（2026-10-27 从 {@code QqChannel} 拆出，第 6 步）。
  *
- * <p>为什么先拆这个：它是发送路径里**唯一没有副作用**的部分——决定"这条消息用 markdown 还是纯文本发"。
- * 单独成类后才能写单测（以前只能靠真机看排版对不对）。
- *
- * <p>判据与拆之前逐字一致：含至少两行"像 markdown 的结构"（标题/列表/编号/加粗/行内代码）才按 markdown 发；
- * 长度超过上限一律退回纯文本（超长 markdown 在 QQ 里会渲染失败）。带工具尾注的消息固定走 markdown。
+ * <p>这里只放**没有副作用、可以单测**的判断与切分：排版方式（markdown / 纯文本）、长消息分页。
+ * 发送动作本身仍留在 channel（要令牌、要 seq、要处理被动/主动降级）。
  */
 final class QqTexts {
 
     private QqTexts() {
     }
 
+    /**
+     * 这条消息该不该按 markdown 发。
+     *
+     * <p>判据与拆之前逐字一致：含至少两行"像 markdown 的结构"（标题/列表/编号/加粗/行内代码）才按 markdown；
+     * 超过长度上限一律退回纯文本（超长 markdown 在 QQ 里渲染容易失败）；带工具尾注的消息固定走 markdown。
+     */
     static boolean markdownLike(String text, int maxChars) {
         if (text == null || text.isBlank()) {
             return false;
@@ -35,5 +41,49 @@ final class QqTexts {
             }
         }
         return md >= 2 || text.contains("> _调用工具：");
+    }
+
+    /**
+     * 按长度切分长消息（不带页码）。
+     *
+     * <p>规则与拆之前逐字一致：优先在**换行**处断，但断点必须超过半页（否则宁可硬切，
+     * 避免出现一堆极短的页）；空白页丢掉。
+     *
+     * @param limit 单页上限，至少 1
+     */
+    static List<String> splitForSending(String text, int limit) {
+        List<String> parts = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return parts;
+        }
+        int pageLimit = Math.max(1, limit);
+        int offset = 0;
+        while (offset < text.length()) {
+            int end = Math.min(text.length(), offset + pageLimit);
+            if (end < text.length()) {
+                int breakAt = Math.max(offset + 1, text.lastIndexOf('\n', end));
+                if (breakAt > offset + pageLimit / 2) {
+                    end = breakAt;
+                }
+            }
+            String part = text.substring(offset, end).trim();
+            if (!part.isBlank()) {
+                parts.add(part);
+            }
+            offset = end;
+        }
+        return parts;
+    }
+
+    /** 给多页加 `[i/n]` 页码前缀（只有一页时也加，调用方按需取第一页） */
+    static List<String> labelPages(List<String> parts) {
+        List<String> labeled = new ArrayList<>();
+        if (parts == null) {
+            return labeled;
+        }
+        for (int index = 0; index < parts.size(); index++) {
+            labeled.add("[" + (index + 1) + "/" + parts.size() + "]\n" + parts.get(index));
+        }
+        return labeled;
     }
 }
