@@ -90,3 +90,18 @@ docker logs --since 5m qq-agent | grep -c " ERROR "    # 0
 docker logs --since 5m qq-agent | grep "工具注册完成"   # 21 类 / 64 工具
 # 面板 /api/admin/tools/stats 能出数（数据库/接口没被打断）
 ```
+## 第二次演练（2026-10-28 04:00，重构完成后）
+
+重构期间共 40+ 次部署，演练确认**回滚链路仍然可用**：
+
+```
+qq-agent-rollback 00c0c26 → ✅ 健康检查通过，site=200
+qq-agent-rollback 327a05c → ✅ 切回当前版本，site=200，0 ERROR
+```
+
+两次切换都在 2 分钟内完成（应用冷启动约 51 秒，脚本健康检查窗口 150 秒）。
+
+**顺带发现**：CI 会自动清理旧镜像，服务器上通常只剩 **2~3 个** `qq-agent:<sha>`。
+所以"回滚到上一个版本"总是可行，但"回滚到上周某次"不一定——真要保留更久，
+需要在服务器上 `docker tag <sha> qq-agent:keep-<日期>`（tag 过的镜像不会被
+`docker image prune` 按 dangling 清掉）。
