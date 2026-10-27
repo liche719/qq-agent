@@ -402,3 +402,25 @@ curl -sk -X POST https://127.0.0.1/api/admin/actions/alerts/test -H "X-Agent-Adm
 
 **判断标准**：先问"两份输入相同会不会给出相同输出"。答案是"不一定"就**不合**，
 哪怕名字一模一样——同名不同义比重复代码更危险。
+## 待验证的疑点（2026-10-28 02:55，**不臆断为 bug**）
+
+### 上下文摘要的缓存键可能不命中、或会过期
+
+`ContextSummaryService.cacheTag` 现在用"被截掉那段里**第一条消息的 id**"作缓存键；
+而 `AgentOrchestrator.withOlderSummary` 每次传入的 `dropped` 是
+"最近 3N 轮里除去最近 N 轮"的**滑动窗口**。两种可能，都还没证据：
+
+| 如果… | 后果 |
+|---|---|
+| 窗口起点随新消息前移 | key 每次都变 → **缓存几乎不命中**，每轮多一次摘要调用（多花钱、多延迟） |
+| 窗口起点不变而内容变 | key 不变 → **拿到过期摘要**，模型丢掉最近被截掉的那几轮 |
+
+**怎么验证**（下次有真实对话时）：
+```bash
+docker exec qq-agent-redis redis-cli --scan --pattern "ctx:summary:*" | wc -l   # key 是否随对话增长
+docker exec qq-agent-redis redis-cli --scan --pattern "ctx:summary:*" | head -5 # 同一用户是否只有 1 个 key
+```
+- 一个用户**大量** key → 缓存无效，应考虑用"最后一条被截消息"或"dropped 条数"作键；
+- 一个用户**只有 1 个** key 且摘要不更新 → 应把 key 改成包含窗口末尾。
+
+现在先给 `cacheTag` 补了 4 条测试锁住当前行为，**改之前先想清楚往哪个方向修**。

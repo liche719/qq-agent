@@ -120,7 +120,7 @@ public class ContextSummaryService {
     }
 
     /** 缓存标记：用最早那条消息 id；没有 id 就退化成文本哈希，保证"同一段对话只花一次" */
-    private String cacheTag(List<ContextTurn> dropped) {
+    String cacheTag(List<ContextTurn> dropped) {
         ContextTurn first = dropped.get(0);
         if (first != null && first.sourceMessageIds() != null && !first.sourceMessageIds().isEmpty()) {
             return first.sourceMessageIds().get(0);
