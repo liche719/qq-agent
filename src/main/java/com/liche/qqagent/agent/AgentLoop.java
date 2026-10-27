@@ -295,9 +295,14 @@ public class AgentLoop {
         try {
             if (onlyHistoryMarkers(userText)) {
                 // 2026-10-27：合并批次会给"曾经带图/带文件"的消息补一条 [历史消息曾附带图片…] 标记。
-                // 整条只有标记时没有可回答的内容，以前照样去问模型，它只能编（实测回了"记下了，这九条…"）。
-                log.info("本轮只有历史媒体标记、没有正文，跳过 user={}", userId);
-                return "";
+                // 以前会把这段标记当正文去问模型，它只能编（实测回了"记下了，这九条…"）。
+                // **但不能静默返回空串**：真实发生过的后果是用户发了消息、这边一句话都没有（21:01 那次）。
+                // 现在改成如实说"没拿到内容"，至少让他知道该重发。
+                log.info("本轮只有历史媒体标记、没有正文 user={}", userId);
+                String fallback = "这条我只收到一个空的附件标记，没拿到内容——文字或图再发我一次？";
+                String reply = completeReply(fallback, new LinkedHashSet<>(), new java.util.LinkedHashMap<>(),
+                        new java.util.LinkedHashMap<>(), sink, userId);
+                return reply;
             }
             // 问时间的处理：原来靠**伪造**一条 assistant(tool_call) + tool 结果塞进历史，
             // 但思考模式下上游要求 assistant 消息必须回传 reasoning_content，
