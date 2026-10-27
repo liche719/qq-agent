@@ -1472,7 +1472,7 @@ public class QqChannel implements ChatChannel {
     }
 
     private boolean proactiveQuotaAllows(String userId) {
-        if (proactiveQuota == null || proactiveQuota.allows()) {
+        if (QqQuotas.allows(proactiveQuota)) {
             return true;
         }
         log.warn("[qq] 主动消息已达当日上限（今日 {}/{}），放弃发送 user={}", proactiveQuota.used(),
@@ -1482,15 +1482,7 @@ public class QqChannel implements ChatChannel {
 
     /** 日志里的当天主动消息计数；账本不可用（Redis 异常）时只说明情况，不显示 "-1/0" 这种噪声 */
     private String quotaSuffix() {
-        if (proactiveQuota == null) {
-            return "";
-        }
-        long used = proactiveQuota.used();
-        if (used < 0) {
-            return "，主动额度账本不可用";
-        }
-        int limit = proactiveQuota.limit();
-        return "，今日主动 " + used + (limit > 0 ? "/" + limit : "") + " 条";
+        return QqQuotas.suffix(proactiveQuota);
     }
 
     /**
