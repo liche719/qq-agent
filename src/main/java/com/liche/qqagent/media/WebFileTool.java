@@ -288,11 +288,11 @@ public class WebFileTool implements com.liche.qqagent.tool.AgentToolProvider {
     }
 
     private static int bounded(int value, int minimum, int maximum, int fallback) {
-        return value < minimum || value > maximum ? fallback : value;
+        return com.liche.qqagent.support.Numbers.bounded(value, minimum, maximum, fallback);
     }
 
     private static long bounded(long value, long minimum, long maximum, long fallback) {
-        return value < minimum || value > maximum ? fallback : value;
+        return com.liche.qqagent.support.Numbers.bounded(value, minimum, maximum, fallback);
     }
 }
 
