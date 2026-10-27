@@ -94,7 +94,6 @@ public class QqChannel implements ChatChannel {
     private volatile String sessionId;   // 网关会话 id（断线后 RESUME 恢复用）
     private volatile int lastSeq = 0;    // 最后收到的消息序列号（RESUME 用）
     private volatile WebSocket ws;
-    private final AtomicBoolean commandPanelConfigured = new AtomicBoolean(false);
     private final AtomicLong textSendSuccessCount = new AtomicLong();
     private final AtomicLong textSendFailureCount = new AtomicLong();
     private final AtomicLong mediaSendSuccessCount = new AtomicLong();
@@ -149,6 +148,25 @@ public class QqChannel implements ChatChannel {
     /** userId -> 最近收到消息的时间戳（用于判断被动窗口） */
     /** 一次 HTTP 发送（2026-10-27 拆到 QqMessageSender） */
     /** 发送编排（2026-10-27 拆到 QqOutbound；窗口/配额/HTTP/错误分类都已各自独立） */
+    /** 面板/菜单注册（2026-10-27 拆到 QqPanelSetup） */
+    private QqPanelSetup panelSetup;
+
+    private QqPanelSetup panelSetup() {
+        if (panelSetup == null) {
+            panelSetup = new QqPanelSetup(new QqPanelSetup.Gateway(
+                    this::ensureToken,
+                    () -> accessToken,
+                    () -> apiBase,
+                    this::buildRestClient,
+                    () -> objectMapper,
+                    error -> {
+                        apiErrorCount.incrementAndGet();
+                        recordApiError(error);
+                    }), commandPanelEnabled);
+        }
+        return panelSetup;
+    }
+
     private QqOutbound outbound;
 
     private QqOutbound outbound() {
@@ -655,76 +673,11 @@ public class QqChannel implements ChatChannel {
     }
 
     private void configureC2cCommandPanel() {
-        if (!commandPanelEnabled) return;
-        if (!commandPanelConfigured.compareAndSet(false, true)) return;
-        try {
-            ensureToken();
-            String existing = buildRestClient(apiBase).get().uri(uriBuilder -> uriBuilder
-                            .path("/v2/panels")
-                            .queryParam("scope", "c2c")
-                            .queryParam("limit", "50")
-                            .build())
-                    .header("Authorization", "QQBot " + accessToken).retrieve().body(String.class);
-            if (existing != null && existing.contains(QqPanels.REMARK)) {
-                log.info("QQ C2C command panel already exists");
-                return;
-            }
-            // 2026-10-25 用户要求：指令面板只留三项（提醒并进定时任务，复盘/关怀整块删掉）
-            Map<String, Object> payload = QqPanels.commandPanelPayload();
-            String payloadJson = objectMapper.writeValueAsString(payload);
-            buildRestClient(apiBase).post().uri("/v2/panels")
-                    .header("Authorization", "QQBot " + accessToken)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(payloadJson).retrieve().body(String.class);
-            log.info("QQ C2C command panel configured");
-        } catch (RestClientResponseException exception) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(exception);
-            logPanelApiFailure(exception);
-        } catch (Exception exception) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(exception);
-            commandPanelConfigured.set(false);
-            log.warn("QQ C2C command panel configuration failed: {}", exception.getMessage());
-        }
-    }
-
-    private void logPanelApiFailure(RestClientResponseException exception) {
-        commandPanelConfigured.set(false);
-        String response = exception.getResponseBodyAsString();
-        try {
-            JsonNode error = objectMapper.readTree(response);
-            log.warn("QQ C2C command panel configuration failed: httpStatus={} qqCode={} errCode={} traceId={} message={}",
-                    exception.getStatusCode().value(), error.path("code").asInt(0),
-                    error.path("err_code").asLong(0), error.path("trace_id").asText(""),
-                    error.path("message").asText(""));
-        } catch (Exception ignored) {
-            log.warn("QQ C2C command panel configuration failed: httpStatus={} response={}",
-                    exception.getStatusCode().value(), response);
-        }
+        panelSetup().setupPanel();
     }
 
     private void configureC2cCustomMenu() {
-        if (!commandPanelEnabled) return;
-        try {
-            ensureToken();
-            // 2026-10-25 用户要求：快捷菜单也只剩三项
-            Map<String, Object> payload = QqPanels.customMenuPayload();
-            buildRestClient(apiBase).put().uri("/v2/menu")
-                    .header("Authorization", "QQBot " + accessToken)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(objectMapper.writeValueAsString(payload))
-                    .retrieve().body(String.class);
-            log.info("QQ C2C custom menu configured");
-        } catch (RestClientResponseException exception) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(exception);
-            logPanelApiFailure(exception);
-        } catch (Exception exception) {
-            apiErrorCount.incrementAndGet();
-            recordApiError(exception);
-            log.warn("QQ C2C custom menu configuration failed: {}", exception.getMessage());
-        }
+        panelSetup().setupMenu();
     }
 
     // Converts a direct-message gateway event into an isolated inbound message.
