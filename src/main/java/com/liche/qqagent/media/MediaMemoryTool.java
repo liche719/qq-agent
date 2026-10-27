@@ -83,6 +83,8 @@ public class MediaMemoryTool implements com.liche.qqagent.tool.AgentToolProvider
     }
 
     @Tool(value = "看完文件后一句话记下里面是什么，带上以后可能被搜到的关键词。")
+    /** 写一条笔记：重试会插两行（2026-10-28 补） */
+    @com.liche.qqagent.tool.NonIdempotentTool
     public ToolBusinessResult noteStoredMediaContent(Long mediaId, String hint) {
         return ToolBusinessResult.success(storageService.noteContentHint(requireCurrentUser(), mediaId, hint));
     }

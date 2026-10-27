@@ -21,6 +21,8 @@ import org.springframework.stereotype.Component;
 public class SayTool implements AgentToolProvider {
 
     @Tool(value = "干活途中有话说时先发一句（不中止任务）。一问一答或闲聊**别用**；一轮最多 2 次。")
+    /** 发出去的话撤不回来：失败重试会让用户看到两遍同一句（2026-10-28 补） */
+    @com.liche.qqagent.tool.NonIdempotentTool
     public ToolBusinessResult sayToUser(
             @P("要说给他听的那句话，像平时聊天，别超过 60 字") String text) {
         String outcome = TurnProgress.emit(text);
