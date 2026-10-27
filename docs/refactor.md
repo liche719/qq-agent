@@ -277,3 +277,27 @@ beb6c41 PlanCoordinator        ead9fb9 TurnMetrics
 
 **仍欠的验证**：6c 部署后**还没有真实消息跑过**（`send(passive)` 计数 0）。
 这条一验，6c 就算闭环。
+## 最终状态（2026-10-28 01:25，第 39 轮）
+
+| # | 步骤 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | `ToolRoundExecutor` | ✅ | 单测 4 例（顺序回填、副作用断并行） |
+| 2 | `ProgressNarrator` | ✅ | 单测 5 例 |
+| 3 | `PlanCoordinator` | ✅ | 单测 3 例（反思只在策略性问题触发） |
+| 4 | `TurnMetrics` | ✅ | 生产日志 `模型调用 tokens … 第N轮` |
+| 5 | `QqProgressSessions` | ✅ | 单测 4 例（12 行上限 / dead 后仍攒） |
+| 5b | `QqProgressFrames` | ✅ | 生产日志 `工具进度（第 1 行）` + 0 次 frame failed |
+| 6a | `QqReplyWindow` | ✅ | 生产日志 `send(passive)` 正常 |
+| 6b | `QqMessages` | ✅ | 单测 3 例（msg_seq / 群私聊端点） |
+| 6c | `QqOutbound` + `QqMessageSender` | 🟡 **代码就绪，待真实消息** | 单测 5 例（含"读超时不重发"） |
+| 7 | `QqPanels` + `QqPanelSetup` | ✅ | 生产日志 `command panel already exists` / `custom menu configured` |
+| 8 | `ReplySources` | ✅ | 单测 4 例（绝不误裁正文引用） |
+| 8(余) | `flushDeferredVoice` / 交付失败标记 | ⛔ **判定不拆** | 各十几行、无逻辑密度，且依赖 `VoiceOutbox` 静态状态；拆了风险大于收益 |
+| 9 | `support/Texts` | 🟡 13/16 | 3 个刻意保留（各有独特语义，见上文） |
+| 10 | `BackupArchives` | ✅ | 单测 6 例（真打包、只替换目标条目、不留临时文件） |
+
+**总计**：新类 **21 个**，测试 **24 类 / 75 用例**（CI 必跑），
+`QqChannel` 2036→1778、`AgentLoop` 1523→1338、`MemoryBackupJob` 861→816。
+
+**唯一未闭环**：6c 的真实消息验证。部署后连续多轮 `recv=0 / send(passive)=0`，
+没有流量就无从确认；代码与单测都已就绪。
