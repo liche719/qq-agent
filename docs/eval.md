@@ -154,3 +154,28 @@ python tools/memory-duplicate-audit.py --top 20 --out dump.tsv
 判读方式：
 - 这个比例**持续下降** → 说明"阈值 0.75 + 相似带替代"在起作用；
 - 出现"同一属性两个不同值"（例如两个教室号）→ 那才是真矛盾，要单独排查。
+## "改主意"的语义替代：**机制本来就有**（2026-10-28 核实）
+
+我原以为"改考/改时间/改地点"这类语义替代是个缺口，准备让抽取器新增一个 `relation` 字段。
+核实后发现**已经有了**，而且是三处并行的机制：
+
+| 层 | 机制 | 提示词里的规则 |
+|---|---|---|
+| 事实层 | `relation` + `targetSubject`（模型在同一次抽取里给合并结论） | 有 |
+| 核心记忆 | `coreUpdates`（`oldContent` → `newContent`，系统留痕、旧条目 SUPERSEDED） | 规则 6：**改分数、改院校、改日期、改称呼、改偏好必须写 coreUpdates，不许新增平行的 coreCandidates** |
+| 工作记忆 | `workConflicts` / `workCompleted`（`existingId` + 新内容 / 完成原因） | 有 |
+
+**验证方式**（不加新代码）：往评估集加一条两轮用例——
+
+```json
+{ "id": "mind-change", "type": "extract",
+  "conversation": ["我考研考 408 计算机统考", "我改考自命题了，不考 408 了"],
+  "expectFacts": [{"objectAny": ["自命题"]}],
+  "forbidFacts": ["408"] }
+```
+
+`forbidFacts` 是评估里已有的断言：只要还有 ACTIVE 事实包含 "408" 就算失败。
+**结果：PASS**（总分 28/28）——说明模型确实输出了更新而不是新增一条平行的旧事实。
+
+**结论：① 不需要改代码。** 再加一个 `relation` 字段只会和现有三套机制重复，
+而且等于让模型在两处做同一个判断——那是增加歧义，不是增加能力。

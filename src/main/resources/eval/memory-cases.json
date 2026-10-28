@@ -277,6 +277,24 @@
       "fromCase": "hard-many-rooms",
       "query": "8B203 是哪门课",
       "expectTopContains": "物理"
+    },
+    {
+      "id": "mind-change",
+      "type": "extract",
+      "conversation": [
+        "我考研考 408 计算机统考",
+        "我改考自命题了，不考 408 了"
+      ],
+      "expectFacts": [
+        {
+          "objectAny": [
+            "自命题"
+          ]
+        }
+      ],
+      "forbidFacts": [
+        "408"
+      ]
     }
   ]
 }
