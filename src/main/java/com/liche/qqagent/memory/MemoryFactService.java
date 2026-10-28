@@ -49,6 +49,15 @@ public class MemoryFactService {
     /** 实体归一（2026-10-26）：同一件事的不同写法合成一个 canonical，避免拆卡 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MemoryEntityService memoryEntityService;
+
+    /**
+     * 混合检索（向量 + 词法 RRF），2026-10-28 加、**默认关闭**。
+     *
+     * <p>关的理由写在 {@link HybridRecallRanker} 类注释里：把评测做难之后纯向量仍然全对，
+     * 没有可验证的收益。要开就设 {@code memory.recall-hybrid=true}，再跑一次记忆评估看有没有涨。
+     */
+    @org.springframework.beans.factory.annotation.Value("${memory.recall-hybrid:false}")
+    private boolean recallHybridEnabled = false;
     private static final String CHANGE_LAYER = "FACT";
     /** 补齐向量时一次最多处理多少条（用户后填 api-key 时靠它自愈，见 reindexMissing） */
     private static final int REINDEX_BATCH = 20;
@@ -468,7 +477,8 @@ public class MemoryFactService {
         }
         // 2026-10-28：先按时间词重排，再按"查询里点到的实体"重排。
         // 后者更具体（"周三·课"这种别名向量对不齐，但实体能对上），所以放在时间词之后做稳定排序。
-        return reorderByMentionedEntity(reorderByTimeWord(ordered, queryText), userId, queryText);
+        List<MemoryFact> ranked = recallHybridEnabled ? HybridRecallRanker.fuse(ordered, queryText) : ordered;
+        return reorderByMentionedEntity(reorderByTimeWord(ranked, queryText), userId, queryText);
     }
 
     /**
