@@ -185,6 +185,14 @@ public class ToolRegistry {
         if (entry == null) {
             return ToolExecutionOutcome.failure("未知工具 " + request.name(), 0);
         }
+        // 2026-10-28：执行前按 schema 校验参数。缺必填/类型明显不符时**不执行**，
+        // 直接把可读的错误回传给模型（"缺少必填参数：query（可用参数：query、count）"），
+        // 而不是让它在工具内部炸成 NullPointerException 再瞎猜。
+        String invalid = ToolArgumentValidator.validate(entry.spec(), request.arguments());
+        if (invalid != null) {
+            log.info("工具参数校验未通过 name={} reason={}", request.name(), invalid);
+            return ToolExecutionOutcome.failure(invalid, 0);
+        }
         ToolPolicySnapshot policy = ToolPolicySnapshot.from(entry.policy());
         if (taskStateStore != null && (policy.hasSideEffect() || policy.destructive()
                 || entry.method().isAnnotationPresent(NonIdempotentTool.class))) {
