@@ -477,8 +477,17 @@ public class MemoryFactService {
         }
         // 2026-10-28：先按时间词重排，再按"查询里点到的实体"重排。
         // 后者更具体（"周三·课"这种别名向量对不齐，但实体能对上），所以放在时间词之后做稳定排序。
-        List<MemoryFact> ranked = recallHybridEnabled ? HybridRecallRanker.fuse(ordered, queryText) : ordered;
-        return reorderByMentionedEntity(reorderByTimeWord(ranked, queryText), userId, queryText);
+        List<MemoryFact> byTime = reorderByTimeWord(ordered, queryText);
+        List<MemoryFact> ranked = byTime;
+        if (recallHybridEnabled) {
+            // 2026-10-28：混合排序开着的时候，把"它到底有没有改变结果"记下来。
+            // 这比再开一次 A/B 实验便宜，而且用的是真实流量——否则"开了混合检索"只是一句话。
+            List<MemoryFact> fused = HybridRecallRanker.fuse(byTime, queryText);
+            logHybridChange(userId, queryText, byTime, fused);
+            ranked = fused;
+        }
+        logTailingMatch(userId, queryText, ranked);
+        return reorderByMentionedEntity(ranked, userId, queryText);
     }
 
     /**
@@ -520,6 +529,67 @@ public class MemoryFactService {
             return entities.contains(canonical) || entities.contains(subject) ? 0 : 1;
         }));
         return ordered;
+    }
+
+
+    /**
+     * 混合排序改变了首位吗（2026-10-28 观测用）。
+     *
+     * <p>只在真的变了的时候打一行：这样日志量很小，但能回答"这条规则在真实流量里有没有作用"。
+     * 如果跑一周一行都没有，说明该把开关关掉——而不是留着自我安慰。
+     */
+    private void logHybridChange(String userId, String queryText, List<MemoryFact> before, List<MemoryFact> after) {
+        if (before.isEmpty() || after.isEmpty()) {
+            return;
+        }
+        String beforeTop = before.get(0).getSubject();
+        String afterTop = after.get(0).getSubject();
+        if (beforeTop == null || beforeTop.equals(afterTop)) {
+            return;
+        }
+        log.info("混合排序改变首位 user={} query=\"{}\" 向量首位={} 词法后首位={}",
+                userId, abbreviate(queryText, 30), beforeTop, afterTop);
+    }
+
+    /**
+     * 词法能对上、却被排在 3 名之后的事实（2026-10-28 观测用）。
+     *
+     * <p>这是"该开混合检索"的直接信号：事实明明在召回结果里，但位置太靠后，
+     * 模型很可能压根没看到。现在只在日志里记，不改排序。
+     */
+    private void logTailingMatch(String userId, String queryText, List<MemoryFact> ranked) {
+        if (ranked.size() <= 1 || queryText == null || queryText.isBlank()) {
+            return;
+        }
+        java.util.Set<String> queryTokens = HybridRecallRanker.tokens(queryText);
+        if (queryTokens.isEmpty()) {
+            return;
+        }
+        for (int index = 3; index < ranked.size(); index++) {
+            MemoryFact fact = ranked.get(index);
+            java.util.Set<String> factTokens = HybridRecallRanker
+                    .tokens((fact.getSubject() == null ? "" : fact.getSubject()) + " "
+                            + (fact.getObject() == null ? "" : fact.getObject()));
+            int hit = 0;
+            for (String token : queryTokens) {
+                if (factTokens.contains(token)) {
+                    hit++;
+                }
+            }
+            // 命中 >=2 个 token 却排在第 4 名之后：值得记一笔
+            if (hit >= 2) {
+                log.info("召回相关但排靠后 user={} query=\"{}\" 第{}位 subject={}",
+                        userId, abbreviate(queryText, 30), index + 1, fact.getSubject());
+                return;
+            }
+        }
+    }
+
+    private static String abbreviate(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        return text.length() <= max ? text : text.substring(0, max) + "…";
     }
 
     private List<MemoryFact> reorderByMentionedEntity(List<MemoryFact> facts, String userId, String queryText) {
