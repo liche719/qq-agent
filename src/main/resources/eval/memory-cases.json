@@ -207,7 +207,11 @@
       "type": "recall",
       "fromCase": "classtime",
       "query": "周三体育课几点",
-      "expectContains": "15:00"
+      "expectContainsAny": [
+        "15:00",
+        "下午三点",
+        "三点"
+      ]
     },
     {
       "id": "alias-classroom",
@@ -229,6 +233,50 @@
       "fromCase": "alias-classroom",
       "query": "周二·课在哪个教室",
       "expectContains": "8B304"
+    },
+    {
+      "id": "hard-three-courses",
+      "type": "extract",
+      "conversation": [
+        "这学期三门课：数学课在 8B304，英语课在 3C201，体育课在体育馆"
+      ],
+      "expectFacts": [
+        {
+          "objectAny": [
+            "8B304",
+            "3C201",
+            "体育馆"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hard-room-reverse",
+      "type": "recall",
+      "fromCase": "hard-three-courses",
+      "query": "8B304 是哪门课的教室",
+      "expectContains": "数学课"
+    },
+    {
+      "id": "hard-one-of-three",
+      "type": "recall",
+      "fromCase": "hard-three-courses",
+      "query": "体育课在哪上",
+      "expectContains": "体育馆"
+    },
+    {
+      "id": "hard-many-rooms",
+      "type": "extract",
+      "conversation": [
+        "六门课：高数 8B101，线代 8B102，概率 8B103，电路 8B201，信号 8B202，物理 8B203"
+      ]
+    },
+    {
+      "id": "hard-exact-room",
+      "type": "recall",
+      "fromCase": "hard-many-rooms",
+      "query": "8B203 是哪门课",
+      "expectTopContains": "物理"
     }
   ]
 }

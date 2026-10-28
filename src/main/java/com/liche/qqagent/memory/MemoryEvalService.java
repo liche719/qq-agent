@@ -179,7 +179,16 @@ public class MemoryEvalService {
     private Map<String, Object> runRecallCase(String userId, JsonNode node) {
         String id = node.path("id").asText("");
         String query = node.path("query").asText("");
+        // 2026-10-28：支持"多个可接受写法"（expectContainsAny）。原因：同一句"三点"可能被抽成
+        // "15:00"或"下午三点"，测评不该因为渲染格式不同就判失败——那是噪声，不是检索变差。
         String expect = node.path("expectContains").asText("");
+        List<String> expectAny = new ArrayList<>();
+        for (JsonNode alt : node.path("expectContainsAny")) {
+            String value = alt.asText("").trim();
+            if (!value.isBlank()) {
+                expectAny.add(value);
+            }
+        }
         String fromCase = node.path("fromCase").asText("");
         String caseUser = fromCase.isBlank() ? userId : userId + "-" + fromCase;
         List<MemoryFact> hits = factService.recallFacts(caseUser, query, 8, 0d);
@@ -191,12 +200,37 @@ public class MemoryEvalService {
                 rendered = rendered + " | " + fromMemory;
             }
         }
+        // 2026-10-28：新增"排序断言"（expectTopContains）。
+        // 原来只看整段渲染里"有没有"，命中在第 8 条也算过——这样测不出检索排序的好坏，
+        // 也就没法评估 BM25+RRF 这类"改排序"的手段。它要求**第一条命中**就必须包含该值。
+        String expectTop = node.path("expectTopContains").asText("");
+        boolean topOk = true;
+        if (!expectTop.isBlank()) {
+            String top = hits.isEmpty() ? "" : factService.renderCards(List.of(hits.get(0)), 400);
+            topOk = contains(top, expectTop);
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", id);
         result.put("type", "recall");
         result.put("query", query);
         result.put("hits", hits.size());
-        result.put("pass", contains(rendered, expect));
+        if (!expectTop.isBlank()) {
+            result.put("top", hits.isEmpty() ? "" : factService.renderCards(List.of(hits.get(0)), 120));
+        }
+        // expectContains 留空 = 这条不约束"整段里有没有"，只约束排序（expectTopContains）
+        boolean containsOk;
+        if (!expectAny.isEmpty()) {
+            containsOk = false;
+            for (String value : expectAny) {
+                if (rendered.contains(value)) {
+                    containsOk = true;
+                    break;
+                }
+            }
+        } else {
+            containsOk = expect == null || expect.isBlank() || contains(rendered, expect);
+        }
+        result.put("pass", containsOk && topOk);
         if (!contains(rendered, expect)) {
             result.put("expected", expect);
             result.put("got", rendered.length() > 300 ? rendered.substring(0, 300) : rendered);
