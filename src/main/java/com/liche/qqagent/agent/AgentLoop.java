@@ -813,6 +813,55 @@ public class AgentLoop {
         messages.add(ToolExecutionResultMessage.from(request, outcome.content()));
     }
 
+
+    /**
+     * 打印本次请求的"前缀指纹"（2026-10-28 诊断用）。
+     *
+     * <p>只统计**前缀部分**：系统提示 + 工具定义（名字与描述）。同一轮内多次调用应当一致；
+     * 跨轮如果 toolsHash 变了，说明工具集在漂移（渐进式披露解锁、作用域变化等），
+     * 那 provider 的前缀缓存必然失效——这正是我们要拿数据确认的假设。
+     */
+    private void logPrefixFingerprint(String userId, int round, List<ChatMessage> messages,
+                                      List<ToolSpecification> specs) {
+        try {
+            String system = "";
+            for (ChatMessage message : messages) {
+                if (message instanceof dev.langchain4j.data.message.SystemMessage systemMessage) {
+                    system = systemMessage.text() == null ? "" : systemMessage.text();
+                    break;
+                }
+            }
+            StringBuilder tools = new StringBuilder();
+            if (specs != null) {
+                specs.stream()
+                        .map(spec -> (spec.name() == null ? "" : spec.name()) + "|"
+                                + (spec.description() == null ? "" : spec.description()))
+                        .sorted()
+                        .forEach(item -> tools.append(item).append('\n'));
+            }
+            log.info("前缀指纹 user={} 第{}轮 工具={}个 toolsHash={} sysHash={} sysChars={}",
+                    userId, round, specs == null ? 0 : specs.size(),
+                    shortHash(tools.toString()), shortHash(system), system.length());
+        } catch (RuntimeException exception) {
+            log.debug("前缀指纹计算失败（忽略）：{}", exception.getMessage());
+        }
+    }
+
+    /** 取 SHA-1 前 8 位，够区分、又不会把日志刷得太长 */
+    static String shortHash(String text) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] bytes = digest.digest((text == null ? "" : text).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int index = 0; index < 4 && index < bytes.length; index++) {
+                hex.append(String.format("%02x", bytes[index]));
+            }
+            return hex.toString();
+        } catch (Exception exception) {
+            return "?";
+        }
+    }
+
     /**
      * 轮次/预算耗尽时的兜底开场白（2026-10-22 改）：原来只说"这次处理没有完成"，
      * 他既不知道卡在哪、也不知道是不是白等。现在带上**失败的那个工具和原因**，
@@ -877,6 +926,9 @@ public class AgentLoop {
         LlmScenario scenario = round == 0 ? LlmScenario.DIALOG_FIRST : LlmScenario.DIALOG;
         dev.langchain4j.model.chat.request.ChatRequest chatRequest =
                 ChatRequest.builder().messages(messages).toolSpecifications(specs).build();
+        // 2026-10-28（前缀缓存诊断）：provider 的缓存按**前缀字节**匹配，所以只要 tools 数组或
+        // 系统提示有一丝变化，整段缓存就废。这里只打指纹、不改行为，用来确认"到底是不是每轮都在变"。
+        logPrefixFingerprint(userId, round, messages, specs);
         TurnLatency.startFirstCall();
         LlmScenario.run(scenario, () -> {
             streamingChatModel.chat(chatRequest, new StreamingChatResponseHandler() {

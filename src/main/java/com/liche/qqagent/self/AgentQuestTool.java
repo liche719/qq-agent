@@ -107,8 +107,12 @@ public class AgentQuestTool implements AgentToolProvider {
             + "不带来源的笔记面板会单独记一笔（那就是资料搬运）。" + POLICY_HINT)
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
-    public ToolBusinessResult selfQuestNote(Long questId, String content, String sourceUrl, String sourceTitle,
-                                            String evidence) {
+    public ToolBusinessResult selfQuestNote(
+            @dev.langchain4j.agent.tool.P("方向 id（selfQuest 里能看到）") Long questId,
+            @dev.langchain4j.agent.tool.P("这条笔记的内容（你自己的话）") String content,
+            @dev.langchain4j.agent.tool.P("可选：来源链接；带来源的更新才算数") String sourceUrl,
+            @dev.langchain4j.agent.tool.P("可选：来源标题") String sourceTitle,
+            @dev.langchain4j.agent.tool.P("证据：对话编号 conv:<id> 或文件路径") String evidence) {
         try {
             AgentQuestNote note = selfQuests.addQuestNote(questId, content, sourceUrl, sourceTitle, evidence);
             return ToolBusinessResult.success("记下了 note:" + note.getId()

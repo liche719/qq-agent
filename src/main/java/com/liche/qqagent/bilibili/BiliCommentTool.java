@@ -167,8 +167,12 @@ public class BiliCommentTool implements com.liche.qqagent.tool.AgentToolProvider
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true,
             riskLevel = ToolRiskLevel.HIGH, allowParallel = false, retryable = false)
     @com.liche.qqagent.tool.NonIdempotentTool
-    public ToolBusinessResult commentBilibili(String bvid, String message, Long rootRpid, Long parentRpid,
-                                              String picturePrompt) {
+    public ToolBusinessResult commentBilibili(
+            @dev.langchain4j.agent.tool.P("视频的 BV 号（如 BV1xx411c7mD）") String bvid,
+            @dev.langchain4j.agent.tool.P("评论正文；用 draftBilibiliComment 写出来的那句话") String message,
+            @dev.langchain4j.agent.tool.P("【只在回复楼中楼时填】被回复评论的根评论 id（即一级评论）") Long rootRpid,
+            @dev.langchain4j.agent.tool.P("【只在回复楼中楼时填】被直接回复的那条评论 id") Long parentRpid,
+            @dev.langchain4j.agent.tool.P("可选：配图提示词；给了会先画一张图随评论发出") String picturePrompt) {
         String videoId = bvid == null ? "" : bvid.trim();
         if (videoId.isEmpty()) {
             return ToolBusinessResult.failure("没给 bvid，不知道该在哪个视频下评论。");

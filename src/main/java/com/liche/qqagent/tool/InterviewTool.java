@@ -34,10 +34,15 @@ public class InterviewTool implements AgentToolProvider {
     @Tool(value = "把这一轮问答记进评分卡：题类、题目、回答要点、四维 1~5 分、一句反馈。**每轮都要调，漏了这轮等于没练**。")
     @ToolExecutionPolicy(value = ToolExecutionClass.FAST, hasSideEffect = true,
             riskLevel = ToolRiskLevel.LOW, allowParallel = false)
-    public ToolBusinessResult recordInterviewRound(String category, String question, String answerSummary,
-                                                   Integer scoreContent, Integer scoreStructure,
-                                                   Integer scoreDepth, Integer scoreDelivery,
-                                                   String feedback) {
+    public ToolBusinessResult recordInterviewRound(
+            @dev.langchain4j.agent.tool.P("题类（如 八股/算法/系统设计/项目）") String category,
+            @dev.langchain4j.agent.tool.P("这一轮问的题目原文") String question,
+            @dev.langchain4j.agent.tool.P("他的回答要点（两三句，别抄全文）") String answerSummary,
+            @dev.langchain4j.agent.tool.P("内容完整度 1~5") Integer scoreContent,
+            @dev.langchain4j.agent.tool.P("结构清晰度 1~5") Integer scoreStructure,
+            @dev.langchain4j.agent.tool.P("技术深度 1~5") Integer scoreDepth,
+            @dev.langchain4j.agent.tool.P("表达流畅度 1~5") Integer scoreDelivery,
+            @dev.langchain4j.agent.tool.P("一句具体反馈（指出最该改的一点）") String feedback) {
         String userId = requireCurrentUser();
         String result = interviewService.record(userId, category, question, answerSummary,
                 scoreContent, scoreStructure, scoreDepth, scoreDelivery, feedback);

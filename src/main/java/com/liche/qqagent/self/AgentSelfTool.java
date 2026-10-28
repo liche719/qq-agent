@@ -165,8 +165,14 @@ public class AgentSelfTool implements AgentToolProvider {
     @Tool(value = "给自己记一条教训：反复栽在哪就记哪。三段必须齐：我做了什么(whatIDid)、当时预期(expected)、该怎么改。")
     @ToolExecutionPolicy(value = ToolExecutionClass.EXTERNAL_ACTION, hasSideEffect = true, riskLevel = ToolRiskLevel.LOW, allowParallel = false)
     @NonIdempotentTool
-    public ToolBusinessResult selfLesson(String category, String trigger, String whatIDid, String expected,
-                                         String whatHappened, String correction, String evidence) {
+    public ToolBusinessResult selfLesson(
+            @dev.langchain4j.agent.tool.P("教训的类别（如 工具调用/检索/表达）") String category,
+            @dev.langchain4j.agent.tool.P("什么情境下会犯（触发条件）") String trigger,
+            @dev.langchain4j.agent.tool.P("我当时具体做了什么") String whatIDid,
+            @dev.langchain4j.agent.tool.P("我当时预期会怎样") String expected,
+            @dev.langchain4j.agent.tool.P("实际发生了什么") String whatHappened,
+            @dev.langchain4j.agent.tool.P("下次该怎么改（可执行的一条）") String correction,
+            @dev.langchain4j.agent.tool.P("证据：对话编号 conv:<id> 或文件路径") String evidence) {
         try {
             SelfLessonService.LessonOutcome outcome = selfLessons.addLesson(category, trigger, whatIDid, expected,
                     whatHappened, correction, evidence);
