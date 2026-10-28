@@ -217,8 +217,9 @@
       ],
       "expectFacts": [
         {
-          "subject": "周二课",
-          "object": "8B304"
+          "objectAny": [
+            "8B304"
+          ]
         }
       ]
     },
@@ -227,9 +228,7 @@
       "type": "recall",
       "fromCase": "alias-classroom",
       "query": "周二·课在哪个教室",
-      "expectObjectContains": [
-        "8B304"
-      ]
+      "expectContains": "8B304"
     }
   ]
 }

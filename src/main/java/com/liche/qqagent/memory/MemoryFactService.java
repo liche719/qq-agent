@@ -492,6 +492,26 @@ public class MemoryFactService {
      *
      * <p>稳定排序：命中的挪到前面，同组内保持原有顺序（向量 + 时间词的结果）。
      */
+
+    /**
+     * 稳定排序：subject 命中给定实体的排前面（2026-10-28 抽出以便单测）。
+     *
+     * @param canonicalizer subject → 规范写法（查库；失败时返回原写法）
+     */
+    static List<MemoryFact> orderByEntities(List<MemoryFact> facts, java.util.Set<String> entities,
+                                            java.util.function.Function<String, String> canonicalizer) {
+        if (facts == null || facts.size() <= 1 || entities == null || entities.isEmpty()) {
+            return facts == null ? List.of() : facts;
+        }
+        List<MemoryFact> ordered = new ArrayList<>(facts);
+        ordered.sort(java.util.Comparator.comparingInt(fact -> {
+            String subject = fact.getSubject() == null ? "" : fact.getSubject();
+            String canonical = canonicalizer == null ? subject : canonicalizer.apply(subject);
+            return entities.contains(canonical) || entities.contains(subject) ? 0 : 1;
+        }));
+        return ordered;
+    }
+
     private List<MemoryFact> reorderByMentionedEntity(List<MemoryFact> facts, String userId, String queryText) {
         if (facts.size() <= 1 || userId == null || queryText == null || queryText.isBlank()) {
             return facts;
@@ -506,18 +526,13 @@ public class MemoryFactService {
         if (entities.isEmpty()) {
             return facts;
         }
-        List<MemoryFact> ordered = new ArrayList<>(facts);
-        ordered.sort(java.util.Comparator.comparingInt(fact -> {
-            String subject = fact.getSubject() == null ? "" : fact.getSubject();
-            String canonical = subject;
+        return orderByEntities(facts, entities, subject -> {
             try {
-                canonical = memoryEntityService.canonicalizeReadOnly(userId, subject);
+                return memoryEntityService.canonicalizeReadOnly(userId, subject);
             } catch (RuntimeException ignored) {
-                // 归一失败就用原写法比较
+                return subject;
             }
-            return entities.contains(canonical) || entities.contains(subject) ? 0 : 1;
-        }));
-        return ordered;
+        });
     }
 
     private List<MemoryFact> reorderByTimeWord(List<MemoryFact> facts, String queryText) {
