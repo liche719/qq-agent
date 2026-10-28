@@ -498,7 +498,9 @@ memory:
   extraction-retry-delay-seconds: ${MEMORY_EXTRACTION_RETRY_DELAY_SECONDS:15}
   # 2026-09-14 曾短暂上线过"每天一次记忆归纳（consolidation）"，实测不合格（模型把两条原文用「；」拼起来当归纳、
   # 思考吃满额度、replaces 对不上原文导致重复新增），**当天已整块删除**。始末与实测数据见 docs/memory-extraction.md。
-  dedup-threshold: ${MEMORY_DEDUP_THRESHOLD:0.8}
+  dedup-threshold: ${MEMORY_DEDUP_THRESHOLD:0.75}
+  # 相似但不同 → 旧条目标 SUPERSEDED（不删）。0 = 关闭这个行为
+  supersede-floor: ${MEMORY_SUPERSEDE_FLOOR:0.65}
   usage-touch-interval-minutes: ${MEMORY_USAGE_TOUCH_INTERVAL_MINUTES:15}
   extraction-max-candidates: ${MEMORY_EXTRACTION_MAX_CANDIDATES:32}
   extraction-max-content-chars: ${MEMORY_EXTRACTION_MAX_CONTENT_CHARS:4000}

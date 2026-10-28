@@ -40,7 +40,22 @@ public class MemoryPolicyProperties {
     private int extractionMaxContentChars = DEFAULT_EXTRACTION_MAX_CONTENT_CHARS;
     private int extractionMaxKeywords = DEFAULT_EXTRACTION_MAX_KEYWORDS;
     private int extractionDefaultConfidence = DEFAULT_EXTRACTION_CONFIDENCE;
-    private double dedupThreshold = 0.8d;
+    /**
+     * 判定"同一条记忆"的相似度门槛（2026-10-28 从 0.8 调到 0.75）。
+     *
+     * <p>依据：生产库 196 条 ACTIVE 里有 5 对近重复（Jaccard 0.63~0.68），
+     * 它们语义相同、只是措辞不同——0.8 太严，会并存两条一样的记忆，白占注入名额。
+     */
+    private double dedupThreshold = 0.75d;
+
+    /**
+     * "相似但不同"的下限（2026-10-28 新增）：落在 [floor, threshold) 之间的新记忆，
+     * 视为旧版本被替代 —— 旧条目标 SUPERSEDED（**不删**），新条目正常插入。
+     *
+     * <p>为什么不直接当重复：那一档里既有"同一件事换了个说法"，也有"计划→已完成"这类推进，
+     * 所以选择"留新旧两条、旧的标失效"，而不是覆盖内容——覆盖会丢掉历史。
+     */
+    private double supersedeFloor = 0.65d;
     private int conversationForgetScanBatch = DEFAULT_CONVERSATION_FORGET_SCAN_BATCH;
     private int coreMaxContentChars = DEFAULT_CORE_MAX_CONTENT_CHARS;
     private int workMaxContentChars = DEFAULT_WORK_MAX_CONTENT_CHARS;
@@ -89,6 +104,14 @@ public class MemoryPolicyProperties {
 
     public double getDedupThreshold() {
         return dedupThreshold;
+    }
+
+    public double getSupersedeFloor() {
+        return supersedeFloor;
+    }
+
+    public void setSupersedeFloor(double supersedeFloor) {
+        this.supersedeFloor = supersedeFloor;
     }
 
     public void setDedupThreshold(double dedupThreshold) {

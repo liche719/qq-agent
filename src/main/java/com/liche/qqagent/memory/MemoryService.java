@@ -44,6 +44,10 @@ public class MemoryService {
     private final MemoryRepository repository;
     private final MemoryChangeLogRepository changeLogRepository;
     private final MemoryContentSimilarity similarity;
+
+    /** 相似但不同的下限（2026-10-28）：落在 [floor, dedupThreshold) 时，旧条目标 SUPERSEDED 而不是并存 */
+    @org.springframework.beans.factory.annotation.Value("${memory.supersede-floor:0.65}")
+    private double supersedeFloor = 0.65d;
     private final EmbeddingClient embeddingClient;
     private final PgVectorStore vectorStore;
     private final int coreMaxContentChars;
@@ -187,6 +191,39 @@ public class MemoryService {
 
     // ================= 写：PROFILE（原 core） =================
 
+
+    /**
+     * 相似但不同时的处理（2026-10-28）：把**旧条目**标 SUPERSEDED，返回被替代的那条（可能为 null）。
+     *
+     * <p>语义边界很关键：
+     * <ul>
+     *   <li>相似度 ≥ dedupThreshold：调用方已按"同一条"处理（合并），不会走到这里；</li>
+     *   <li>相似度落在 [floor, threshold)：**同一件事的旧版本**——旧条目标失效、新条目照常插入，
+     *       这样注入时不会同时看到新旧两个说法；</li>
+     *   <li>低于 floor：不相关，什么都不做。</li>
+     * </ul>
+     *
+     * <p>只标失效、**不删**：我们的底线是"记忆只能忘、不能替"，历史必须可查。
+     */
+    private void supersedeSimilar(String userId, String kind, String newContent) {
+        if (supersedeFloor <= 0 || userId == null || newContent == null || newContent.isBlank()) {
+            return;
+        }
+        double floor = supersedeFloor;
+        String reason = "被相似度更高的新版本替代（相似带 " + floor + "~" + similarity.threshold() + "）";
+        for (Memory candidate : listActive(userId, kind)) {
+            double score = similarity.score(candidate.getContent(), newContent);
+            if (score < floor || score >= similarity.threshold()) {
+                continue;
+            }
+            candidate.setStatus(MemoryStatus.SUPERSEDED.name());
+            candidate.setUpdatedAt(java.time.LocalDateTime.now());
+            repository.save(candidate);
+            changeLogRepository.save(new MemoryChangeLog(userId, "SUPERSEDE", kind, candidate.getId(),
+                    candidate.getContent(), candidate.getContent(), reason, "automatic"));
+        }
+    }
+
     @Transactional
     public Memory addProfile(String userId, String content, String operator) {
         return addProfile(userId, content, operator, MemoryProvenance.automatic("extraction"), profileDefaults());
@@ -218,6 +255,7 @@ public class MemoryService {
                     existing.getContent(), existing.getContent(), "用户再次明确确认已有长期记忆", operator));
             return existing;
         }
+        supersedeSimilar(userId, Memory.KIND_PROFILE, normalized);
         Memory memory = new Memory(userId, Memory.KIND_PROFILE, normalized);
         memory.setAlwaysInject(true);
         memory.setPriority(null);
@@ -412,6 +450,7 @@ public class MemoryService {
             indexVector(saved);
             return saved;
         }
+        supersedeSimilar(userId, Memory.KIND_EXPERIENCE, normalizedSummary);
         Memory memory = new Memory(userId, Memory.KIND_EXPERIENCE, normalizedSummary);
         memory.setTitle(normalizeTitle(title, normalizedSummary));
         memory.setCategory(normalizeType(episodeType));

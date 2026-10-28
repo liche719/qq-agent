@@ -34,6 +34,27 @@ public class MemoryContentSimilarity {
                 ? DEFAULT_NEGATION_MARKERS : List.copyOf(negationMarkers);
     }
 
+    /** 相似度分数（2026-10-28 对外暴露，给"相似但不同"这一档用） */
+    public double score(String first, String second) {
+        String left = normalize(first);
+        String right = normalize(second);
+        if (left.isBlank() || right.isBlank()) {
+            return 0d;
+        }
+        if (left.equals(right)) {
+            return 1d;
+        }
+        if (hasOppositePolarity(left, right)) {
+            // 极性相反（"不再…"/"改为…"）不该被当成重复，也不该被当成"同一件事"
+            return 0d;
+        }
+        return similarity(left, right);
+    }
+
+    public double threshold() {
+        return threshold;
+    }
+
     public boolean isDuplicate(String first, String second) {
         String left = normalize(first);
         String right = normalize(second);
