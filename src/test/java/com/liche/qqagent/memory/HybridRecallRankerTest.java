@@ -53,4 +53,16 @@ class HybridRecallRankerTest {
         assertSame(one, HybridRecallRanker.fuse(one, "a"));
         assertTrue(HybridRecallRanker.tokens(null).isEmpty());
     }
+
+    @Test
+    void rareTokenOutweighsCommonOnes() {
+        // 三间教室，"8B203" 只出现在一条里（稀有），"课"出现在三条里（常见）。
+        // 没有 IDF 时两者权重相同，精确命中可能顶不过"字面上更像问题"的那条；
+        // 有 IDF 之后，稀有 token 的命中必须赢。
+        MemoryFact a = fact("高数课", "8B101");
+        MemoryFact b = fact("线代课", "8B102");
+        MemoryFact c = fact("物理课", "8B203");
+        List<MemoryFact> fused = HybridRecallRanker.fuse(List.of(a, b, c), "哪门课在 8B203");
+        assertEquals("物理课", fused.get(0).getSubject());
+    }
 }

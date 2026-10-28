@@ -39,20 +39,38 @@ final class HybridRecallRanker {
         if (queryTokens.isEmpty()) {
             return facts;
         }
-        // 词法得分：query 的 token 有多少出现在 subject+object 里
-        int[] lexical = new int[facts.size()];
-        boolean anyHit = false;
-        for (int index = 0; index < facts.size(); index++) {
-            MemoryFact fact = facts.get(index);
-            Set<String> factTokens = tokens(text(fact));
-            int hit = 0;
-            for (String token : queryTokens) {
-                if (factTokens.contains(token)) {
-                    hit++;
+        // 每个候选的 token 集合先算出来，供 IDF 与命中计数复用
+        List<Set<String>> factTokens = new ArrayList<>(facts.size());
+        for (MemoryFact fact : facts) {
+            factTokens.add(tokens(text(fact)));
+        }
+        // 本地 IDF（2026-10-29）：在**候选集**里统计每个 query token 出现在几条事实里。
+        // 越稀有越值钱——"8b203" 只出现在 1 条里（权重高），"课""的"出现在大半候选里（权重接近 0）。
+        // 这是真正的 BM25 缺的那一半：只做词频不做 IDF，高频虚词会把精确命中淹没。
+        int total = facts.size();
+        java.util.Map<String, Double> idf = new java.util.HashMap<>();
+        for (String token : queryTokens) {
+            int df = 0;
+            for (Set<String> tokens : factTokens) {
+                if (tokens.contains(token)) {
+                    df++;
                 }
             }
-            lexical[index] = hit;
-            anyHit |= hit > 0;
+            // 加 1 平滑，保证出现在所有候选里的 token 权重也 > 0（不直接抹掉）
+            idf.put(token, Math.log(1.0 + (double) total / (1 + df)));
+        }
+        // 词法得分：命中的 token 按 IDF 加权求和
+        double[] lexical = new double[facts.size()];
+        boolean anyHit = false;
+        for (int index = 0; index < facts.size(); index++) {
+            double score = 0;
+            for (String token : queryTokens) {
+                if (factTokens.get(index).contains(token)) {
+                    score += idf.getOrDefault(token, 0d);
+                }
+            }
+            lexical[index] = score;
+            anyHit |= score > 0;
         }
         if (!anyHit) {
             return facts;
@@ -66,7 +84,7 @@ final class HybridRecallRanker {
             }
         }
         lexicalHits.sort((left, right) -> {
-            int byScore = Integer.compare(lexical[right], lexical[left]);
+            int byScore = Double.compare(lexical[right], lexical[left]);
             return byScore != 0 ? byScore : Integer.compare(left, right);
         });
         int[] lexicalRank = new int[facts.size()];
