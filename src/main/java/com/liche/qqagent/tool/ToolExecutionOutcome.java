@@ -32,7 +32,8 @@ public record ToolExecutionOutcome(String content, boolean successful, int attem
     }
 
     public static ToolExecutionOutcome success(String content, int attempts) {
-        return new ToolExecutionOutcome("【工具执行成功】\n" + (content == null ? "" : content), true, attempts, "");
+        return new ToolExecutionOutcome(withStatus("【工具执行成功】", "SUCCESS") + "\n"
+                + (content == null ? "" : content), true, attempts, "");
     }
 
     public static ToolExecutionOutcome failure(String message) {
@@ -44,7 +45,7 @@ public record ToolExecutionOutcome(String content, boolean successful, int attem
         String label = attempts > 1
                 ? "【工具执行失败，已自动重试 " + (attempts - 1) + " 次】"
                 : "【工具执行失败】";
-        return new ToolExecutionOutcome(label + "\n原因：" + reason, false, attempts, reason);
+        return new ToolExecutionOutcome(withStatus(label, "FAILED") + "\n原因：" + reason, false, attempts, reason);
     }
 
     /**
@@ -52,20 +53,33 @@ public record ToolExecutionOutcome(String content, boolean successful, int attem
      */
     public static ToolExecutionOutcome needsInput(String message, int attempts) {
         String reason = normalizeReason(message);
-        return new ToolExecutionOutcome("【需要用户补充信息】\n" + reason, false,
+        return new ToolExecutionOutcome(withStatus("【需要用户补充信息】", "NEEDS_INPUT") + "\n" + reason, false,
                 attempts, reason, ToolExecutionStatus.NEEDS_INPUT);
     }
 
     public static ToolExecutionOutcome partial(String message, int attempts) {
         String reason = normalizeReason(message);
-        return new ToolExecutionOutcome("【工具部分完成】\n原因：" + reason, false,
+        return new ToolExecutionOutcome(withStatus("【工具部分完成】", "PARTIAL") + "\n原因：" + reason, false,
                 attempts, reason, ToolExecutionStatus.PARTIALLY_SUCCEEDED);
     }
 
     public static ToolExecutionOutcome unknown(String message, int attempts) {
         String reason = normalizeReason(message);
-        return new ToolExecutionOutcome("【工具结果无法确认】\n原因：" + reason, false,
+        return new ToolExecutionOutcome(withStatus("【工具结果无法确认】", "UNKNOWN") + "\n原因：" + reason, false,
                 attempts, reason, ToolExecutionStatus.UNKNOWN_RESULT);
+    }
+
+
+    /** 给模型看的结果标题统一带上机器可读状态（2026-10-29），见类注释 */
+    private static String withStatus(String label, String status) {
+        if (label == null || label.isBlank()) {
+            return "【工具执行 status=" + status + "】";
+        }
+        int end = label.indexOf('】');
+        if (end < 0) {
+            return "【status=" + status + " " + label + "】";
+        }
+        return "【status=" + status + " " + label.substring(1);
     }
 
     private static String normalizeReason(String message) {

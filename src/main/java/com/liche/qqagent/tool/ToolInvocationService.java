@@ -115,7 +115,7 @@ public class ToolInvocationService {
                 lastFailure = exception;
             }
             if (attempt < totalAttempts) {
-                log.warn("工具执行失败，将自动重试 name={} user={} attempt={}/{} reason={}", name, memoryId,
+                log.warn("工具执行失败，将自动重试 name={} user={} status=FAILED attempt={}/{} reason={}", name, memoryId,
                         attempt, totalAttempts, safeMessage(lastFailure));
                 waitBeforeRetry(attempt);
                 if (Thread.currentThread().isInterrupted()) {
@@ -128,6 +128,8 @@ public class ToolInvocationService {
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), false,
                     safeMessage(lastFailure));
         }
+        log.info("工具完成 name={} user={} status=FAILED success=false attempts={} reason={}",
+                name, memoryId, totalAttempts, safeMessage(lastFailure));
         return ToolExecutionOutcome.failure(safeMessage(lastFailure), totalAttempts);
     }
 
@@ -146,8 +148,8 @@ public class ToolInvocationService {
     private ToolExecutionOutcome success(String name, Object memoryId, String content, int attempts, long startedAt) {
         String text = clip(content);
         long durationMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
-        log.info("工具完成 name={} user={} success=true attempts={} resultChars={} durationMs={}", name, memoryId,
-                attempts, text.length(), durationMillis);
+        log.info("工具完成 name={} user={} status=SUCCESS success=true attempts={} resultChars={} durationMs={}",
+                name, memoryId, attempts, text.length(), durationMillis);
         if (turnTraceStore != null) {
             turnTraceStore.addToolStep(String.valueOf(memoryId), name, durationMillis, true,
                     "结果 " + text.length() + " 字（第 " + attempts + " 次尝试）");
