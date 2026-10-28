@@ -512,6 +512,11 @@ public class AgentLoop {
         double budgetYuan = scope == null ? dialogBudgetYuan : scope.budgetYuan();
         double spentAtStart = spendMeter == null ? 0 : spendMeter.totalYuan();
         // 这一轮已经反思过几次（每轮最多 1 次，防止"反思套反思"）
+        // 2026-10-29：同一轮里"工具 + 入参"完全相同的调用次数。达到 2 次仍失败，
+        // 说明模型在原地打转（同样的参数不会有不同结果），此时强制反思、让它重新规划。
+        java.util.Map<String, Integer> repeatSignatures = new java.util.LinkedHashMap<>();
+        java.util.Set<String> repeatWarned = new java.util.LinkedHashSet<>();
+        java.util.concurrent.atomic.AtomicBoolean repeatDetected = new java.util.concurrent.atomic.AtomicBoolean(false);
         PlanCoordinator guidance = new PlanCoordinator(planService, taskReflection,
                 new PlanCoordinator.PlanConfig(planMode, planMinTools), reflectMaxPerTurn);
         boolean refusalRetried = false;
@@ -567,7 +572,7 @@ public class AgentLoop {
                 }
                 List<ToolSpecification> roundSpecs = lastRound ? List.of() : specifications;
                 RoundOutcome outcome = streamOneRound(messages, roundSpecs, userId, successfulTools, failedTools,
-                        toolResults, scope, round, announcedTools);
+                        toolResults, scope, round, announcedTools, repeatSignatures, repeatWarned, repeatDetected);
                 if (outcome.toolCalls()) {
                     // 计划与反思都交给 PlanCoordinator 判断；这里只负责把要注入的话加进上下文
                     String planBlock = guidance.planIfNeeded(round, successfulTools, failedTools, toolResults,
@@ -576,8 +581,9 @@ public class AgentLoop {
                         messages.add(UserMessage.from(planBlock));
                     }
                     guidance.noteInlineText(outcome.text());
+                    boolean forced = repeatDetected.getAndSet(false);
                     String reflectBlock = guidance.reflectIfNeeded(round, maxRounds, successfulTools,
-                            failedTools, messages, userId);
+                            failedTools, messages, userId, forced);
                     if (reflectBlock != null) {
                         messages.add(UserMessage.from(reflectBlock));
                         log.info("已注入任务反思 user={}", userId);
@@ -756,6 +762,61 @@ public class AgentLoop {
      * <p>编排交给 {@link ToolRoundExecutor}（并行分段、顺序回填），这里只提供三个动作：
      * 报进度、执行单个工具、记录结果。
      */
+    /**
+     * 带"同参重复"检测的工具执行（2026-10-29）。
+     *
+     * <p><b>为什么要它</b>：模型偶尔会拿**一模一样的参数**反复调同一个工具。同样的入参，
+     * 结果不会不同；它只是没意识到自己在原地打转。原来只能等轮次上限收尾，用户看到的是
+     * "转了半天没结果"。
+     *
+     * <p><b>做法</b>：同一轮里给每个「工具名 + 规范化后的入参」计数。第二次失败时：
+     * ① 立刻往上下文里塞一句提示（让它换参数或换方法）；② 置一个标记，本轮强制执行一次反思/重规划。
+     *
+     * <p>只对**真正的失败**计数：{@code UNKNOWN_RESULT} 与 {@code NEEDS_INPUT} 不算——
+     * 前者可能已经成功、后者是在等用户补话，都不是"该换方法"的信号。
+     */
+    private void executeToolRequestsWithRepeatGuard(List<ToolExecutionRequest> requests,
+                                                    List<ChatMessage> messages, String userId,
+                                                    Set<String> successfulTools,
+                                                    Map<String, ToolExecutionOutcome> failedTools,
+                                                    Map<String, ToolExecutionOutcome> toolResults,
+                                                    TurnScope scope, Set<String> announcedTools,
+                                                    Map<String, Integer> signatures,
+                                                    Set<String> warned,
+                                                    java.util.concurrent.atomic.AtomicBoolean repeatDetected) {
+        executeToolRequests(requests, messages, userId, successfulTools, failedTools, toolResults, scope,
+                announcedTools);
+        for (ToolExecutionRequest request : requests) {
+            ToolExecutionOutcome outcome = failedTools.get(request.name());
+            if (outcome == null || outcome.successful()) {
+                continue;
+            }
+            if (outcome.status() == com.liche.qqagent.tool.ToolExecutionStatus.UNKNOWN_RESULT
+                    || outcome.status() == com.liche.qqagent.tool.ToolExecutionStatus.NEEDS_INPUT) {
+                continue;
+            }
+            String signature = request.name() + "|" + normalizeArguments(request.arguments());
+            int count = signatures.merge(signature, 1, Integer::sum);
+            if (count < 2 || !warned.add(signature)) {
+                continue;
+            }
+            log.info("同参重复失败，要求换策略 user={} tool={} 次数={}", userId, request.name(), count);
+            messages.add(dev.langchain4j.data.message.UserMessage.from(
+                    "（系统提示：你刚才用**同样的参数**又调了一次「" + request.name()
+                            + "」，结果一样失败。同样的入参不会有不同结果——"
+                            + "请换参数、换工具，或先说明这一步为什么走不通。）"));
+            repeatDetected.set(true);
+        }
+    }
+
+    /** 入参规范化：去掉空白差异再比较，避免同一个参数因为空格不同被当成两次不同的调用 */
+    static String normalizeArguments(String arguments) {
+        if (arguments == null) {
+            return "";
+        }
+        return arguments.replaceAll("\\s+", "").trim();
+    }
+
     private void executeToolRequests(List<ToolExecutionRequest> requests, List<ChatMessage> messages, String userId,
                                      Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                      Map<String, ToolExecutionOutcome> toolResults,
@@ -910,7 +971,9 @@ public class AgentLoop {
     private RoundOutcome streamOneRound(List<ChatMessage> messages, List<ToolSpecification> specs, String userId,
                                         Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                         Map<String, ToolExecutionOutcome> toolResults,
-                                        TurnScope scope, int round, Set<String> announcedTools) {
+                                        TurnScope scope, int round, Set<String> announcedTools,
+                                        Map<String, Integer> repeatSignatures, Set<String> repeatWarned,
+                                        java.util.concurrent.atomic.AtomicBoolean repeatDetected) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
         AtomicReference<Throwable> error = new AtomicReference<>();
@@ -994,8 +1057,8 @@ public class AgentLoop {
         // 关键：本轮若有工具调用（即使输出了过程文本），必须继续下一轮，
         // 让模型基于工具结果生成最终回复；工具轮的过程文本不应作为回复发送给用户
         if (!pendingRequests.isEmpty()) {
-            executeToolRequests(pendingRequests, messages, userId, successfulTools, failedTools,
-                    toolResults, scope, announcedTools);
+            executeToolRequestsWithRepeatGuard(pendingRequests, messages, userId, successfulTools, failedTools,
+                    toolResults, scope, announcedTools, repeatSignatures, repeatWarned, repeatDetected);
             addReadableMedia(messages);
         }
         if (Boolean.TRUE.equals(hasTools.get())) {

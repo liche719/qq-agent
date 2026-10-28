@@ -95,10 +95,22 @@ public class PlanCoordinator {
     public String reflectIfNeeded(int round, int maxRounds, Set<String> succeeded,
                                   Map<String, ToolExecutionOutcome> failed,
                                   List<ChatMessage> messages, String userId) {
+        return reflectIfNeeded(round, maxRounds, succeeded, failed, messages, userId, false);
+    }
+
+    /**
+     * @param force 为 true 时**跳过策略性判据**直接反思（2026-10-29）。
+     *              场景：模型拿**同样的参数**反复调同一个工具，每次都失败——这已经不是
+     *              "再试一次就好"，而是策略本身错了，必须停下来重规划。
+     *              仍然遵守每轮反思次数上限，避免被它拖成无限反思。
+     */
+    public String reflectIfNeeded(int round, int maxRounds, Set<String> succeeded,
+                                  Map<String, ToolExecutionOutcome> failed,
+                                  List<ChatMessage> messages, String userId, boolean force) {
         if (reflections >= maxReflections || reflectionService == null) {
             return null;
         }
-        if (!shouldReflect(round, maxRounds, succeeded, failed)) {
+        if (!force && !shouldReflect(round, maxRounds, succeeded, failed)) {
             return null;
         }
         reflections++;
