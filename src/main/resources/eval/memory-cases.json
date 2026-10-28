@@ -4,80 +4,161 @@
     {
       "id": "classroom",
       "type": "extract",
-      "conversation": ["周二晚上的课教室改成 8B304 了"],
-      "expectFacts": [{ "subject": "周二", "object": "8B304" }]
+      "conversation": [
+        "周二晚上的课教室改成 8B304 了"
+      ],
+      "expectFacts": [
+        {
+          "subject": "周二",
+          "object": "8B304"
+        }
+      ]
     },
     {
       "id": "classtime",
       "type": "extract",
-      "conversation": ["周三的体育课改到下午三点"],
-      "expectFacts": [{ "subject": "周三", "objectAny": ["三点", "15:00"] }]
+      "conversation": [
+        "周三的体育课改到下午三点"
+      ],
+      "expectFacts": [
+        {
+          "subject": "周三",
+          "objectAny": [
+            "三点",
+            "15:00"
+          ]
+        }
+      ]
     },
     {
       "id": "nickname",
       "type": "extract",
-      "conversation": ["以后别叫我小梁了，叫我阿文"],
-      "expectFacts": [{ "object": "阿文" }]
+      "conversation": [
+        "以后别叫我小梁了，叫我阿文"
+      ],
+      "expectFacts": [
+        {
+          "object": "阿文"
+        }
+      ]
     },
     {
       "id": "teacher",
       "type": "extract",
-      "conversation": ["数字系统综合设计是钟雪峰老师带的"],
-      "expectFacts": [{ "object": "钟雪峰" }]
+      "conversation": [
+        "数字系统综合设计是钟雪峰老师带的"
+      ],
+      "expectFacts": [
+        {
+          "object": "钟雪峰"
+        }
+      ]
     },
     {
       "id": "phone",
       "type": "extract",
-      "conversation": ["我的手机号是 13800138000，记一下"],
-      "expectFacts": [{ "object": "13800138000" }]
+      "conversation": [
+        "我的手机号是 13800138000，记一下"
+      ],
+      "expectFacts": [
+        {
+          "object": "13800138000"
+        }
+      ]
     },
     {
       "id": "intern",
       "type": "extract",
-      "conversation": ["寒假打算去深圳找实习，先待两个月"],
-      "expectFacts": [{ "object": "深圳" }]
+      "conversation": [
+        "寒假打算去深圳找实习，先待两个月"
+      ],
+      "expectFacts": [
+        {
+          "object": "深圳"
+        }
+      ]
     },
     {
       "id": "library",
       "type": "extract",
-      "conversation": ["图书馆四楼的自习室比较安静，我一般去那儿"],
-      "expectFacts": [{ "object": "四楼" }]
+      "conversation": [
+        "图书馆四楼的自习室比较安静，我一般去那儿"
+      ],
+      "expectFacts": [
+        {
+          "object": "四楼"
+        }
+      ]
     },
     {
       "id": "emotion-only",
       "type": "extract",
-      "conversation": ["我今天好烦啊，不想说话"],
-      "forbidFacts": ["烦死了", "讨厌", "压力大"]
+      "conversation": [
+        "我今天好烦啊，不想说话"
+      ],
+      "forbidFacts": [
+        "烦死了",
+        "讨厌",
+        "压力大"
+      ]
     },
     {
       "id": "oneoff-meal",
       "type": "extract",
-      "conversation": ["中午吃了个鸡腿饭，还行"],
-      "forbidFacts": ["鸡腿饭"]
+      "conversation": [
+        "中午吃了个鸡腿饭，还行"
+      ],
+      "forbidFacts": [
+        "鸡腿饭"
+      ]
     },
     {
       "id": "chat-noise",
       "type": "extract",
-      "conversation": ["哈哈", "晚安啦"],
-      "forbidFacts": ["晚安"]
+      "conversation": [
+        "哈哈",
+        "晚安啦"
+      ],
+      "forbidFacts": [
+        "晚安"
+      ]
     },
     {
       "id": "negation",
       "type": "extract",
-      "conversation": ["周三没有 Java 课，别记错了"],
-      "forbidFacts": ["没有 Java 课", "没有Java课"]
+      "conversation": [
+        "周三没有 Java 课，别记错了"
+      ],
+      "forbidFacts": [
+        "没有 Java 课",
+        "没有Java课"
+      ]
     },
     {
       "id": "vague-plan",
       "type": "extract",
-      "conversation": ["以后有需要再联系你"],
-      "forbidFacts": ["以后有需要"]
+      "conversation": [
+        "以后有需要再联系你"
+      ],
+      "forbidFacts": [
+        "以后有需要"
+      ]
     },
     {
       "id": "entity-merge",
       "type": "extract",
-      "conversation": ["周三的课改到 15:00 了", "哦对，还是原来那间教室"],
-      "expectFacts": [{ "objectAny": ["15:00", "三点"] }]
+      "conversation": [
+        "周三的课改到 15:00 了",
+        "哦对，还是原来那间教室"
+      ],
+      "expectFacts": [
+        {
+          "objectAny": [
+            "15:00",
+            "三点"
+          ]
+        }
+      ]
     },
     {
       "id": "recall-classroom",
@@ -127,6 +208,28 @@
       "fromCase": "classtime",
       "query": "周三体育课几点",
       "expectContains": "15:00"
+    },
+    {
+      "id": "alias-classroom",
+      "type": "extract",
+      "conversation": [
+        "周二晚上的课教室改成 8B304 了"
+      ],
+      "expectFacts": [
+        {
+          "subject": "周二课",
+          "object": "8B304"
+        }
+      ]
+    },
+    {
+      "id": "alias-classroom-recall",
+      "type": "recall",
+      "fromCase": "alias-classroom",
+      "query": "周二·课在哪个教室",
+      "expectObjectContains": [
+        "8B304"
+      ]
     }
   ]
 }

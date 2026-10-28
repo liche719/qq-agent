@@ -466,7 +466,9 @@ public class MemoryFactService {
                 ordered.add(fact);
             }
         }
-        return reorderByTimeWord(ordered, queryText);
+        // 2026-10-28：先按时间词重排，再按"查询里点到的实体"重排。
+        // 后者更具体（"周三·课"这种别名向量对不齐，但实体能对上），所以放在时间词之后做稳定排序。
+        return reorderByMentionedEntity(reorderByTimeWord(ordered, queryText), userId, queryText);
     }
 
     /**
@@ -481,6 +483,43 @@ public class MemoryFactService {
      * 其余保持原来的相似度顺序（稳定排序，不改相对次序）。只做排序、不做过滤——
      * 宁可多给几条，也不要因为认错词而漏掉。
      */
+
+    /**
+     * 按"查询里点到的实体"重排（2026-10-28）。
+     *
+     * <p>为什么需要：用户用**别名**提问时（`周三·课` vs 事实里的 `周三课`），向量相似度会被
+     * 多出来的几个字符拉偏，真正该排第一的事实反而掉到后面。实体是精确匹配，能补这个短板。
+     *
+     * <p>稳定排序：命中的挪到前面，同组内保持原有顺序（向量 + 时间词的结果）。
+     */
+    private List<MemoryFact> reorderByMentionedEntity(List<MemoryFact> facts, String userId, String queryText) {
+        if (facts.size() <= 1 || userId == null || queryText == null || queryText.isBlank()) {
+            return facts;
+        }
+        java.util.Set<String> entities;
+        try {
+            entities = memoryEntityService == null ? java.util.Set.of()
+                    : memoryEntityService.mentioned(userId, queryText);
+        } catch (RuntimeException exception) {
+            return facts;
+        }
+        if (entities.isEmpty()) {
+            return facts;
+        }
+        List<MemoryFact> ordered = new ArrayList<>(facts);
+        ordered.sort(java.util.Comparator.comparingInt(fact -> {
+            String subject = fact.getSubject() == null ? "" : fact.getSubject();
+            String canonical = subject;
+            try {
+                canonical = memoryEntityService.canonicalizeReadOnly(userId, subject);
+            } catch (RuntimeException ignored) {
+                // 归一失败就用原写法比较
+            }
+            return entities.contains(canonical) || entities.contains(subject) ? 0 : 1;
+        }));
+        return ordered;
+    }
+
     private List<MemoryFact> reorderByTimeWord(List<MemoryFact> facts, String queryText) {
         if (facts.size() <= 1 || queryText == null || queryText.isBlank()) {
             return facts;

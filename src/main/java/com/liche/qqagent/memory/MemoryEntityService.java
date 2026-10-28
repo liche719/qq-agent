@@ -60,6 +60,72 @@ public class MemoryEntityService {
         }
     }
 
+
+
+    /**
+     * 只读归一（2026-10-28）：把 subject 解析成规范写法，**不写库、不涨 factCount**。
+     *
+     * <p>给排序用——查询路径不能有副作用，否则每召回一次就给实体表打卡。
+     * 查不到时返回归一后的写法（和 {@link #canonicalize} 首次写入时的结果一致）。
+     */
+    public String canonicalizeReadOnly(String userId, String subject) {
+        String canonical = normalize(subject);
+        if (canonical.isEmpty() || userId == null || userId.isBlank()) {
+            return subject == null ? "" : subject;
+        }
+        try {
+            return repository.findFirstByUserIdAndCanonical(userId, canonical)
+                    .map(MemoryEntity::getCanonical)
+                    .orElse(canonical);
+        } catch (RuntimeException exception) {
+            return canonical;
+        }
+    }
+
+    /**
+     * 只读：这段话里出现了哪些**已有实体**（2026-10-28 新增）。
+     *
+     * <p>给检索加权用：用户问"周三·课几点"时，如果 `周三·课` 是 `周三课` 的别名，
+     * 那么 subject 为 `周三课` 的事实应该排到前面——但向量相似度不一定能把它们顶上来
+     * （别名多了几个字符，embedding 就被拉偏）。
+     *
+     * <p>与 {@link #canonicalize} 的区别：**不写库、不涨 factCount**，查询路径必须用这个。
+     */
+    public java.util.Set<String> mentioned(String userId, String text) {
+        if (userId == null || userId.isBlank() || text == null || text.isBlank()) {
+            return java.util.Set.of();
+        }
+        String normalizedText = normalize(text);
+        if (normalizedText.isEmpty()) {
+            return java.util.Set.of();
+        }
+        java.util.Set<String> hits = new java.util.LinkedHashSet<>();
+        try {
+            for (MemoryEntity entity : repository.findByUserIdOrderByFactCountDescUpdatedAtDesc(
+                    userId, org.springframework.data.domain.PageRequest.of(0, 200))) {
+                String canonical = entity.getCanonical();
+                if (canonical != null && !canonical.isEmpty() && normalizedText.contains(normalize(canonical))) {
+                    hits.add(canonical);
+                    continue;
+                }
+                String aliases = entity.getAliases();
+                if (aliases == null || aliases.isBlank()) {
+                    continue;
+                }
+                for (String alias : aliases.split(",")) {
+                    String normalizedAlias = normalize(alias);
+                    if (!normalizedAlias.isEmpty() && normalizedText.contains(normalizedAlias)) {
+                        hits.add(canonical);
+                        break;
+                    }
+                }
+            }
+        } catch (RuntimeException exception) {
+            log.warn("实体命中查询失败（忽略，不影响召回）：{}", exception.getMessage());
+        }
+        return hits;
+    }
+
     /** 给提示词用的"已有实体写法"清单（按事实数排序） */
     public List<String> topCanonicals(String userId, int limit) {
         if (userId == null || userId.isBlank()) {
