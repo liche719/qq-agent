@@ -140,3 +140,17 @@ MEMORY_RECALL_HYBRID=false（默认）→ [memory] 100%（27/27）
 
 所以最终决定：**代码保留、开关默认关**。这比"打开了但没有证据"更诚实，
 也比"删掉"更划算——数据量涨上来后，打开开关就是一次环境变量的事。
+## 记忆重复体检（2026-10-28，脚本已落盘）
+
+`tools/memory-duplicate-audit.py`——**只读**，走 ssh 读生产库，不改任何数据：
+
+```bash
+python tools/memory-duplicate-audit.py            # 默认阈值 0.55
+python tools/memory-duplicate-audit.py --top 20 --out dump.tsv
+```
+
+基线（2026-10-28）：**196 条 ACTIVE，7 对近重复，涉及 14 条（7.1%）**，全是"同一件事换个说法"。
+
+判读方式：
+- 这个比例**持续下降** → 说明"阈值 0.75 + 相似带替代"在起作用；
+- 出现"同一属性两个不同值"（例如两个教室号）→ 那才是真矛盾，要单独排查。
