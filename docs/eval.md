@@ -179,3 +179,20 @@ python tools/memory-duplicate-audit.py --top 20 --out dump.tsv
 
 **结论：① 不需要改代码。** 再加一个 `relation` 字段只会和现有三套机制重复，
 而且等于让模型在两处做同一个判断——那是增加歧义，不是增加能力。
+## 任务级评测（2026-10-29）
+
+新类型 `task`：跑**真实的多轮**（含工具执行），最后看落库结果——不是"选对工具"，而是"事情办成没有"。
+
+```json
+{"id":"task-reminder-lifecycle","type":"task",
+ "turns":["明天下午三点提醒我交重修申请表","算了，那个提醒取消掉"],
+ "expectReminderAfter":{"turn":1,"contains":"重修"},
+ "expectNoPendingReminderAfterTurn":2}
+```
+
+跑法：`python eval/run_eval.py --suite agent`（本地 simulator，需 `AGENT_EVAL_ENABLED=true`）。
+
+**它第一次跑就抓到一个真 bug**：为了加工具超时把执行放进线程池，导致 ThreadLocal 的用户上下文丢失，
+所有依赖上下文的工具都报"用户上下文不可用"。修完当前 **19/19 全过**。
+
+这条用例的价值就在这：单轮"选工具"的用例永远是绿的，只有真跑一遍才会暴露这类问题。
