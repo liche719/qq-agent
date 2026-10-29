@@ -183,6 +183,11 @@ agent:
   # 工具并行（2026-10-27 P1-3）：只有"只读 + FAST"的工具会和同批并行；有副作用的一律串行。
   tool-parallel-size: ${AGENT_TOOL_PARALLEL_SIZE:3}
   tool-parallel-timeout-seconds: ${AGENT_TOOL_PARALLEL_TIMEOUT_SECONDS:120}
+  # 单工具执行时限（2026-10-29）：按执行类别给默认值；超时统一转 UNKNOWN_RESULT（结果未知，别立刻重做）
+  tool-timeout:
+    fast-seconds: ${AGENT_TOOL_TIMEOUT_FAST_SECONDS:15}
+    external-seconds: ${AGENT_TOOL_TIMEOUT_EXTERNAL_SECONDS:60}
+    slow-external-seconds: ${AGENT_TOOL_TIMEOUT_SLOW_EXTERNAL_SECONDS:150}
   context-clearing-enabled: ${AGENT_CONTEXT_CLEARING_ENABLED:true}
   context-clearing-keep: ${AGENT_CONTEXT_CLEARING_KEEP:4}
   context-clearing-threshold-chars: ${AGENT_CONTEXT_CLEARING_THRESHOLD_CHARS:12000}

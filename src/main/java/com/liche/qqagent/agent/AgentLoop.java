@@ -170,6 +170,44 @@ public class AgentLoop {
     /** 并行执行只读工具（2026-10-27 P1-3）：并发上限与单次等待上限 */
     @org.springframework.beans.factory.annotation.Value("${agent.tool-parallel-size:3}")
     private int toolParallelSize = 3;
+    // 单工具执行时限（2026-10-29）：按执行类别给默认值。原来串行工具**没有时限**，
+    // 实测 readBilibiliVideo 跑过 68~83 秒，整轮被卡住、用户什么都收不到。
+    @org.springframework.beans.factory.annotation.Value("${agent.tool-timeout.fast-seconds:15}")
+    private long toolTimeoutFastSeconds = 15;
+    @org.springframework.beans.factory.annotation.Value("${agent.tool-timeout.external-seconds:60}")
+    private long toolTimeoutExternalSeconds = 60;
+    @org.springframework.beans.factory.annotation.Value("${agent.tool-timeout.slow-external-seconds:150}")
+    private long toolTimeoutSlowExternalSeconds = 150;
+
+    /** 跑单工具超时判断用的池子（和并行编排那个池子分开，避免互相饿死） */
+    private java.util.concurrent.ExecutorService toolTimeoutPool;
+
+    private java.util.concurrent.ExecutorService toolTimeoutPool() {
+        if (toolTimeoutPool == null) {
+            synchronized (this) {
+                if (toolTimeoutPool == null) {
+                    toolTimeoutPool = java.util.concurrent.Executors.newCachedThreadPool(runnable -> {
+                        Thread thread = new Thread(runnable, "tool-timeout");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+                }
+            }
+        }
+        return toolTimeoutPool;
+    }
+
+    /** 这个执行类别给多少秒 */
+    private long timeoutSecondsOf(ToolExecutionClass executionClass) {
+        if (executionClass == ToolExecutionClass.SLOW_EXTERNAL) {
+            return Math.max(5, toolTimeoutSlowExternalSeconds);
+        }
+        if (executionClass == ToolExecutionClass.EXTERNAL_ACTION) {
+            return Math.max(5, toolTimeoutExternalSeconds);
+        }
+        return Math.max(3, toolTimeoutFastSeconds);
+    }
+
     @org.springframework.beans.factory.annotation.Value("${agent.tool-parallel-timeout-seconds:120}")
     private long parallelTimeoutSeconds = 120;
     @org.springframework.beans.factory.annotation.Value("${agent.context-clearing-keep:4}")
@@ -839,9 +877,32 @@ public class AgentLoop {
         ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
         java.util.concurrent.ScheduledFuture<?> heartbeat = startProgressHeartbeat(request, executionClass);
         try {
-            return toolRegistry.isProvidedBy(request.name(), scope)
-                    ? executeTool(request, userId)
-                    : ToolExecutionOutcome.failure("这个工具不在当前作用域里，换一个：" + request.name(), 0);
+            if (!toolRegistry.isProvidedBy(request.name(), scope)) {
+                return ToolExecutionOutcome.failure("这个工具不在当前作用域里，换一个：" + request.name(), 0);
+            }
+            long timeoutSeconds = timeoutSecondsOf(executionClass);
+            java.util.concurrent.Future<ToolExecutionOutcome> future =
+                    toolTimeoutPool().submit(() -> executeTool(request, userId));
+            try {
+                return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException timeout) {
+                future.cancel(true);
+                // 超时 = **结果未知**，不是"没做"：发给用户/发评论这类操作可能已经生效。
+                // 所以状态用 UNKNOWN_RESULT，模型拿到后不会立刻重做（重做可能重复副作用）。
+                log.warn("工具执行超时 name={} user={} 超时={}s class={}", request.name(), userId,
+                        timeoutSeconds, executionClass);
+                return ToolExecutionOutcome.unknown(
+                        "「" + request.name() + "」执行超过 " + timeoutSeconds + " 秒没有返回，结果未确认。"
+                                + "先不要用同样的参数重试（可能已经生效）；可以换个方式，或如实告诉他这一步没等到结果。",
+                        1);
+            } catch (java.util.concurrent.ExecutionException failure) {
+                Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+                throw cause instanceof RuntimeException runtime ? runtime : new RuntimeException(cause);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                future.cancel(true);
+                return ToolExecutionOutcome.unknown("工具执行被中断，结果未确认", 1);
+            }
         } catch (RuntimeException exception) {
             log.warn("工具执行抛出异常，转为失败结果 name={} user={}: {}",
                     request.name(), userId, exception.getMessage());
