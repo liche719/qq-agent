@@ -40,6 +40,10 @@ public class ToolRegistry {
     private final ToolInvocationService invocationService;
     private final com.liche.qqagent.agent.AgentTaskStateStore taskStateStore;
 
+    /** 副作用工具的幂等保护（2026-10-29）；没配 Redis 时为 null，行为退回"只靠提示" */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ToolIdempotencyGuard idempotencyGuard;
+
     @Autowired
     public ToolRegistry(List<AgentToolProvider> tools,
                          ToolInvocationService invocationService,
@@ -185,6 +189,26 @@ public class ToolRegistry {
         if (entry == null) {
             return ToolExecutionOutcome.failure("未知工具 " + request.name(), 0);
         }
+        ToolPolicySnapshot guardPolicy = ToolPolicySnapshot.from(entry.policy());
+        boolean sideEffect = guardPolicy.hasSideEffect() || guardPolicy.destructive()
+                || entry.method().isAnnotationPresent(NonIdempotentTool.class);
+        String guardKey = null;
+        if (sideEffect && idempotencyGuard != null) {
+            guardKey = ToolIdempotencyGuard.keyOf(String.valueOf(memoryId), request.name(), request.arguments());
+            ToolIdempotencyGuard.Verdict verdict = idempotencyGuard.check(guardKey);
+            if (verdict.state() == ToolIdempotencyGuard.State.SUCCEEDED) {
+                // 一分钟内同样的操作刚成功过：直接把上次结果还给它，避免用户收到两条
+                log.info("幂等命中（刚成功过，跳过重复执行） name={} user={}", request.name(), memoryId);
+                return ToolExecutionOutcome.success("【工具执行成功·幂等跳过】\n"
+                        + "一分钟内已经执行过同样的操作，这次没有重复执行。上次结果：" + verdict.content());
+            }
+            if (verdict.state() == ToolIdempotencyGuard.State.UNKNOWN) {
+                log.info("幂等拦截（上次结果未知，跳过重做） name={} user={}", request.name(), memoryId);
+                return ToolExecutionOutcome.unknown(
+                        "【工具结果无法确认】上一次同样的操作结果还没确认（可能已经生效），"
+                                + "这次**没有重复执行**。先别急着重做，确认一下或换个方式。", 1);
+            }
+        }
         // 2026-10-28：执行前按 schema 校验参数。缺必填/类型明显不符时**不执行**，
         // 直接把可读的错误回传给模型（"缺少必填参数：query（可用参数：query、count）"），
         // 而不是让它在工具内部炸成 NullPointerException 再瞎猜。
@@ -198,6 +222,16 @@ public class ToolRegistry {
                 || entry.method().isAnnotationPresent(NonIdempotentTool.class))) {
             taskStateStore.markUnsafeToReplay(MDC.get("taskId"), "已开始执行有副作用工具：" + request.name());
         }
-        return invocationService.invoke(entry.method(), entry.tool(), request, memoryId, entry.policy());
+        ToolExecutionOutcome outcome = invocationService.invoke(entry.method(), entry.tool(), request, memoryId,
+                entry.policy());
+        if (guardKey != null) {
+            if (outcome.successful()) {
+                idempotencyGuard.markSucceeded(guardKey, outcome.content());
+            } else if (outcome.status() == ToolExecutionStatus.UNKNOWN_RESULT) {
+                // 结果未知才需要拦住"重做"；明确失败（4xx/参数错）重试是安全的
+                idempotencyGuard.markUnknown(guardKey);
+            }
+        }
+        return outcome;
     }
 }
