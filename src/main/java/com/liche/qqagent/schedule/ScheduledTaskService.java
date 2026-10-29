@@ -16,6 +16,7 @@ import org.quartz.JobDetail;
 import org.quartz.JobKey;
 import org.quartz.Scheduler;
 import org.quartz.SchedulerException;
+import org.quartz.Trigger;
 import org.quartz.TriggerBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -117,6 +118,20 @@ public class ScheduledTaskService {
         int restored = 0;
         for (ScheduledTask task : repository.findByEnabledTrue()) {
             try {
+                // 2026-10-30 修：原来只在"job 不存在"时才重建，于是两种坏状态永远不会自愈——
+                // ① 项目改包名后，库里 QRTZ_JOB_DETAILS 仍指向旧类（com.liche.wechatagent.…），
+                //    Quartz 实例化失败 → 触发器进 ERROR，任务从此不再执行（线上真事：任务 8 停了 7 天）；
+                // ② 触发器因任何原因进入 ERROR 状态，也不会自己恢复。
+                // 现在启动时校验"job 类名是否与当前类一致"和"触发器是否 ERROR"，两者任一命中就重建。
+                if (scheduler.checkExists(jobKey(task.getId()))) {
+                    boolean stale = isStaleJob(task.getId());
+                    boolean broken = hasBrokenTrigger(task.getId());
+                    if (stale || broken) {
+                        log.warn("定时任务调度状态异常，重建调度 id={} title={} staleClass={} brokenTrigger={}",
+                                task.getId(), task.getTitle(), stale, broken);
+                        scheduler.deleteJob(jobKey(task.getId()));
+                    }
+                }
                 if (!scheduler.checkExists(jobKey(task.getId()))) {
                     schedule(task);
                     restored++;
@@ -129,6 +144,34 @@ public class ScheduledTaskService {
         }
         if (restored > 0) {
             log.info("已恢复 {} 个定时任务到调度器", restored);
+        }
+    }
+
+
+    /** 库里的 job 是否指向"改了包名之前的旧类"（2026-10-30） */
+    private boolean isStaleJob(Long taskId) {
+        try {
+            JobDetail detail = scheduler.getJobDetail(jobKey(taskId));
+            return detail != null
+                    && !ScheduledTaskJob.class.getName().equals(detail.getJobClass().getName());
+        } catch (SchedulerException exception) {
+            log.warn("读取定时任务 job 详情失败 id={}: {}", taskId, exception.getMessage());
+            return false;
+        }
+    }
+
+    /** 触发器是否进了 ERROR 状态（Quartz 不会自动恢复，必须重建） */
+    private boolean hasBrokenTrigger(Long taskId) {
+        try {
+            for (Trigger trigger : scheduler.getTriggersOfJob(jobKey(taskId))) {
+                if (scheduler.getTriggerState(trigger.getKey()) == Trigger.TriggerState.ERROR) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (SchedulerException exception) {
+            log.warn("读取定时任务触发器状态失败 id={}: {}", taskId, exception.getMessage());
+            return false;
         }
     }
 
