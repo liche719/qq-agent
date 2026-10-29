@@ -485,13 +485,18 @@ public class AgentLoop {
         if (text == null || text.isBlank()) {
             return true;
         }
+        boolean hadMarker = text.contains("[历史消息曾附带");
         String stripped = text
                 .replace("[历史消息曾附带图片；图片原件未随当前消息提供]", "")
                 .replace("[历史消息曾附带文件；文件原件未随当前消息提供]", "")
                 .replace("[历史消息曾附带图片]", "")
                 .replace("[历史消息曾附带文件]", "")
                 .trim();
-        return stripped.isEmpty() || stripped.equals("？") || stripped.equals("?");
+        // 2026-10-30 修：原来把"？""?"也算空——用户只发一个问号时，机器人回
+        // "这条我只收到一个空的附件标记，没拿到内容"（线上真事，00:25）。
+        // 一个问号是**正常的一句话**（"你什么意思？"），必须交给模型。
+        // 现在的判据：只有"原本就有历史媒体标记、去掉标记后什么都不剩"才算空。
+        return hadMarker && stripped.isEmpty();
     }
 
     /**

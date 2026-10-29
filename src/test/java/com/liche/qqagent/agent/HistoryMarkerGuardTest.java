@@ -33,10 +33,24 @@ class HistoryMarkerGuardTest {
     }
 
     @Test
-    void blankAndPunctuationOnlyCountAsEmpty() {
+    void blankCountsAsEmpty() {
         assertTrue(AgentLoop.onlyHistoryMarkers(null));
         assertTrue(AgentLoop.onlyHistoryMarkers("   "));
-        assertTrue(AgentLoop.onlyHistoryMarkers("？"));
-        assertTrue(AgentLoop.onlyHistoryMarkers("?"));
+    }
+
+    @Test
+    void aBareQuestionMarkIsARealMessage() {
+        // 2026-10-30 线上：用户只发一个"？"，机器人回"这条我只收到一个空的附件标记"。
+        // 一个问号是"你什么意思？"，必须交给模型，不能当成空消息。
+        assertFalse(AgentLoop.onlyHistoryMarkers("？"));
+        assertFalse(AgentLoop.onlyHistoryMarkers("?"));
+        assertFalse(AgentLoop.onlyHistoryMarkers("？？"));
+        assertFalse(AgentLoop.onlyHistoryMarkers("没有附件呀"));
+    }
+
+    @Test
+    void markerPlusQuestionMarkStillHasRealText() {
+        assertFalse(AgentLoop.onlyHistoryMarkers(
+                "[历史消息曾附带图片；图片原件未随当前消息提供]？"));
     }
 }
