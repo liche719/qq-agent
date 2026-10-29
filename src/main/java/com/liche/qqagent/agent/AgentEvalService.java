@@ -49,6 +49,14 @@ public class AgentEvalService {
 
     private final ChatModel chatModel;
     private final ToolRegistry toolRegistry;
+
+    /** 任务级用例要跑**真实的一轮**（含工具执行），所以用同步入口而不是直接调模型 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AgentOrchestrator agentOrchestrator;
+
+    /** 任务级断言直接看落库结果（提醒有没有真建成、有没有真取消） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.reminder.ReminderTaskRepository reminderTaskRepository;
     private final boolean enabled;
     private final int repeat;
 
@@ -78,8 +86,14 @@ public class AgentEvalService {
         int passed = 0;
         for (JsonNode node : cases) {
             String type = node.path("type").asText("choice");
-            Map<String, Object> one = "continuity".equals(type)
-                    ? runContinuity(node) : runChoice(node);
+            Map<String, Object> one;
+            if ("task".equals(type)) {
+                one = runTask(node);
+            } else if ("continuity".equals(type)) {
+                one = runContinuity(node);
+            } else {
+                one = runChoice(node);
+            }
             if (Boolean.TRUE.equals(one.get("pass"))) {
                 passed++;
             }
@@ -140,6 +154,102 @@ public class AgentEvalService {
     }
 
     /** 多轮连续性：给历史 + 追问，看回答是否引用旧信息 */
+
+    /**
+     * 任务级用例（2026-10-29）：跑**真实的几轮**（含工具执行），最后看落库结果。
+     *
+     * <p>为什么需要它：原来的用例要么只测"选哪个工具"（不执行），要么只测"回答里有没有旧信息"。
+     * 而 agent 真正的能力是**把一件事办完**——建提醒 → 确认 → 改时间 → 取消，中间任何一步错，
+     * 用户看到的就是"它说办了，其实没办"。
+     *
+     * <p>用例格式：
+     * <pre>{"id":"task-reminder","type":"task","turns":["明天下午三点提醒我交表","取消刚才那个提醒"],
+     *  "expectReminderAfter":{"turn":1,"contains":"交表"},"expectNoPendingReminderAfterTurn":2}</pre>
+     */
+    private Map<String, Object> runTask(JsonNode node) {
+        String id = node.path("id").asText("");
+        String caseUser = "eval-task-" + id;
+        List<String> problems = new ArrayList<>();
+        List<String> replies = new ArrayList<>();
+        if (agentOrchestrator == null) {
+            problems.add("orchestrator 未注入");
+        } else {
+            cleanupTask(caseUser);
+            JsonNode turns = node.path("turns");
+            int index = 0;
+            for (JsonNode turn : turns) {
+                index++;
+                String text = turn.asText("");
+                String reply;
+                try {
+                    reply = agentOrchestrator.onInboundSync(taskMessage(caseUser, index, text));
+                } catch (RuntimeException exception) {
+                    problems.add("第" + index + "轮异常：" + exception.getMessage());
+                    break;
+                }
+                replies.add(reply == null ? "" : reply);
+                // 每轮之后的期望：提醒是否存在
+                JsonNode expectAfter = node.path("expectReminderAfter");
+                if (!expectAfter.isMissingNode() && expectAfter.path("turn").asInt(-1) == index) {
+                    String contains = expectAfter.path("contains").asText("");
+                    long count = pendingReminders(caseUser, contains);
+                    if (count <= 0) {
+                        problems.add("第" + index + "轮后应有含「" + contains + "」的待执行提醒，实际 0 条");
+                    }
+                }
+                if (node.path("expectNoPendingReminderAfterTurn").asInt(-1) == index) {
+                    long count = pendingReminders(caseUser, "");
+                    if (count > 0) {
+                        problems.add("第" + index + "轮后应没有待执行提醒，实际还有 " + count + " 条");
+                    }
+                }
+            }
+            cleanupTask(caseUser);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", id);
+        result.put("type", "task");
+        result.put("turns", replies.size());
+        result.put("pass", problems.isEmpty());
+        if (!problems.isEmpty()) {
+            result.put("problems", problems);
+            result.put("replies", replies);
+        }
+        return result;
+    }
+
+    private com.liche.qqagent.channel.InboundMessage taskMessage(String userId, int index, String text) {
+        return new com.liche.qqagent.channel.InboundMessage(
+                "eval-task-" + userId + "-" + index + "-" + System.nanoTime(),
+                userId, text, System.currentTimeMillis(), "text", "eval-bot", "qq",
+                List.of(), List.of(), "", List.of(), List.of());
+    }
+
+    private long pendingReminders(String userId, String contains) {
+        if (reminderTaskRepository == null) {
+            return 0;
+        }
+        try {
+            return reminderTaskRepository.findByUserIdAndStatus(userId, "PENDING").stream()
+                    .filter(task -> contains.isBlank()
+                            || (task.getContent() != null && task.getContent().contains(contains)))
+                    .count();
+        } catch (RuntimeException exception) {
+            return 0;
+        }
+    }
+
+    private void cleanupTask(String userId) {
+        if (reminderTaskRepository == null) {
+            return;
+        }
+        try {
+            reminderTaskRepository.deleteAll(reminderTaskRepository.findByUserIdOrderByUpdatedAtDesc(userId));
+        } catch (RuntimeException ignored) {
+            // 清场失败不影响本次结果
+        }
+    }
+
     private Map<String, Object> runContinuity(JsonNode node) {
         String id = node.path("id").asText("");
         String expect = node.path("expectContains").asText("");

@@ -222,6 +222,19 @@
       ],
       "question": "我寒假实习打算去哪？",
       "expectContains": "深圳"
+    },
+    {
+      "id": "task-reminder-lifecycle",
+      "type": "task",
+      "turns": [
+        "明天下午三点提醒我交重修申请表",
+        "算了，那个提醒取消掉"
+      ],
+      "expectReminderAfter": {
+        "turn": 1,
+        "contains": "重修"
+      },
+      "expectNoPendingReminderAfterTurn": 2
     }
   ]
 }
