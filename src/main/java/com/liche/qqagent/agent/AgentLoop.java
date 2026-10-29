@@ -957,6 +957,46 @@ public class AgentLoop {
                 + "\n【外部资料结束】";
     }
 
+
+    /**
+     * 边生成边发第一句（2026-10-29）。
+     *
+     * <p><b>为什么</b>：首 token 3~4 秒就到了，但用户要等整条回复生成完（长回复 10 秒以上）才看到东西。
+     * 把"第一句"提前发出去，感知延迟从"总时长"降到"首句时长"。
+     *
+     * <p><b>只在长回复时拆</b>（累计 ≥40 字且已有句末标点），避免一句"好"也被拆成两条。
+     * <p><b>额度不够就不发</b>：QQ 对同一条用户消息只有 5 次被动回复，进度条已经占了一部分，
+     * {@link TurnProgress#emit} 自己会拒绝；这里失败就退回"整条发"。
+     */
+    private void maybeFlushFirstSentence(String text, java.util.concurrent.atomic.AtomicInteger flushed,
+                                         String userId) {
+        if (flushed.get() > 0 || text == null || text.length() < 40) {
+            return;
+        }
+        int boundary = -1;
+        for (int index = 15; index < text.length(); index++) {
+            char ch = text.charAt(index);
+            if (ch == '。' || ch == '！' || ch == '？' || ch == '\n' || ch == '!' || ch == '?') {
+                boundary = index + 1;
+                break;
+            }
+        }
+        if (boundary < 0) {
+            return;
+        }
+        String first = text.substring(0, boundary).trim();
+        if (first.length() < 15) {
+            return;
+        }
+        String outcome = TurnProgress.emit(first);
+        if (outcome == null || !outcome.startsWith("已经发出去")) {
+            log.debug("提前发送第一句失败（退回整条发） user={} reason={}", userId, outcome);
+            return;
+        }
+        flushed.set(boundary);
+        log.info("提前发送第一句 user={} 字数={}", userId, first.length());
+    }
+
     /** 记录结果：成功/失败分类、副作用状态未知提示、写回消息 */
     private void recordOutcome(ToolExecutionRequest request, ToolExecutionOutcome raw,
                                List<ChatMessage> messages, Set<String> successfulTools,
@@ -1084,6 +1124,9 @@ public class AgentLoop {
                                         java.util.concurrent.atomic.AtomicBoolean repeatDetected) {
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<StringBuilder> acc = new AtomicReference<>(new StringBuilder());
+        // 2026-10-29：边生成边发第一句。用户原来要等整条回复生成完（长回复 10 秒以上），
+        // 而现在首 token 3~4 秒就到了——把这 3 秒之后的内容提前给他，感知延迟直接砍半。
+        java.util.concurrent.atomic.AtomicInteger earlyFlushed = new java.util.concurrent.atomic.AtomicInteger(0);
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicReference<Boolean> hasTools = new AtomicReference<>(false);
         // 2026-10-27（P1-3）：回调里**只收集请求**，工具执行挪到 latch.await 之后的主线程。
@@ -1107,6 +1150,7 @@ public class AgentLoop {
                     public void onPartialResponse(String partial) {
                         TurnLatency.firstToken();
                         acc.get().append(partial); // 仅内部累积
+                        maybeFlushFirstSentence(acc.get().toString(), earlyFlushed, userId);
                     }
 
                     @Override
@@ -1168,6 +1212,11 @@ public class AgentLoop {
             executeToolRequestsWithRepeatGuard(pendingRequests, messages, userId, successfulTools, failedTools,
                     toolResults, scope, announcedTools, repeatSignatures, repeatWarned, repeatDetected);
             addReadableMedia(messages);
+        }
+        if (earlyFlushed.get() > 0) {
+            String text = acc.get().toString();
+            int from = Math.min(earlyFlushed.get(), text.length());
+            acc.set(new StringBuilder(text.substring(from)));
         }
         if (Boolean.TRUE.equals(hasTools.get())) {
             // 把工具轮里的过程文本带出去：多步任务时模型会先写"计划：1)…"，反思要用它判断该不该重规划
