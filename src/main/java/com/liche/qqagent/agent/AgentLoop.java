@@ -881,8 +881,20 @@ public class AgentLoop {
                 return ToolExecutionOutcome.failure("这个工具不在当前作用域里，换一个：" + request.name(), 0);
             }
             long timeoutSeconds = timeoutSecondsOf(executionClass);
-            java.util.concurrent.Future<ToolExecutionOutcome> future =
-                    toolTimeoutPool().submit(() -> executeTool(request, userId));
+            // 2026-10-29 修：工具跑在**另一个线程**，而用户上下文是 ThreadLocal——
+            // 不重新绑定的话，提醒/记忆/自主这些依赖上下文的工具会全部报"用户上下文不可用"。
+            // 把当前上下文快照下来，在池线程里重新 bind、结束时 unbind。
+            String boundBotId = toolStatusService.currentBotId();
+            String boundChannel = toolStatusService.currentChannel();
+            String boundReplyTo = toolStatusService.currentReplyToMsgId();
+            java.util.concurrent.Future<ToolExecutionOutcome> future = toolTimeoutPool().submit(() -> {
+                toolStatusService.bind(userId, boundReplyTo, boundBotId, boundChannel);
+                try {
+                    return executeTool(request, userId);
+                } finally {
+                    toolStatusService.unbind();
+                }
+            });
             try {
                 return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException timeout) {

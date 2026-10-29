@@ -73,6 +73,24 @@ public class ToolStatusService {
         return context == null ? null : context.userId;
     }
 
+    /** 当前上下文的 botId（2026-10-29：把上下文带到别的线程时要快照它） */
+    public String currentBotId() {
+        StatusContext context = current.get();
+        return context == null ? null : context.botId;
+    }
+
+    /** 当前上下文的 channel */
+    public String currentChannel() {
+        StatusContext context = current.get();
+        return context == null ? null : context.channel;
+    }
+
+    /** 当前上下文的 replyToMsgId */
+    public String currentReplyToMsgId() {
+        StatusContext context = current.get();
+        return context == null ? null : context.replyToMsgId;
+    }
+
     /**
      * 取当前用户，取不到就抛（2026-10-28 去重：原来 9 个工具类各写了一份同样实现）。
      *
