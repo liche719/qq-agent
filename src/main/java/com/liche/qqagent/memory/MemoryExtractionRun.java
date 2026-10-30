@@ -40,6 +40,9 @@ public class MemoryExtractionRun {
     /** 面板手动触发 */
     public static final String TRIGGER_MANUAL = "MANUAL";
 
+    /** 上下文即将被摘要替代、原文要消失前触发的一次提取（2026-10-30） */
+    public static final String TRIGGER_COMPACT_RESCUE = "COMPACT_RESCUE";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

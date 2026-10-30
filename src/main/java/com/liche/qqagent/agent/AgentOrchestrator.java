@@ -90,6 +90,29 @@ public class AgentOrchestrator {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ContextSummaryService contextSummaryService;
 
+    /**
+     * 压缩前"记忆抢救"（2026-10-30）。
+     *
+     * <p>长对话压缩会把最早那几轮**原文丢掉**，只留一段摘要。如果那几轮里有值得入库的事实
+     * （改时间、换目标、重要决定），摘要之后提取器再也看不到原文——**永久丢失**。
+     * 所以在这一刻先跑一次提取，把要丢的那几段先过一遍。
+     *
+     * <p>不新增模型调用：提取本来就要跑，只是提前到"原文还没消失"的时机。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.liche.qqagent.memory.MemoryExtractor>
+            memoryExtractorProvider;
+
+    @org.springframework.beans.factory.annotation.Value("${memory.rescue-before-compact:true}")
+    private boolean rescueBeforeCompact = true;
+
+    private static final java.util.concurrent.ExecutorService RESCUE_EXECUTOR =
+            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "memory-rescue");
+                thread.setDaemon(true);
+                return thread;
+            });
+
     @Autowired
     public AgentOrchestrator(MessageIdempotency idempotency,
                              UserService userService,
@@ -589,6 +612,50 @@ public class AgentOrchestrator {
      * 也接不上"那件事怎么发展到今天"。现在把那一段压成摘要，作为 summary 轮次放在历史最前面。
      * 只在真的被截掉 ≥ 阈值时才有这一步，摘要按"最早那条消息"缓存，同一段只花一次调用。
      */
+
+    /**
+     * 把"即将被摘要替代"的那几轮先送进记忆提取（2026-10-30）。
+     *
+     * <p>异步执行：压缩发生在回复链路上，不能为了抢救多等一次提取（实测提取 3~20 秒）。
+     * 失败只记日志——抢救是增益，不该影响当前这轮回答。
+     */
+
+    /** 从"即将被丢掉的历史"里挑出用户说过的话（纯函数，便于单测） */
+    static List<String> rescueTexts(List<ContextTurn> dropped) {
+        if (dropped == null || dropped.isEmpty()) {
+            return List.of();
+        }
+        return dropped.stream()
+                .filter(turn -> turn != null && "user".equals(turn.role()))
+                .map(ContextTurn::text)
+                .filter(text -> text != null && !text.isBlank())
+                .toList();
+    }
+
+    private void rescueMemoryBeforeCompaction(String userId, List<ContextTurn> dropped) {
+        if (!rescueBeforeCompact || userId == null || dropped == null || dropped.isEmpty()) {
+            return;
+        }
+        com.liche.qqagent.memory.MemoryExtractor extractor =
+                memoryExtractorProvider == null ? null : memoryExtractorProvider.getIfAvailable();
+        if (extractor == null) {
+            return;
+        }
+        List<String> userTexts = rescueTexts(dropped);
+        if (userTexts.isEmpty()) {
+            return;
+        }
+        RESCUE_EXECUTOR.submit(() -> {
+            try {
+                boolean ok = extractor.extract(userId, userTexts, () -> true,
+                        com.liche.qqagent.memory.MemoryExtractionRun.TRIGGER_COMPACT_RESCUE);
+                log.info("压缩前记忆抢救 user={} 轮数={} 结果={}", userId, userTexts.size(), ok);
+            } catch (RuntimeException exception) {
+                log.warn("压缩前记忆抢救失败 user={}: {}", userId, exception.getMessage());
+            }
+        });
+    }
+
     private List<ContextTurn> withOlderSummary(String userId, List<ContextTurn> kept,
                                                int maxTurns, int maxChars) {
         if (contextSummaryService == null || !contextSummaryService.enabled()) {
@@ -603,6 +670,7 @@ public class AgentOrchestrator {
             }
             int droppedCount = wider.size() - kept.size();
             List<ContextTurn> dropped = wider.subList(0, droppedCount);
+            rescueMemoryBeforeCompaction(userId, dropped);
             String summary = contextSummaryService.summarize(userId, dropped);
             if (summary == null || summary.isBlank()) {
                 return kept;
