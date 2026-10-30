@@ -1,7 +1,7 @@
 #!/bin/bash
 cd /c/Users/33721/Desktop/wechat-agent/qq-agent
 export SPRING_PROFILES_ACTIVE=local
-export DB_URL='jdbc:postgresql://localhost:55433/wv_effort'
+export DB_URL='jdbc:postgresql://localhost:55433/wv_rescue'
 export DB_DRIVER='org.postgresql.Driver'
 export MYSQL_USER=wv
 export MYSQL_PASSWORD=wv
