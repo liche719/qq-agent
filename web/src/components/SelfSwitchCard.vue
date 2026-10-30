@@ -29,7 +29,7 @@ async function toggle() {
   try {
     const data = await api('/self/switch', {
       method: 'POST',
-      body: JSON.stringify({ enabled: !enabled.value })
+      body: { enabled: !enabled.value }
     })
     enabled.value = !!data?.enabled
     source.value = data?.source || source.value

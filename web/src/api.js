@@ -21,7 +21,9 @@ async function request(path, { method = 'GET', body, key, onStatus } = {}) {
     response = await fetch(path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // 2026-10-31 容错：调用方偶尔会把已经 stringify 过的字符串再传进来，
+      // 再序列化一次会变成 "{\"enabled\":false}"（服务端解析成字符串 → 500）。字符串就原样发。
+      body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
       cache: 'no-store',
       signal: controller.signal
     })
