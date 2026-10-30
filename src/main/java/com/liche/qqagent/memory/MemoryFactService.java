@@ -445,6 +445,43 @@ public class MemoryFactService {
      * 按语义召回事实（注入到提示词时也用这条路——**不做字面匹配**，用户问"明天在哪上课"和
      * 记忆里的"第一周周二晚数学课的教室是 303"字面上一个词都不重合，但向量上很近）。
      */
+
+    /**
+     * 召回加权（2026-10-30）：相似度 × 来源可信度 × 近期确认。
+     *
+     * <p><b>为什么只加权不衰减</b>：记忆的第一原则是"不丢"。时间衰减一旦作用到存储上，
+     * 就会把"他专业是计算机"这种没有过期概念的事实也一点点削没（真实教训见 pitfalls 第 82 条：
+     * 批量补 TTL 误杀 42 条）。所以这里**只影响排序**：同样相似的两条，"他亲口说的"排在
+     * "模型推断的"前面，"最近被确认过的"排在"很久没动过"的前面。
+     *
+     * <p>权重区间刻意很窄（0.92~1.00），保证**语义相关性仍然是主导因素**——
+     * 一条来源可靠的旧事实，不该压过一条明显更相关的新事实。
+     */
+    static double weightedScore(MemoryFact fact, double similarity) {
+        if (fact == null) {
+            return 0d;
+        }
+        double originWeight = switch (fact.getOrigin() == null ? "" : fact.getOrigin()) {
+            case MemoryFact.ORIGIN_STATED -> 1.00;
+            case MemoryFact.ORIGIN_INFERRED -> 0.95;
+            case MemoryFact.ORIGIN_EXTERNAL -> 0.92;
+            default -> 1.00;
+        };
+        double recencyWeight = 1.00;
+        // 事实表没有单独的"确认时间"：更新即确认（取代链写入时 updatedAt 会刷新）
+        java.time.LocalDateTime confirmed = fact.getUpdatedAt() != null
+                ? fact.getUpdatedAt() : fact.getCreatedAt();
+        if (confirmed != null) {
+            long days = java.time.Duration.between(confirmed, java.time.LocalDateTime.now()).toDays();
+            if (days > 180) {
+                recencyWeight = 0.96;
+            } else if (days > 30) {
+                recencyWeight = 0.98;
+            }
+        }
+        return similarity * originWeight * recencyWeight;
+    }
+
     public List<MemoryFact> recallFacts(String userId, String queryText, int limit, double minScore) {
         if (userId == null || queryText == null || queryText.isBlank() || limit <= 0) {
             return List.of();
@@ -467,7 +504,12 @@ public class MemoryFactService {
                 .map(MemoryFactVectorStore.FactHit::id).toList(), userId)) {
             byId.put(fact.getId(), fact);
         }
-        // 保持相似度顺序（模型看的时候也是"最像的在前"）
+        // 2026-10-30：不再只按向量相似度排，而是「相似度 × 可信来源 × 近期确认」加权。
+        // 只做**排序加权**，不做衰减/删除——曾经批量补 TTL 误杀过 42 条长期事实（pitfalls 第 82 条）。
+        Map<Long, Double> scoreById = new LinkedHashMap<>();
+        for (MemoryFactVectorStore.FactHit hit : hits) {
+            scoreById.put(hit.id(), hit.score());
+        }
         List<MemoryFact> ordered = new ArrayList<>();
         for (MemoryFactVectorStore.FactHit hit : hits) {
             MemoryFact fact = byId.get(hit.id());
@@ -475,6 +517,9 @@ public class MemoryFactService {
                 ordered.add(fact);
             }
         }
+        ordered.sort((left, right) -> Double.compare(
+                weightedScore(right, scoreById.getOrDefault(right.getId(), 0d)),
+                weightedScore(left, scoreById.getOrDefault(left.getId(), 0d))));
         // 2026-10-28：先按时间词重排，再按"查询里点到的实体"重排。
         // 后者更具体（"周三·课"这种别名向量对不齐，但实体能对上），所以放在时间词之后做稳定排序。
         List<MemoryFact> byTime = reorderByTimeWord(ordered, queryText);
