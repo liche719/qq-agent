@@ -540,9 +540,22 @@ public class AgentOrchestrator {
         // ② 用户说「记住」排的那次会被紧跟的第二条消息取消，明确要求就丢了。调度器自己按轮次/兜底判定即可。
 
         // 2) 正常对话：加载记忆 → 大模型对话（含工具）
+        // 2026-11-01：这段是"模型调用之前"的全部开销，用户实测 5~8 秒却看不出花在哪，
+        // 所以分段计时（超过 1.5 秒才打，避免刷日志）。档案=用户表、记忆=召回(含 embedding 外部调用)、
+        // 历史=最近对话 + 摘要缓存。
+        long ctxStart = System.currentTimeMillis();
         UserProfile profile = userService.get(userId);
+        long ctxAfterProfile = System.currentTimeMillis();
         MemoryLoader.LoadedMemory mem = memoryLoader.load(userId, content);
+        long ctxAfterMemory = System.currentTimeMillis();
         List<ContextTurn> history = durableHistory(userId);
+        long ctxAfterHistory = System.currentTimeMillis();
+        long ctxTotal = ctxAfterHistory - ctxStart;
+        if (ctxTotal > 1500) {
+            log.info("上下文准备偏慢 user={} total={}ms 档案={}ms 记忆={}ms 历史={}ms",
+                    userId, ctxTotal, ctxAfterProfile - ctxStart,
+                    ctxAfterMemory - ctxAfterProfile, ctxAfterHistory - ctxAfterMemory);
+        }
         try {
             DocumentBundle extracted = extractDocuments(batch);
             List<ExtractedDocument> documents = extracted.documents();
