@@ -671,7 +671,11 @@ public class AgentOrchestrator {
             int droppedCount = wider.size() - kept.size();
             List<ContextTurn> dropped = wider.subList(0, droppedCount);
             rescueMemoryBeforeCompaction(userId, dropped);
-            String summary = contextSummaryService.summarize(userId, dropped);
+            // 2026-11-01：摘要不再阻塞回复——只用缓存，没有就后台补（用户指出它应该是后台任务）
+            String summary = contextSummaryService.cached(userId, dropped);
+            if (summary == null || summary.isBlank()) {
+                contextSummaryService.generateAsync(userId, dropped);
+            }
             if (summary == null || summary.isBlank()) {
                 return kept;
             }

@@ -70,7 +70,9 @@ public class ContextSummaryService {
             log.debug("读上下文摘要缓存失败（忽略）：{}", exception.getMessage());
         }
         try {
-            String summary = chatModel.chat(buildPrompt(dropped));
+            // 2026-11-01：摘要只是压缩，用 SUMMARY 档位（默认关思考），别再继承对话的思考强度
+            String summary = com.liche.qqagent.config.LlmScenario.run(
+                    com.liche.qqagent.config.LlmScenario.SUMMARY, () -> chatModel.chat(buildPrompt(dropped)));
             if (summary == null || summary.isBlank()) {
                 return null;
             }
@@ -90,6 +92,61 @@ public class ContextSummaryService {
             return null;
         }
     }
+
+    /** 只取缓存，不触发模型调用（供回复链路用：拿不到就先不带摘要） */
+    public String cached(String userId, List<ContextTurn> dropped) {
+        if (!enabled || dropped == null || dropped.size() < minTurns) {
+            return null;
+        }
+        try {
+            String cached = redis.opsForValue().get(KEY_PREFIX + userId + ":" + cacheTag(dropped));
+            return cached == null || cached.isBlank() ? null : cached;
+        } catch (RuntimeException exception) {
+            log.debug("读上下文摘要缓存失败（忽略）：{}", exception.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 后台生成摘要（2026-11-01）。
+     *
+     * <p>用户指出：「摘要不应该是后台的任务吗」——对。它原来在回复链路上同步跑，
+     * 长对话每轮花 20 秒才轮到回答。现在回复链路只用缓存，缓存没有再后台补，
+     * 下一轮起就能用上。代价是**首次截断的那一轮没有摘要**（只有最近窗口），可以接受。
+     *
+     * <p>同一个 cacheKey 只允许一个在跑，避免连续几条消息各起一次。
+     */
+    public void generateAsync(String userId, List<ContextTurn> dropped) {
+        if (!enabled || dropped == null || dropped.size() < minTurns) {
+            return;
+        }
+        String key = KEY_PREFIX + userId + ":" + cacheTag(dropped);
+        if (!IN_FLIGHT.add(key)) {
+            return;
+        }
+        try {
+            EXECUTOR.submit(() -> {
+                try {
+                    summarize(userId, dropped);
+                } catch (RuntimeException exception) {
+                    log.warn("后台生成上下文摘要失败：{}", exception.getMessage());
+                } finally {
+                    IN_FLIGHT.remove(key);
+                }
+            });
+        } catch (RuntimeException exception) {
+            IN_FLIGHT.remove(key);
+            log.warn("提交后台摘要任务失败：{}", exception.getMessage());
+        }
+    }
+
+    private static final java.util.Set<String> IN_FLIGHT = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.ExecutorService EXECUTOR =
+            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "ctx-summary");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     private String buildPrompt(List<ContextTurn> dropped) {
         StringBuilder prompt = new StringBuilder();
