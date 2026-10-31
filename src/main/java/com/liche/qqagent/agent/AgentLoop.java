@@ -993,6 +993,11 @@ public class AgentLoop {
         if (first.length() < 15) {
             return;
         }
+        // 2026-11-01：第一句里带「|||」就不要提前发——分隔符是拆气泡的内部约定，
+        // 提前发出去会把标记直接露给用户（他实测看到过）。让最终回复走 ReplySplitter 统一处理。
+        if (first.contains("|||")) {
+            return;
+        }
         String outcome = TurnProgress.emit(first);
         if (outcome == null || !outcome.startsWith("已经发出去")) {
             log.debug("提前发送第一句失败（退回整条发） user={} reason={}", userId, outcome);

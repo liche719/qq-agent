@@ -67,6 +67,27 @@ public class ReplySplitter {
         this.delayMaxMillis = max;
     }
 
+
+    /**
+     * 清理一条要发出去的文本（2026-11-01）。
+     *
+     * <p>模型偶尔会：① 把 {@code |||} 写在**开头或结尾**、② 在正文前面加空行、③ 只写一个分隔符。
+     * 这些都不该出现在用户看到的回复里。分隔符本来是"拆气泡"的内部约定，
+     * 一旦因为额度只剩 1 条而不能拆，就必须退化成换行，不能原样发出去。
+     */
+    static String sanitize(String text) {
+        if (text == null) {
+            return "";
+        }
+        String cleaned = text.replace(MARKER, "\n");
+        // 开头的空白（含换行）全部去掉：QQ 气泡里顶着一段空行很难看
+        cleaned = cleaned.replaceAll("^[\\s\u3000]+", "");
+        cleaned = cleaned.replaceAll("[\\s\u3000]+$", "");
+        // 连续 3 个以上换行压成 2 个
+        cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
+        return cleaned;
+    }
+
     /** 两个气泡之间停多久（毫秒）——每次在区间里随机取，固定值会显得机械 */
     public long delayMillis() {
         if (delayMaxMillis <= delayMinMillis) {
@@ -102,11 +123,13 @@ public class ReplySplitter {
         }
         int limit = Math.max(1, Math.min(maxBubbles, budget));
         if (!enabled || limit == 1) {
-            return List.of(text);
+            // 2026-11-01 修：不拆分时原来直接返回原文，模型写的 ||| 和开头换行会原样发出去
+            // （用户实测看到「|||」和回复开头的空行）。这里也要清一遍。
+            return List.of(sanitize(text));
         }
         // 代码块 / 表格 / 工具尾注：拆开就碎了，原样一条
         if (HAS_CODE_FENCE.matcher(text).find() || HAS_TABLE.matcher(text).find()) {
-            return List.of(text);
+            return List.of(sanitize(text));
         }
 
         // 尾注单独拎出来，永远跟着最后一条（它不属于"要说的话"）
@@ -120,7 +143,7 @@ public class ReplySplitter {
 
         List<String> parts = splitBody(body, limit);
         if (parts.size() <= 1) {
-            return List.of(text);
+            return List.of(sanitize(text));
         }
         List<String> result = new ArrayList<>(parts);
         int last = result.size() - 1;
