@@ -132,7 +132,9 @@ public class MemoryExtractor {
         int newTurns = burstTexts == null ? 0 : burstTexts.size();
         // 重叠最多 overlapTurns 轮（默认 5）：rounds×0.3 超过它就取它
         int overlap = Math.min(overlapTurns, (int) Math.ceil(roundsForWindow * 0.3));
-        int base = windowRowsOverride > 0 ? windowRowsOverride : (roundsForWindow + overlap) * 2;
+        // 2026-11-01：窗口 = 中间要提取的 N 轮 + 前面 overlap 轮 + 后面 tailSkip 轮（后两轮先不提）
+        int base = windowRowsOverride > 0 ? windowRowsOverride
+                : (roundsForWindow + overlap + Math.max(0, tailSkipTurns)) * 2;
         return Math.max(base, Math.min(400, newTurns * 2 + 10));
     }
 
@@ -148,6 +150,62 @@ public class MemoryExtractor {
     @Value("${memory.fact-prompt-cards-max-chars:4000}")
     public void setFactPromptCardsMaxChars(int factPromptCardsMaxChars) {
         this.factPromptCardsMaxChars = Math.max(500, factPromptCardsMaxChars);
+    }
+
+    /**
+     * 最新的这几轮**这次先不提取**（2026-11-01，用户要求"后置两轮"）。
+     *
+     * <p>为什么要留：最新两条往往还没说完（他连着发），这时提取容易把半句话当结论；
+     * 等下一轮它们自然变成"中间段"再提。它们只作为上下文出现，标记成 [之后再提取]。
+     */
+    @Value("${memory.extraction-tail-skip-turns:2}")
+    private int tailSkipTurns = 2;
+
+    /** 上一条前情摘要（STATE），没有就返回 null */
+    private String latestStateText(String userId) {
+        try {
+            return memoryService.listActive(userId, "STATE").stream()
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.util.Comparator.comparing(
+                            Memory::getUpdatedAt,
+                            java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                    .map(Memory::getContent)
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    /** 提取游标：已处理到哪条消息（库 id）；不存在时返回 0（首次会从"最近一段"起步） */
+    private long readCursor(String userId) {
+        if (contextStore != null) {
+            try {
+                String value = contextStore.readFlag("mem:extract:cursor:" + userId);
+                if (value != null && !value.isBlank()) {
+                    return Long.parseLong(value.trim());
+                }
+            } catch (RuntimeException ignored) {
+                // 落到下面的初始化
+            }
+        }
+        // 2026-11-01：首次没有游标时**从"现在"起步**，不是从 0——
+        // 从 0 会把几年前的旧对话当"待处理"重提一遍（实测积压 4374 行、提出来的全是陈年旧事）。
+        long latest = conversationMemoryService == null ? 0L : conversationMemoryService.latestId(userId);
+        if (latest > 0) {
+            writeCursor(userId, latest);
+        }
+        return latest;
+    }
+
+    private void writeCursor(String userId, long id) {
+        if (contextStore == null || id <= 0) {
+            return;
+        }
+        try {
+            contextStore.writeFlag("mem:extract:cursor:" + userId, String.valueOf(id));
+        } catch (RuntimeException exception) {
+            log.warn("写提取游标失败 user={} 原因={}", userId, exception.getMessage());
+        }
     }
 
     /** 该把最老的几条机主消息标成"背景"（0 = 一条都不标） */
@@ -275,8 +333,24 @@ public class MemoryExtractor {
                 trail[1] = "STALE";
                 return true;
             }
-            List<ContextTurn> recent = conversationMemoryService == null
-                    ? List.of() : conversationMemoryService.recentForExtraction(userId, windowLimit(burstTexts));
+            // 2026-11-01：改成「游标 → 现在」按最老优先取，防高频积压把中间那段滑过去
+            final long[] cursorBox = {readCursor(userId), 0L};
+            int cap = Math.max(40, windowLimit(burstTexts));
+            List<ContextTurn> recent = List.of();
+            if (conversationMemoryService != null) {
+                var pending = conversationMemoryService.pendingAfter(userId, cursorBox[0], cap);
+                if (pending != null && pending.turns() != null && pending.turns().size() >= 4) {
+                    recent = pending.turns();
+                    cursorBox[1] = pending.lastId();
+                    long backlog = conversationMemoryService.pendingCount(userId, cursorBox[0]);
+                    if (backlog > cap) {
+                        log.warn("提取积压 user={} 待处理={} 行（单次上限 {}，会分片按最老优先清）",
+                                userId, backlog, cap);
+                    }
+                } else {
+                    recent = conversationMemoryService.recentForExtraction(userId, windowLimit(burstTexts));
+                }
+            }
             if (recent.isEmpty()) {
                 recent = contextStore.getRecent(userId, recentTurns);
             }
@@ -298,9 +372,12 @@ public class MemoryExtractor {
             // 卡片太多就不列（列不下就会被迫截断、可能漏掉该合并的那条），那时退回"向量召回 + 小判定"。
             List<ContextTurn> promptRecent = recent;
             int backgroundTurns = backgroundUserTurns(recent, burstTexts == null ? 0 : burstTexts.size());
+            // 2026-11-01：兜底触发（没有 burst，通常是 IDLE）时不做“后置跳过”，否则最新两轮可能永远提不到
+            int tailSkip = burstTexts == null || burstTexts.isEmpty() ? 0 : Math.max(0, tailSkipTurns);
             String factCards = factCardsForPrompt(userId);
             ExtractionResult result = parse(LlmScenario.run(LlmScenario.EXTRACT,
-                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns, factCards, userId))));
+                    () -> chatModel.chat(buildPrompt(promptRecent, existing, cores, backgroundTurns, tailSkip,
+                            factCards, userId, latestStateText(userId)))));
             if (result == null) {
                 // 解析不出来**不能算"跑完了"**：那会把这段对话当成已处理、计数清零，它就再也不会被提取。
                 // 返回 false 走失败重试，并把原因记进审计（面板能看到）。
@@ -331,7 +408,12 @@ public class MemoryExtractor {
                     trail[1] = "STALE";
                     return;
                 }
-                trail[2] = apply(userId, writeBack, extractionRecent);
+                trail[2] = apply(userId, writeBack, extractionRecent, cursorBox[1]);
+                // 2026-11-01：这批真的写进去了，游标才往前走——按"实际喂进模型的最后一条"推进，
+                // 绝不按当前最新一条推进（那会把期间新来的消息标成已处理 → 直接丢）
+                if (cursorBox[1] > cursorBox[0]) {
+                    writeCursor(userId, cursorBox[1]);
+                }
             });
             return true;
         } catch (Exception e) {
@@ -488,7 +570,7 @@ public class MemoryExtractor {
      * 现在提取时顺手产出，随提取节奏更新。内容里带上覆盖到的最后一条消息 id，
      * 注入时据此判断“有没有落后于被截断的位置”。
      */
-    private void applyState(String userId, ExtractionResult result, List<ContextTurn> recent) {
+    private void applyState(String userId, ExtractionResult result, List<ContextTurn> recent, long cursorId) {
         String state = result == null ? null : result.state();
         if (state == null || state.isBlank()) {
             return;
@@ -510,7 +592,7 @@ public class MemoryExtractor {
             }
         }
         try {
-            Memory saved = memoryService.addState(userId, state, coversTo);
+            Memory saved = memoryService.addState(userId, state, coversTo, cursorId);
             Map<String, Integer> counts = writeTally.get();
             if (counts != null) {
                 counts.merge("新增状态摘要", 1, Integer::sum);
@@ -524,14 +606,14 @@ public class MemoryExtractor {
         }
     }
 
-    private String apply(String userId, ExtractionResult result, List<ContextTurn> recent) {
+    private String apply(String userId, ExtractionResult result, List<ContextTurn> recent, long cursorId) {
         if (result == null) {
             return "";
         }
         writeTally.set(new LinkedHashMap<>());
         try {
             Set<String> allowedSourceIds = allowedSourceIds(recent);
-            applyState(userId, result, recent);
+            applyState(userId, result, recent, cursorId);
             applyEpisodes(userId, result, allowedSourceIds);
             applyNewWork(userId, result, allowedSourceIds);
             applyCoreCandidates(userId, result, allowedSourceIds);
@@ -1021,7 +1103,13 @@ public class MemoryExtractor {
     private MemoryEntityService memoryEntityService;
 
     private String buildPrompt(List<ContextTurn> recent, List<Memory> existing, List<Memory> cores,
-                               int backgroundTurns, String factCards, String userId) {
+                               int backgroundTurns, int tailSkip, String factCards, String userId) {
+        return buildPrompt(recent, existing, cores, backgroundTurns, tailSkip, factCards, userId, null);
+    }
+
+    private String buildPrompt(List<ContextTurn> recent, List<Memory> existing, List<Memory> cores,
+                               int backgroundTurns, int tailSkip, String factCards, String userId,
+                               String previousState) {
         StringBuilder prompt = new StringBuilder();
         // 【2026-09-29 缓存修复】**不要把「当前时间」写在第一句**：上游的上下文缓存只认前缀，
         // 时间每轮都变 → 从第 10 个 token 起就全部作废，实测 prompt 7015 命中 0%（单次 0.026 元，
@@ -1127,17 +1215,32 @@ public class MemoryExtractor {
         if (factCards != null && !factCards.isEmpty()) {
             prompt.append("\n已记着的会变信息（写 facts 时按第 15 条给 relation / targetSubject）：\n").append(factCards);
         }
+        if (previousState != null && !previousState.isBlank()) {
+            prompt.append("\n上一条前情摘要（供你更新，不要照抄）：\n").append(previousState).append('\n');
+        }
         prompt.append("\n最近对话：\n");
         int seenUserTurns = 0;
+        int totalUserTurns = 0;
+        for (ContextTurn turn : recent) {
+            if (turn != null && "user".equals(turn.role())) {
+                totalUserTurns++;
+            }
+        }
+        int deferredFrom = Math.max(backgroundTurns, totalUserTurns - Math.max(0, tailSkip));
         for (ContextTurn turn : recent) {
             if (!"user".equals(turn.role())) {
                 continue;
             }
             // 最老的这几条上一次提取已经处理过，只作背景（见 overlapTurns / backgroundUserTurns 的说明）
-            boolean background = seenUserTurns++ < backgroundTurns;
+            boolean background = seenUserTurns < backgroundTurns;
+            // 最新的这几条可能还没说完，这次先不提（标记后由下一轮自然滚动到中间段）
+            boolean deferred = !background && seenUserTurns >= deferredFrom;
+            seenUserTurns++;
             prompt.append("user");
             if (background) {
                 prompt.append("[背景/上次已处理]");
+            } else if (deferred) {
+                prompt.append("[之后再提取]");
             }
             prompt.append(" [sourceMessageIds=")
                     .append(String.join(",", turn.sourceMessageIds()))
@@ -1159,9 +1262,10 @@ public class MemoryExtractor {
                 .append("\"duplicates\":[],")
                 // 2026-11-01：state 替代了原来的上下文摘要——提取时顺带产出"这段聊到哪了"
                 .append("\"state\":\"\"}\n")
-                .append("（**state 是必填的**：用 2~4 句话说明这段对话聊到哪了——他在忙什么、卡在哪、"
-                        + "已经定下来的事、还没做完的事。写给「下一次对话的我自己」看，不要罗列事实、不要评价，"
-                        + "也不要抄原话；没有实质性进展就写空字符串）\n")
+                .append("（**state 是必填的**：它是**下一段对话的前情摘要**，只看「上一条前情摘要」和这次提到的新事实来更新，"
+                        + "**不要复述对话原文、不要罗列事实清单**。写清四件事：他在做什么、卡在哪、下一步、情绪状态；"
+                        + "上一条里仍然成立的保留，已经过时的改掉，没变化的不要重复堆砌。总长不超过 300 字；"
+                        + "实在没有实质进展就原样返回上一条，或写空字符串）\n")
                 .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []；"
                         + "**facts 不需要 keywords**——事实层靠向量召回和 subject 聚合，关键词没人读；"
                         + "**但 facts 必须带 sourceMessageIds**（不给的话这条会被降级成「推断」，无法随后续遗忘一起清除））");

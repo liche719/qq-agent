@@ -430,11 +430,32 @@ public class MemoryService {
      */
     @Transactional
     public Memory addState(String userId, String content, String coversTo) {
+        return addState(userId, content, coversTo, 0L);
+    }
+
+    /**
+     * 带游标的写入（2026-11-02）：只有"更新的一批"才允许覆盖。
+     *
+     * <p>为什么要这个：提取在后台跑，两次可能重叠；先启动的那次如果后完成，
+     * 会把更新的 STATE 盖成旧内容。这里用 cursorId（已处理到第几条消息）做单调比较，
+     * 落后的一批直接丢弃——它的事实照样落库，只是不再覆盖更新的状态卡。
+     */
+    public Memory addState(String userId, String content, String coversTo, long cursorId) {
         if (!validUserId(userId) || content == null || content.isBlank()) {
             return null;
         }
-        Memory memory = new Memory(userId, "STATE", truncate(content.trim(), 800));
-        memory.setKeywords("covers_to:" + (coversTo == null ? "" : coversTo));
+        // 2026-11-01：带"截至时间"，否则几天后再注入会被当成"现在"
+        String stamp = "截至 " + java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")) + "：";
+        if (cursorId > 0) {
+            long existing = latestStateCursor(userId);
+            if (existing > 0 && cursorId <= existing) {
+                log.info("丢弃过期的状态摘要写入 user={} 本批游标={} 已有游标={}", userId, cursorId, existing);
+                return null;
+            }
+        }
+        Memory memory = new Memory(userId, "STATE", truncate(stamp + content.trim(), 400));
+        memory.setKeywords("covers_to:" + (coversTo == null ? "" : coversTo) + ";cursor:" + cursorId);
         memory.setImportance(5);
         memory.setUpdatedAt(LocalDateTime.now());
         Memory saved = repo(repository.save(memory), memory);
@@ -483,7 +504,52 @@ public class MemoryService {
         mergeProvenance(memory, provenance);
         Memory saved = repo(repository.save(memory), memory);
         indexVector(saved);
+        // 2026-11-01：只留最近 5 条，更旧的标失效（不物理删，保留追溯）。
+        // 不清理的话 STATE 会一直累积——它只是"这一段聊到哪了"，旧的对注入没用。
+        pruneStates(userId, 5);
         return saved;
+    }
+
+    /** 最新 STATE 记录的处理游标（0 = 没有或解析不出） */
+    private long latestStateCursor(String userId) {
+        try {
+            Memory newest = listActive(userId, "STATE").stream()
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.util.Comparator.comparing(
+                            Memory::getUpdatedAt,
+                            java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                    .orElse(null);
+            if (newest == null || newest.getKeywords() == null) {
+                return 0L;
+            }
+            for (String part : newest.getKeywords().split(";")) {
+                if (part.startsWith("cursor:")) {
+                    return Long.parseLong(part.substring("cursor:".length()).trim());
+                }
+            }
+            return 0L;
+        } catch (RuntimeException exception) {
+            return 0L;
+        }
+    }
+
+    /** 只保留最近 keep 条 STATE，其余标 SUPERSEDED */
+    private void pruneStates(String userId, int keep) {
+        try {
+            List<Memory> states = listActive(userId, "STATE").stream()
+                    .sorted(java.util.Comparator.comparing(
+                            Memory::getUpdatedAt,
+                            java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                    .toList();
+            for (int index = keep; index < states.size(); index++) {
+                Memory stale = states.get(index);
+                stale.setStatus(MemoryStatus.SUPERSEDED.name());
+                stale.setUpdatedAt(LocalDateTime.now());
+                repository.save(stale);
+            }
+        } catch (RuntimeException exception) {
+            log.warn("清理旧状态摘要失败 user={} 原因={}", userId, exception.getMessage());
+        }
     }
 
     // ================= 生命周期 =================

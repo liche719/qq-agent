@@ -20,6 +20,7 @@
 | 改提示词/记忆策略后想对比效果 | [`eval.md`](eval.md) |
 | 动记忆（`memory` / `memory_fact` / `conversation_memory`） | [`memory-vector-plan.md`](memory-vector-plan.md) |
 | 动记忆提取的触发/窗口/成本；**状态摘要 STATE（2026-11-01 取代上下文摘要）** | [`memory-extraction.md`](memory-extraction.md) |
+| 动**上下文窗口划分**（19 轮 / 15+2+2 / 游标防丢 / STATE 语义） | [`memory-window-design.md`](memory-window-design.md) |
 | 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
 | 动自主模块「它自己」 | [`self-layer-plan.md`](self-layer-plan.md) |
 | **代码整理清单（拆类/去重）** | [`refactor.md`](refactor.md) |

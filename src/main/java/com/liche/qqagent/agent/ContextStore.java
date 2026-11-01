@@ -93,6 +93,24 @@ public class ContextStore {
         push(userId, "system", text, sourceMessageIds);
     }
 
+    /** 读一个小状态（提取游标这类），读不到返回 null */
+    public String readFlag(String key) {
+        try {
+            return redis.opsForValue().get(key);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    /** 写一个小状态；不带过期（游标要长期保留） */
+    public void writeFlag(String key, String value) {
+        try {
+            redis.opsForValue().set(key, value);
+        } catch (RuntimeException ignored) {
+            // 写失败不影响主流程：下次会用旧游标重跑这一段（最多重复，不会丢）
+        }
+    }
+
     /** 全部最近上下文（时间正序） */
     public List<ContextTurn> getRecent(String userId) {
         return getRecent(userId, Integer.MAX_VALUE);

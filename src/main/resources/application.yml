@@ -460,10 +460,10 @@ bilibili:
 memory:
   extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}
   extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
-  context-rounds: ${MEMORY_CONTEXT_ROUNDS:10}
+  context-rounds: ${MEMORY_CONTEXT_ROUNDS:19}
   context-ttl-hours: ${MEMORY_CONTEXT_TTL_HOURS:720}
-  context-max-turns: ${MEMORY_CONTEXT_MAX_TURNS:40}
-  context-max-chars: ${MEMORY_CONTEXT_MAX_CHARS:12000}
+  context-max-turns: ${MEMORY_CONTEXT_MAX_TURNS:19}
+  context-max-chars: ${MEMORY_CONTEXT_MAX_CHARS:15000}
   # 长对话压缩（2026-10-26）：窗口外的更早对话压成 ≤150 字摘要，而不是直接丢掉。
   # 只对被截掉 ≥ min-turns 轮时触发；摘要按"最早那条消息"缓存 ttl-hours，同一段只花一次调用。
   core-max-load: ${MEMORY_CORE_MAX_LOAD:16}
@@ -491,7 +491,7 @@ memory:
   extraction-max-idle-hours: ${MEMORY_EXTRACTION_MAX_IDLE_HOURS:6}
   extraction-coalesce-seconds: ${MEMORY_EXTRACTION_COALESCE_SECONDS:10}
   # 上下文重叠：窗口里多出来的这 30%（K 条机主消息）只作背景（上次已处理），跨窗口的一句话才读得懂
-  extraction-overlap-turns: ${MEMORY_EXTRACTION_OVERLAP_TURNS:5}
+  extraction-overlap-turns: ${MEMORY_EXTRACTION_OVERLAP_TURNS:2}
   # 最小间隔：同一个用户两次提取至少隔这么久（触发不会丢，只是往后挪）。
   extraction-min-interval-seconds: ${MEMORY_EXTRACTION_MIN_INTERVAL_SECONDS:180}
   # 2026-09-18：**前置过滤整块删除**（用户要求）——"这一轮全是问课表/设提醒就跳过"那套硬编码正则不再存在，

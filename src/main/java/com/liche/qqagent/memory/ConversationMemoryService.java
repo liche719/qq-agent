@@ -240,6 +240,62 @@ public class ConversationMemoryService {
         }
     }
 
+    /**
+     * 从游标之后取**最老的**一段（2026-11-01，防丢）。
+     *
+     * <p>为什么不再用"最近 N 行"：消息来得快时（每秒一条以上），两次提取之间积压可能超过窗口，
+     * 最早那几轮会被窗口滑过去、永远提不到。改成从游标往后按最老优先取，积压多少就按顺序清多少。
+     *
+     * @param afterId 只取 id 大于它的消息（0 = 从头）
+     * @param limit   单次上限（行）
+     */
+    /** 待提取的一批消息 + 最后一条的库 id（游标就推进到它） */
+    public record PendingWindow(List<ContextTurn> turns, long lastId) {
+    }
+
+    public PendingWindow pendingAfter(String userId, long afterId, int limit) {
+        if (!validUserId(userId)) {
+            return new PendingWindow(List.of(), afterId);
+        }
+        try {
+            List<ConversationMemory> rows = repository.findByUserIdAndIdGreaterThanOrderByIdAsc(userId,
+                    afterId, PageRequest.of(0, Math.max(2, Math.min(400, limit))));
+            long lastId = rows == null || rows.isEmpty() ? afterId : rows.get(rows.size() - 1).getId();
+            List<ContextTurn> turns = rows == null ? List.of() : rows.stream()
+                    .filter(record -> record != null && userId.equals(record.getUserId()))
+                    .filter(record -> notExpired(record, LocalDateTime.now(zone)))
+                    .filter(record -> "user".equalsIgnoreCase(record.getRole())
+                            || "assistant".equalsIgnoreCase(record.getRole()))
+                    .map(record -> new ContextTurn(record.getRole(), record.getContent(),
+                            record.sourceMessageIdList()))
+                    .toList();
+            return new PendingWindow(turns, lastId);
+        } catch (RuntimeException exception) {
+            log.warn("读取待提取消息失败 user={} reason={}", userId, exception.getClass().getSimpleName());
+            return new PendingWindow(List.of(), afterId);
+        }
+    }
+
+    /** 最新一条消息的库 id（首次初始化游标用：从"现在"开始，不去翻几年前的旧对话） */
+    public long latestId(String userId) {
+        try {
+            List<ConversationMemory> rows = repository.findByUserIdOrderByCreatedAtDesc(userId,
+                    PageRequest.of(0, 1));
+            return rows == null || rows.isEmpty() ? 0L : rows.get(0).getId();
+        } catch (RuntimeException exception) {
+            return 0L;
+        }
+    }
+
+    /** 当前待提取消息有多少行（用于积压告警，不做实际读取） */
+    public long pendingCount(String userId, long afterId) {
+        try {
+            return repository.countByUserIdAndIdGreaterThan(userId, afterId);
+        } catch (RuntimeException exception) {
+            return -1;
+        }
+    }
+
     public List<ContextTurn> recentForExtraction(String userId) {
         return recentForExtraction(userId, extractionLimit);
     }

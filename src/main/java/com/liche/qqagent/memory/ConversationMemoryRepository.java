@@ -42,6 +42,8 @@ public interface ConversationMemoryRepository extends JpaRepository<Conversation
             + "and memory.role = 'user' and memory.createdAt > :after")
     LocalDateTime oldestUserTurnAfter(@Param("userId") String userId, @Param("after") LocalDateTime after);
 
+    long countByUserIdAndIdGreaterThan(String userId, Long id);
+
     List<ConversationMemory> findByUserIdAndIdGreaterThanOrderByIdAsc(String userId, Long id, Pageable pageable);
 
     @Modifying

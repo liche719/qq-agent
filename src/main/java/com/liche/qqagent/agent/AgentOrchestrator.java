@@ -722,33 +722,32 @@ public class AgentOrchestrator {
         }
     }
 
+    /**
+     * 把最新的 STATE 作为「前情摘要」放在历史最前面（2026-11-01 改）。
+     *
+     * <p>用户定的语义：STATE 概括的是**完整的一个窗口（19 轮）**，它不是"被截断那段的摘要"，
+     * 而是**下一段对话的前情**——所以不管当前窗口有没有被截断，都应该带上；
+     * 在下一个窗口攒满 19 轮、重新提取之前，一直用这一条。
+     */
     private List<ContextTurn> withOlderSummary(String userId, List<ContextTurn> kept,
                                                int maxTurns, int maxChars) {
-        // 2026-11-01：摘要服务已删除，这里只剩"取 STATE + 拼历史"两件事
-
         try {
-            // 多取一段，才能知道"被截掉的是什么"
-            List<ContextTurn> wider = conversationMemoryService.recentForContext(userId,
-                    Math.min(400, maxTurns * 3), Math.max(maxChars * 3, maxChars + 12000));
-            if (wider == null || wider.size() <= kept.size()) {
-                return kept;
-            }
-            int droppedCount = wider.size() - kept.size();
-            List<ContextTurn> dropped = wider.subList(0, droppedCount);
-            rescueMemoryBeforeCompaction(userId, dropped);
-            // 2026-11-01：摘要不再阻塞回复——只用缓存，没有就后台补（用户指出它应该是后台任务）
-            // 2026-11-01（用户要求）：不再单独生成摘要——改用提取时顺带产出的 STATE。
-            // 没有 STATE 时这段历史就空着，也不再临时调模型补（那是原来堵回复 20 秒的元凶）。
-            String summary = latestState(userId);
-            if (summary == null || summary.isBlank()) {
-                return kept;
-            }
+            String state = latestState(userId);
             List<ContextTurn> merged = new java.util.ArrayList<>();
-            merged.add(new ContextTurn("summary", "【更早的对话摘要（原对话已被截断）】" + summary));
+            if (state == null || state.isBlank()) {
+                // 没有 STATE 就明确说"更早的没有记录"——不然模型会假装记得（2026-11-01）
+                merged.add(new ContextTurn("summary",
+                        "<前情摘要>\n（更早的对话没有摘要记录，只知道下面这段最近对话。）\n</前情摘要>"));
+                merged.addAll(kept);
+                return merged;
+            }
+            merged.add(new ContextTurn("summary",
+                    "<前情摘要>\n（这是更早对话的状态记录，之后发生的事以最近这段对话为准）\n"
+                            + state + "\n</前情摘要>"));
             merged.addAll(kept);
             return merged;
         } catch (RuntimeException exception) {
-            log.warn("补上下文摘要失败（照常只用最近窗口）：{}", exception.getMessage());
+            log.warn("拼接前情摘要失败（照常只用最近窗口）：{}", exception.getMessage());
             return kept;
         }
     }
