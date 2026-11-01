@@ -124,9 +124,13 @@ public class MemoryRetrievalService {
         LocalDateTime now = LocalDateTime.now();
         String normalizedQuery = normalize(query);
         boolean historicalQuery = containsHistoryMarker(normalizedQuery);
+        // 2026-11-01：召回整体实测偶发 10 秒以上，分段计时定位（超过 800ms 才打）
+        long t0 = System.currentTimeMillis();
         Map<Long, StoredMedia> linkedMedia = linkedMedia(userId);
+        long tMedia = System.currentTimeMillis();
         // 一次算好"当前这句"的向量，中期事项 / 经历 / 历史对话三处共用（省调用，也保证口径一致）
         float[] queryVector = embedQuery(userId, normalizedQuery);
+        long tEmbed = System.currentTimeMillis();
 
         // ① 长期设定：无条件注入，按字面相关度 + 重要度 + 最近确认排序（没有向量门槛）
         List<Memory> profiles = profileCandidates(userId, normalizedQuery);
@@ -153,8 +157,15 @@ public class MemoryRetrievalService {
                 || profiles.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
                         >= minimumHistoricalScore)
                 || !experiences.isEmpty();
+        long tRank = System.currentTimeMillis();
         List<HistoricalItem> historical = historicalItems(userId, normalizedQuery, historicalQuery,
                 hasRelevantActiveMemory, now, queryVector);
+        long tHistory = System.currentTimeMillis();
+        long total = tHistory - t0;
+        if (total > 800) {
+            log.info("记忆召回偏慢 user={} total={}ms 媒体={}ms 向量={}ms 画像与排序={}ms 历史={}ms",
+                    userId, total, tMedia - t0, tEmbed - tMedia, tRank - tEmbed, tHistory - tRank);
+        }
         String coreSection = format(selectedProfiles, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));
         String workSection = format(selectedTasks, memory -> "- " + memory.getContent()
