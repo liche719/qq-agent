@@ -1,89 +1,63 @@
-# docs 索引
+# 文档索引
 
-这里是**细节文档**。`AGENTS.md` 刻意保持在 64 KB 以下（harness 读取上限，超了尾部会被静默截断），
-所以"每次都要用的"在 `AGENTS.md`，**"查的时候才用的"在这里**。
+> **怎么用**：改代码前先看「现役」里对应的那份；查数据/查历史看「参考」；「存档」只读不维护。
+>
+> ⚠️ **`docs/` 在 `.gitignore` 里** —— 新增/移动文档必须 `git add -f docs/xxx.md`；核实：`git ls-files docs/`。
+>
+> 更新原则：**新知识写进对应的专题文档，不要往 `AGENTS.md` 里堆**（它有 64 KB 截断上限）。
 
-> ⚠️ **`docs/` 在 `.gitignore` 里** —— 新增/移动文档必须 `git add -f docs/xxx.md`。
-> 核实是否真的入库：`git ls-files docs/`。
+## 现役（改代码前必看）
 
-## 先看哪个
+| 文档 | 管什么 | 最后更新 |
+|---|---|---|
+| [`pitfalls.md`](pitfalls.md) | **踩坑第一步**：103 条坑 + 判定方法 + 修法 | 2026-11-02 |
+| [`memory-window-design.md`](memory-window-design.md) | **上下文窗口 / 提取窗口 / STATE 的完整设计**：19 轮、15+2+2、游标防丢、实测数据 | 2026-11-02 |
+| [`memory-extraction.md`](memory-extraction.md) | 记忆提取的触发、窗口、成本、写什么不写什么 | 2026-11-01 |
+| [`agent-loop.md`](agent-loop.md) | Agent 循环：计划三档、失败分级、反思与重规划、软预算、进度降级 | 2026-10-28 |
+| [`llm-call-modes.md`](llm-call-modes.md) | LLM 调用档位、思考模式、缓存计价（含 8 档实测表） | 2026-10-29 |
+| [`eval.md`](eval.md) | 记忆与 Agent 评测：用例结构、怎么跑、当前基线 | 2026-10-29 |
+| [`todo.md`](todo.md) | 待办与还没做的事 | 2026-10-27 |
 
-| 你在干什么 | 看哪篇 |
+## 参考（查数据时看）
+
+| 文档 | 管什么 |
 |---|---|
-| **踩到坑 / 要动不熟的模块** | [`pitfalls.md`](pitfalls.md) ← **83 条**完整坑，开头有按主题的索引 |
-| 想知道还有什么事没做 | [`todo.md`](todo.md) |
-| **看整体整改方案（审计 + 外部对标 + 分批计划）** | [`plan-2026-10-26.md`](plan-2026-10-26.md) |
-| 动工具集或系统提示词 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) |
-| **改进度条 / 语音时机 / 轮内注入 / 按需工具** | [`eval.md`](eval.md) | **记忆评估**：19 条用例（抽取 + 召回）、本地跑分脚本、安全边界 | 2026-10-26 | 2026-10-26 |
-| [`interaction-feedback.md`](interaction-feedback.md) |
-| 动 Agent 循环（计划/反思/失败分级/预算/进度） | [`agent-loop.md`](agent-loop.md) |
-| 改提示词/记忆策略后想对比效果 | [`eval.md`](eval.md) |
-| 动记忆（`memory` / `memory_fact` / `conversation_memory`） | [`memory-vector-plan.md`](memory-vector-plan.md) |
-| 动记忆提取的触发/窗口/成本；**状态摘要 STATE（2026-11-01 取代上下文摘要）** | [`memory-extraction.md`](memory-extraction.md) |
-| 动**上下文窗口划分**（19 轮 / 15+2+2 / 游标防丢 / STATE 语义） | [`memory-window-design.md`](memory-window-design.md) |
-| 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
-| 动自主模块「它自己」 | [`self-layer-plan.md`](self-layer-plan.md) |
-| **代码整理清单（拆类/去重）** | [`refactor.md`](refactor.md) |
-| **回滚 / 每一步怎么退** | [`rollback.md`](rollback.md) |
-| 动部署 / CI / 密钥 | [`deploy-security.md`](deploy-security.md) + `pitfalls.md` 的「部署与 CI」 |
-| 动备份 | [`backup.md`](backup.md) |
-| 动通道、重发、主动消息 | [`channel-robustness.md`](channel-robustness.md) |
-| 动媒体记忆 | [`media-memory.md`](media-memory.md) |
-| 看视频 / 画图 / 评论带图 / 长任务后台跑 / 花费分类 | [`ai-abilities.md`](ai-abilities.md) |
-| 动数据库结构 / 迁移 | [`pg-migration.md`](pg-migration.md) + `AGENTS.md` §5 硬约定 |
-| 动面板前端 | `AGENTS.md` §3「运维面板前端」 |
-| 面板安卓壳（APK） | [`panel-app.md`](panel-app.md) |
-| 备案相关 | [`icp-filing.md`](icp-filing.md) |
+| [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 65 个工具与 34 条提示词的真实调用数据、失败率、取舍记录 |
+| [`memory-vector-plan.md`](memory-vector-plan.md) | 三层记忆（`memory` / `memory_fact` / `conversation_memory`）的设计与实测 |
+| [`self-layer-plan.md`](self-layer-plan.md) | 自主模块「它自己」的设计与实测（主文档） |
+| [`ai-abilities.md`](ai-abilities.md) | 看视频 / 画图 / B站评论带图 / 长任务后台跑 |
+| [`backup.md`](backup.md) | 备份改版与恢复步骤 |
+| [`deploy-security.md`](deploy-security.md) | 部署安全：受限命令、HMAC 验签、CI 供应链 |
+| [`channel-robustness.md`](channel-robustness.md) | 通道健壮性：半开连接、重发、限流 |
+| [`interaction-feedback.md`](interaction-feedback.md) | 进度条、语音时机、轮内注入、工具按需解锁 |
+| [`media-memory.md`](media-memory.md) | 媒体记忆三件套 |
+| [`pg-migration.md`](pg-migration.md) | MySQL → PostgreSQL 整库迁移（含 Quartz delegate 坑） |
+| [`panel-app.md`](panel-app.md) | 面板安卓壳（APK） |
+| [`icp-filing.md`](icp-filing.md) | 备案流程记录 |
+| [`rollback.md`](rollback.md) | 回滚步骤 |
 
-## 现役文档（18 篇）
+## 对外材料（不属于项目文档）
 
-**「最后校对」= 最后一次逐篇对齐过代码/配置/生产事实的日期**（不是文件 mtime）。
-**2026-10-22 整理**：新增 `interaction-feedback.md`；三篇存档与两份历史 SQL 挪进 `archive/`，
-根目录只留现役。
-**2026-10-25**：新增 `agent-loop.md`（计划 / 失败分级 / 反思 / 软预算 / 进度降级）。
-
-| 文档 | 管什么 | 最后校对 | 内容日期 |
-|---|---|---|---|
-| [`pitfalls.md`](pitfalls.md) | **83 条已知坑与约定**（原文 + 主题索引 + 带日期的现状括注） | 2026-10-25 | 2026-09-11 ~ 10-25 |
-| [`agent-loop.md`](agent-loop.md) | **Agent 循环**：计划三档、失败分级、独立反思与重规划、`task_reflection`、软预算、进度降级 | 2026-10-25 | 2026-10-25 |
-| [`interaction-feedback.md`](interaction-feedback.md) | **进度条 / 语音时机（`atEnd`）/ 轮内注入 / 按需工具 / 搜索条数 / 合并窗口** | 2026-10-22 | 2026-10-22 |
-| [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 工具与提示词的真实调用数、失败率、取舍记录。**§0~§7 是历史快照，最新现状看 §8**（**65 个工具** / 21 个类 / **34 条规则**） | 2026-10-22 | 2026-10-09 ~ 10-22 |
-| [`todo.md`](todo.md) | 待办与「说过但没做」的事 | 2026-10-20 | 2026-10-20 |
-| [`memory-vector-plan.md`](memory-vector-plan.md) | 记忆三层合并、向量召回、归档删除的完整设计与实测 | 2026-10-10 | 2026-09-17 ~ 09-20 |
-| [`memory-extraction.md`](memory-extraction.md) | 提取触发（轮次驱动）、窗口、落库埋点口径、成本账 | 2026-10-10 | 2026-09-14 ~ 10-08 |
-| [`llm-call-modes.md`](llm-call-modes.md) | 调用档位、思考模式、**前缀缓存计价**、审计表 | 2026-10-10 | 2026-09-13 ~ 10-09 |
-| [`self-layer-plan.md`](self-layer-plan.md) | 自主模块「它自己」的规格、实现、实测与坑（主文档） | 2026-10-20 | 2026-09-14 ~ 10-20 |
-| [`backup.md`](backup.md) | 备份改版（每天一个 zip、媒体共享存）与**恢复步骤** | 2026-10-10 | 2026-09-13 ~ 09-20 |
-| [`media-memory.md`](media-memory.md) | 媒体记忆三件套（读上限、写回描述） | 2026-10-10 | 2026-09-13 |
-| [`channel-robustness.md`](channel-robustness.md) | 半开连接自愈、重发三分支、限流、造半开的正确姿势 | 2026-10-10 | 2026-09-13 |
-| [`deploy-security.md`](deploy-security.md) | 受限部署命令、HMAC 验签、CI 供应链、**分片上传** | 2026-10-10 | 2026-09-13 ~ 09-30 |
-| [`pg-migration.md`](pg-migration.md) | MySQL → PostgreSQL 整库迁移全过程（历史事件，结论仍有效） | 2026-10-10 | 2026-09-17 ~ 09-20 |
-| [`panel-app.md`](panel-app.md) | 面板安卓壳 `liche-panel-1.0.apk`（产物在**工作区根**，不在仓库） | 2026-10-10 | 2026-09-29 |
-| [`icp-filing.md`](icp-filing.md) | 备案流程记录（**已通过**：粤ICP备2026141530号-1） | 2026-10-10 | 2026-09-12 |
-| [`ai-abilities.md`](ai-abilities.md) | 看视频 / 画图 / B站评论带图 / 长任务后台跑 | 2026-10-21 | 2026-10-21 |
-
-## 存档（不再维护，仅追溯用）
-
-搬进 `archive/` 是为了让根目录一眼看清"哪些还该看"。**内容保持原样，不删不改**——
-它们记录的是当时的决策与踩坑过程，有追溯价值。
-
-| 文档 | 为什么存档 |
+| 文档 | 用途 |
 |---|---|
-| [`archive/memory-hybrid-plan.md`](archive/memory-hybrid-plan.md) | 早期混合检索方案，已被 `memory-vector-plan.md` 的向量方案取代 |
-| [`archive/self-layer-spec.md`](archive/self-layer-spec.md) | 自主模块早期纸面规格；现役是 `self-layer-plan.md` |
-| [`archive/self-layer.md`](archive/self-layer.md) | 自主模块早期骨架说明；同上 |
-| [`archive/schema.sql`](archive/schema.sql) | **已作废**：MySQL 时代 DDL 快照，照着建库会建错。建库看 `deploy/postgres/V11~V19*.sql` + `schema-generated.sql` |
-| [`archive/migrations/20260901-memory-evolution.sql`](archive/migrations/20260901-memory-evolution.sql) | **已作废**：2026-09-01 的 MySQL 迁移；两张旧记忆表已被 `V17` 删 |
+| [`resume-project.md`](resume-project.md) | 简历里这个项目的条目素材（写取舍、数据、验证方式） |
 
-## 约定
+## 存档（已完结，只读）
 
-- **坑号是引用契约**：全项目代码注释和文档都按「坑 38」「坑 52」引用，所以 `pitfalls.md` 的编号
-  **只能往后追加，不能重排、不能插号**（当前末条 **78**）。
-- **不要存会腐坏的数字**：表行数、花费、命中率这类快照别写进文档正文；写"去哪看实时数字"。
-  真要记，就带明确日期，并说明它的时间窗。
-- **不删历史**：被取代的方案标「存档」并写清哪个是现役，不要直接删——很多结论是花时间换来的。
-  存档件统一放 `archive/`，根目录只留现役。
-- **新增文档**：先想清楚它是不是该并进某一篇；真要新开，同时更新本索引与 `AGENTS.md` §6 的速查表。
+| 文档 | 是什么 |
+|---|---|
+| [`archive/plan-2026-10-26.md`](archive/plan-2026-10-26.md) | 2026-10-26 整改方案（已执行完） |
+| [`archive/refactor.md`](archive/refactor.md) | 2026-10-27~28 拆上帝类的完整重构记录 |
+| [`archive/refactor-summary-2026-10-27.md`](archive/refactor-summary-2026-10-27.md) | 同上，一页纸版 |
+| [`archive/self-layer-spec.md`](archive/self-layer-spec.md) | 自主模块早期规格（已被 `self-layer-plan.md` 取代） |
+| [`archive/self-layer.md`](archive/self-layer.md) | 自主模块早期说明 |
+| [`archive/memory-hybrid-plan.md`](archive/memory-hybrid-plan.md) | 早期混合检索方案（已被向量方案取代） |
+| [`archive/schema.sql`](archive/schema.sql) | 迁移前的旧表结构 |
+| [`archive/code-analysis-2026-09-02/`](archive/code-analysis-2026-09-02/) | 2026-09-02 旧代码分析（部分结论已过期） |
 
-**2026-11-01**：上下文摘要整块删除，改由提取顺带产出 `STATE`；上下文窗口从“行”改成“轮”；工具轨迹压成一行；上下文优先读 Redis。
-（细节见 `memory-extraction.md` 末节，坑见 `pitfalls.md` 第 100、101 条。）
+## 变更日志
+
+- **2026-11-02**：整理文档。`plan-2026-10-26` / `refactor` / `refactor-summary` 进存档；
+  `memory-extraction` 里重复的一节压成指针，细节统一到 `memory-window-design.md`。
+- **2026-11-01**：新增 `memory-window-design.md`（窗口与 STATE 设计）；`pitfalls` 补第 100、101 条。
+- **2026-10-25**：新增 `agent-loop.md`。
