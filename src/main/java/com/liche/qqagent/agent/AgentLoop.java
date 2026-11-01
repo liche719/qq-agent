@@ -222,6 +222,10 @@ public class AgentLoop {
     /** 自主模块运行时开关（2026-10-24）：关掉后模型看不到 self* 工具 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.liche.qqagent.self.SelfSwitch selfSwitch;
+
+    /** 对话上下文缓存（2026-11-01）：轮内的工具轨迹也要进 Redis，读取走它而不是库 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ContextStore contextStore;
     private final ConversationMemoryService conversationMemoryService;
     /** 按用户状态裁剪工具集 */
     private final ToolSetTrimmer toolSetTrimmer;
@@ -515,12 +519,15 @@ public class AgentLoop {
         }
         String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
         // 2026-10-27：上游的拒答措辞不止一种（实测又见到"你好，我无法给到相关内容"）
+        // 2026-11-01：线上又见到"抱歉，您的问题我无法识别。"——原来只匹配"抱歉，我"开头，这条漏了
         return trimmed.contains("无法回答") || trimmed.contains("不能帮助") || trimmed.contains("无法帮到")
                 || trimmed.contains("无法给到") || trimmed.contains("不能给到") || trimmed.contains("无法提供")
                 || trimmed.contains("无法协助") || trimmed.contains("无法回应") || trimmed.contains("无法处理")
-                || trimmed.startsWith("抱歉，我") || trimmed.startsWith("你好，我无法")
+                || trimmed.contains("无法识别") || trimmed.contains("无法理解") || trimmed.contains("没听懂")
+                || trimmed.startsWith("抱歉，我") || trimmed.startsWith("抱歉，您")
+                || trimmed.startsWith("你好，我无法") || trimmed.startsWith("对不起，我")
                 || lower.contains("i can't help") || lower.contains("i cannot help")
-                || lower.contains("i'm unable to");
+                || lower.contains("i'm unable to") || lower.contains("i can not help");
     }
 
     /** 拼出上下文摘要（可能有多段，按出现顺序拼接） */
@@ -1400,17 +1407,16 @@ public class AgentLoop {
 
     private ToolExecutionOutcome executeTool(ToolExecutionRequest request, String userId) {
         String traceId = UUID.randomUUID().toString();
-        recordToolEvent(userId, traceId, "call", request.name(), request.arguments());
         long started = System.nanoTime();
         try {
             ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
-            // 带上耗时（2026-10-26 P2-4）：工具维度的统计（调用数/失败率/平均耗时）靠这一行解析
-            recordToolEvent(userId, traceId, "result", request.name(),
-                    "durationMs=" + millisSince(started) + "\n" + outcome.content());
+            // 2026-11-01（用户要求）：一轮里只留“工具 + 基本参数 + 结果”，不再单独记一条 phase=call 的过程行。
+            recordToolEvent(userId, traceId, request.name(),
+                    request.arguments(), outcome.content(), millisSince(started));
             return outcome;
         } catch (RuntimeException exception) {
-            recordToolEvent(userId, traceId, "result", request.name(),
-                    "durationMs=" + millisSince(started) + "\n工具执行抛出异常：" + exception.getClass().getSimpleName());
+            recordToolEvent(userId, traceId, request.name(), request.arguments(),
+                    "工具执行抛出异常：" + exception.getClass().getSimpleName(), millisSince(started));
             throw exception;
         }
     }
@@ -1462,13 +1468,40 @@ public class AgentLoop {
         }
     }
 
-    private void recordToolEvent(String userId, String traceId, String phase, String toolName, String payload) {
+    /**
+     * 记一条工具轨迹（2026-11-01 改：只留“工具 + 基本参数 + 结果”，不记调用过程）。
+     *
+     * <p>原来每次调用写两行（phase=call 带完整参数、phase=result 带完整结果），
+     * 工具行占了对话记忆的一半以上（实测 2634/4820），把真正要说的话挤出了上下文窗口。
+     * 现在一行足够：参数截 200 字、结果截 600 字——够复盘“调了什么、拿到什么”，
+     * 又不至于把上下文吃光。`phase=result` 保留，面板的工具统计还按它解析。
+     */
+    private void recordToolEvent(String userId, String traceId, String toolName,
+                                 String arguments, String result, long durationMs) {
         if (conversationMemoryService == null) {
             return;
         }
-        String content = "tool=" + toolName + " phase=" + phase + "\n" + (payload == null ? "" : payload);
-        conversationMemoryService.record(userId, "system", "tool:" + traceId + ":" + phase,
+        String content = "tool=" + toolName + " phase=result"
+                + "\n参数：" + trim(arguments, 200)
+                + "\n结果：" + trim(result, 600)
+                + "\ndurationMs=" + durationMs;
+        conversationMemoryService.record(userId, "system", "tool:" + traceId + ":result",
                 content, List.of(), null);
+        if (contextStore != null) {
+            try {
+                contextStore.pushTool(userId, content, List.of());
+            } catch (RuntimeException ignored) {
+                // Redis 写失败不影响这一轮（读取时会回落到库）
+            }
+        }
+    }
+
+    private static String trim(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replaceAll("\\s+", " ").trim();
+        return flat.length() <= max ? flat : flat.substring(0, max) + "…";
     }
 
     private void addReadableMedia(List<ChatMessage> messages) {

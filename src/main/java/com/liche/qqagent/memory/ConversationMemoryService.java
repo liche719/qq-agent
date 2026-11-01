@@ -266,52 +266,67 @@ public class ConversationMemoryService {
         }
     }
 
-    /** Builds the newest complete conversation window that fits the model-context budget. */
+    /**
+     * 取最近若干**轮**的对话（2026-11-01 改：按轮，且**轮内的工具记录也算这一轮**）。
+     *
+     * <p>为什么改：原来按“行”取最近 N 行，而工具调用每次占两行（call + result），
+     * 实测工具行占对话记忆的一半以上（2634/4820）——配置写 40 行，真正对话只剩 10 来轮。
+     * 现在以“他的发言”为一轮的起点：先定位第 N 条用户消息，再把这条之后的所有行
+     * （他说的、我说的、以及轮内工具轨迹）一起取出来。
+     *
+     * <p>工具轨迹已在写入时压过一遍（只有工具名 + 基本参数 + 结果），这里再统一加上
+     * 【工具轨迹】前缀，避免模型把它当成“他说的话”。
+     */
     public List<ContextTurn> recentForContext(String userId, int maxTurns, int maxChars) {
         if (!validUserId(userId)) {
             return List.of();
         }
-        int turnLimit = Math.max(2, Math.min(256, maxTurns));
+        int rounds = Math.max(1, Math.min(128, maxTurns));
         int charLimit = Math.max(500, maxChars);
         try {
-            List<ConversationMemory> newest = repository.findByUserIdOrderByCreatedAtDesc(userId,
-                    PageRequest.of(0, turnLimit));
-            if (newest == null || newest.isEmpty()) {
+            List<ConversationMemory> users = repository.findByUserIdAndRoleInOrderByCreatedAtDesc(userId,
+                    java.util.List.of("user"), PageRequest.of(0, rounds));
+            if (users == null || users.isEmpty()) {
+                return List.of();
+            }
+            long oldestUserId = users.get(users.size() - 1).getId();
+            List<ConversationMemory> rows = repository.findByUserIdAndIdGreaterThanOrderByIdAsc(userId,
+                    oldestUserId - 1, PageRequest.of(0, rounds * 6));
+            if (rows == null || rows.isEmpty()) {
                 return List.of();
             }
             LocalDateTime now = LocalDateTime.now(zone);
-            List<ContextTurn> selected = new ArrayList<>();
+            java.util.List<ContextTurn> selected = new java.util.ArrayList<>();
             int usedChars = 0;
-            for (ConversationMemory record : newest) {
-                if (record == null || !userId.equals(record.getUserId()) || !notExpired(record, now)
-                        || !("user".equalsIgnoreCase(record.getRole())
-                        || "assistant".equalsIgnoreCase(record.getRole()))) {
+            for (ConversationMemory record : rows) {
+                if (record == null || !userId.equals(record.getUserId()) || !notExpired(record, now)) {
                     continue;
                 }
+                String role = record.getRole() == null ? "" : record.getRole().toLowerCase(java.util.Locale.ROOT);
                 String content = record.getContent();
                 if (content == null || content.isBlank()) {
+                    continue;
+                }
+                if ("system".equals(role)) {
+                    content = "【工具轨迹】" + content.replaceAll("\\s+", " ").trim();
+                } else if (!"user".equals(role) && !"assistant".equals(role)) {
                     continue;
                 }
                 if (!selected.isEmpty() && usedChars + content.length() > charLimit) {
                     break;
                 }
-                String boundedContent = content.length() > charLimit
+                String bounded = content.length() > charLimit
                         ? content.substring(0, Math.max(1, charLimit - 1)) + "…" : content;
-                selected.add(new ContextTurn(record.getRole(), boundedContent, record.sourceMessageIdList()));
-                usedChars += boundedContent.length();
+                selected.add(new ContextTurn(role, bounded, record.sourceMessageIdList()));
+                usedChars += bounded.length();
             }
-            Collections.reverse(selected);
-            while (!selected.isEmpty() && "assistant".equalsIgnoreCase(selected.getFirst().role())) {
-                selected.removeFirst();
-            }
-            return List.copyOf(selected);
+            return selected;
         } catch (Exception exception) {
-            log.warn("按预算读取近期对话失败 user={} reason={}", userId, exception.getClass().getSimpleName());
+            log.warn("读取对话上下文失败 user={} reason={}", userId, exception.getClass().getSimpleName());
             return List.of();
         }
     }
 
-    @Transactional
     public int forgetSourceMessageIds(String userId, List<String> sourceMessageIds) {
         Set<String> ids = normalizeIds(sourceMessageIds);
         if (!validUserId(userId) || ids.isEmpty()) {

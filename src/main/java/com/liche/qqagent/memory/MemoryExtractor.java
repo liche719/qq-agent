@@ -467,7 +467,9 @@ public class MemoryExtractor {
                                    List<CoreCandidate> coreCandidates,
                                    List<CoreUpdate> coreUpdates, List<WorkConflict> conflicts,
                                    List<WorkCompletion> completedWork, List<String> duplicates,
-                                   List<MemoryFactCandidate> facts) {
+                                   List<MemoryFactCandidate> facts,
+                                   /** 这一段聊到哪了（2026-11-01：摘要不再单独调用，提取时顺带产出） */
+                                   String state) {
     }
 
     /**
@@ -478,6 +480,50 @@ public class MemoryExtractor {
      *         "提议了 5 条 episode 为什么只落了 1 条"——这是 2026-10-09 之前**完全看不见**的那一面
      *         （审计里的 written_ids 从上线起一直硬编码传 null）。
      */
+
+    /**
+     * 写一条“这一段聊到哪了”（STATE，2026-11-01）。
+     *
+     * <p>它替代了原来的上下文摘要：摘要以前单独占一次模型调用（还会堵在回复前面 20 秒），
+     * 现在提取时顺手产出，随提取节奏更新。内容里带上覆盖到的最后一条消息 id，
+     * 注入时据此判断“有没有落后于被截断的位置”。
+     */
+    private void applyState(String userId, ExtractionResult result, List<ContextTurn> recent) {
+        String state = result == null ? null : result.state();
+        if (state == null || state.isBlank()) {
+            return;
+        }
+        // 2026-11-01 修：原来把所有 sourceMessageIds 里的数字取最大值——QQ 的消息 id 是
+        // ROBOT1.0_xxx 这种字符串，取数字会拼成一个假 id（实测存成了 108104373589485845）。
+        // 现在直接取窗口里**最后一条消息的 id**，它就是"覆盖到哪"。
+        String coversTo = "";
+        if (recent != null) {
+            for (ContextTurn turn : recent) {
+                if (turn == null || turn.sourceMessageIds() == null || turn.sourceMessageIds().isEmpty()) {
+                    continue;
+                }
+                java.util.List<String> ids = turn.sourceMessageIds();
+                String last = ids.get(ids.size() - 1);
+                if (last != null && !last.isBlank()) {
+                    coversTo = last.trim();
+                }
+            }
+        }
+        try {
+            Memory saved = memoryService.addState(userId, state, coversTo);
+            Map<String, Integer> counts = writeTally.get();
+            if (counts != null) {
+                counts.merge("新增状态摘要", 1, Integer::sum);
+            }
+            log.info("写入状态摘要 user={} id={} covers_to={} 字数={}", userId,
+                    saved == null ? 0L : saved.getId(),
+                    coversTo.isEmpty() ? "-" : coversTo.substring(0, Math.min(24, coversTo.length())),
+                    state.length());
+        } catch (RuntimeException exception) {
+            log.warn("写状态摘要失败 user={} 原因={}", userId, exception.getMessage());
+        }
+    }
+
     private String apply(String userId, ExtractionResult result, List<ContextTurn> recent) {
         if (result == null) {
             return "";
@@ -485,6 +531,7 @@ public class MemoryExtractor {
         writeTally.set(new LinkedHashMap<>());
         try {
             Set<String> allowedSourceIds = allowedSourceIds(recent);
+            applyState(userId, result, recent);
             applyEpisodes(userId, result, allowedSourceIds);
             applyNewWork(userId, result, allowedSourceIds);
             applyCoreCandidates(userId, result, allowedSourceIds);
@@ -965,7 +1012,8 @@ public class MemoryExtractor {
                     fact.keywords(), fact.sourceMessageIds()));
         }
         return new ExtractionResult(result.episodes(), result.newWork(), result.coreCandidates(),
-                result.coreUpdates(), result.conflicts(), result.completedWork(), result.duplicates(), cleaned);
+                result.coreUpdates(), result.conflicts(), result.completedWork(), result.duplicates(), cleaned,
+                result.state());
     }
 
     /** 实体归一（2026-10-26）：给提示词带上"已有的 subject 写法"，让它尽量复用 */
@@ -1108,7 +1156,12 @@ public class MemoryExtractor {
                 .append("\"facts\":[{\"subject\":\"第一周·周二晚·数学课\",\"predicate\":\"教室\",\"object\":\"303\",")
                 .append("\"content\":\"第一周周二晚数学课的教室是303\",\"source\":\"USER\",\"relation\":\"NEW\","
                         + "\"targetSubject\":\"\",\"sourceMessageIds\":[\"msg-1\"]}],")
-                .append("\"duplicates\":[]}\n")
+                .append("\"duplicates\":[],")
+                // 2026-11-01：state 替代了原来的上下文摘要——提取时顺带产出"这段聊到哪了"
+                .append("\"state\":\"\"}\n")
+                .append("（**state 是必填的**：用 2~4 句话说明这段对话聊到哪了——他在忙什么、卡在哪、"
+                        + "已经定下来的事、还没做完的事。写给「下一次对话的我自己」看，不要罗列事实、不要评价，"
+                        + "也不要抄原话；没有实质性进展就写空字符串）\n")
                 .append("（上面每个对象都可以带 importance/confidence/keywords/sourceMessageIds，没写就按默认；空数组就写 []；"
                         + "**facts 不需要 keywords**——事实层靠向量召回和 subject 聚合，关键词没人读；"
                         + "**但 facts 必须带 sourceMessageIds**（不给的话这条会被降级成「推断」，无法随后续遗忘一起清除））");
@@ -1127,7 +1180,8 @@ public class MemoryExtractor {
         try {
             JsonNode root = objectMapper.readTree(text);
             return new ExtractionResult(parseEpisodes(root), parseNewWork(root), parseCoreCandidates(root), parseCoreUpdates(root),
-                    parseWorkConflicts(root), parseCompletedWork(root), parseDuplicates(root), parseFacts(root));
+                    parseWorkConflicts(root), parseCompletedWork(root), parseDuplicates(root), parseFacts(root),
+                    root.path("state").asText("").trim());
         } catch (Exception exception) {
             log.warn("解析记忆提取结果失败", exception);
         }

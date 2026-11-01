@@ -513,3 +513,29 @@
    修法：进池前把 `userId/replyTo/botId/channel` 快照下来，池线程里 `bind(...)`、`finally` 里 `unbind()`。
    教训：**凡是改变执行线程的优化（池化、异步、并行），先问一句"ThreadLocal 还看得见吗"**。
    单测 `ToolStatusContextSnapshotTest` 直接演示了"不 bind 就是 null"。
+
+## 100. 配置名写“轮”、代码按“行”算，导致上下文里的工具行挤掉真正对话（2026-11-01）
+
+`memory.context-max-turns`（40）和 `memory.extraction-rounds`（17）注释都写“轮”，但代码里是
+`PageRequest.of(0, N)` 取 **N 行**：user、assistant、system（工具 call/result）各占一行。
+实测工具行占对话记忆 **2634 / 4820（54%）**——配置写 40 行，真正对话只剩 10~12 轮，
+表现为“它接不上前面说的话”，但查日志只会看到“窗口 40 行”，看不出问题。
+
+**判定方法**：`select role, count(*) from conversation_memory group by role;` 看 system 占比。
+
+**修法**（2026-11-01）：① 上下文按**轮**取（以 user 行为一轮起点，轮内工具行也算这一轮）；
+② 工具轨迹从每次两行（call + result）压成一行（工具名 + 参数 200 字 + 结果 600 字 + durationMs）；
+③ 上下文优先读 Redis，库只做持久化。
+
+**教训**：参数名里的“轮/行/条”必须和代码实现对齐；不对齐时不要靠名字推断行为。
+
+## 101. 上下文摘要曾是回复链路上的 20 秒黑洞（2026-11-01 已删除）
+
+`ContextSummaryService` 没指定场景，落到默认 `dialog`，继承了对话的思考强度：
+实测一次摘要 `ms=19885 reasoningTokens=3305`，**而且跑在回复之前**——
+用户看到的是“发出去二十秒才回”，日志里却显示模型只用了 2 秒。
+
+**判定方法**：看 `LLM 调用 scenario=dialog` 的 `promptTokens` 是否小（2~3k）却耗时 20 秒，
+同时 `轮次延迟 首字` 正常——两者对不上就说明有别的调用挡在前面。
+
+**修法**：**整块删除**，改由记忆提取顺带产出 STATE（见 `docs/memory-extraction.md` 末节）。

@@ -72,12 +72,25 @@ public class ContextStore {
             String json = serialize(fallbackTurn);
             String k = key(userId);
             redis.opsForList().leftPush(k, json);
-            redis.opsForList().trim(k, 0, rounds * 2L - 1);
+            // 一轮里除了一问一答，还可能有工具轨迹行，所以按 6 倍裁（2026-11-01）
+            redis.opsForList().trim(k, 0, rounds * 6L - 1);
             redis.expire(k, contextTtl);
         } catch (Exception e) {
             log.warn("写入对话上下文失败（Redis 不可用？）userId={} reason={}", userId,
                     e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 追加一条**工具轨迹**（2026-11-01 用户要求：轮次内的工具调用也属于这一轮，读的时候从 Redis 拿）。
+     *
+     * <p>只存一行、内容已经在写入前压过（工具名 + 基本参数 + 结果），不影响 Redis 的读速度。
+     */
+    public void pushTool(String userId, String text, List<String> sourceMessageIds) {
+        if (userId == null || userId.isBlank() || text == null || text.isBlank()) {
+            return;
+        }
+        push(userId, "system", text, sourceMessageIds);
     }
 
     /** 全部最近上下文（时间正序） */

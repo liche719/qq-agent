@@ -422,6 +422,26 @@ public class MemoryService {
         return savedReplacement;
     }
 
+    // ================= 写：STATE（这一段聊到哪了，2026-11-01） =================
+
+    /**
+     * 写一条状态摘要。它替代了原来的上下文摘要：不再单独调一次模型，
+     * 而是提取时顺带产出，随提取节奏更新；covers_to 记覆盖到哪条消息。
+     */
+    @Transactional
+    public Memory addState(String userId, String content, String coversTo) {
+        if (!validUserId(userId) || content == null || content.isBlank()) {
+            return null;
+        }
+        Memory memory = new Memory(userId, "STATE", truncate(content.trim(), 800));
+        memory.setKeywords("covers_to:" + (coversTo == null ? "" : coversTo));
+        memory.setImportance(5);
+        memory.setUpdatedAt(LocalDateTime.now());
+        Memory saved = repo(repository.save(memory), memory);
+        indexVector(saved);
+        return saved;
+    }
+
     // ================= 写：EXPERIENCE（原 episode） =================
 
     @Transactional

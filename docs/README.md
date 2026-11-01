@@ -19,7 +19,7 @@
 | 动 Agent 循环（计划/反思/失败分级/预算/进度） | [`agent-loop.md`](agent-loop.md) |
 | 改提示词/记忆策略后想对比效果 | [`eval.md`](eval.md) |
 | 动记忆（`memory` / `memory_fact` / `conversation_memory`） | [`memory-vector-plan.md`](memory-vector-plan.md) |
-| 动记忆提取的触发/窗口/成本 | [`memory-extraction.md`](memory-extraction.md) |
+| 动记忆提取的触发/窗口/成本；**状态摘要 STATE（2026-11-01 取代上下文摘要）** | [`memory-extraction.md`](memory-extraction.md) |
 | 动 LLM 调用档位、思考模式 | [`llm-call-modes.md`](llm-call-modes.md) |
 | 动自主模块「它自己」 | [`self-layer-plan.md`](self-layer-plan.md) |
 | **代码整理清单（拆类/去重）** | [`refactor.md`](refactor.md) |
@@ -83,3 +83,6 @@
 - **不删历史**：被取代的方案标「存档」并写清哪个是现役，不要直接删——很多结论是花时间换来的。
   存档件统一放 `archive/`，根目录只留现役。
 - **新增文档**：先想清楚它是不是该并进某一篇；真要新开，同时更新本索引与 `AGENTS.md` §6 的速查表。
+
+**2026-11-01**：上下文摘要整块删除，改由提取顺带产出 `STATE`；上下文窗口从“行”改成“轮”；工具轨迹压成一行；上下文优先读 Redis。
+（细节见 `memory-extraction.md` 末节，坑见 `pitfalls.md` 第 100、101 条。）

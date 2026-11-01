@@ -348,18 +348,20 @@ public class ScheduledTaskService {
             String messageId = "scheduled-" + current.getId() + "-" + UUID.randomUUID();
             String reply = orchestrator.onInboundSync(InboundMessage.text(messageId, userId,
                     current.getInstruction(), null, channelMode));
+
             // 2026-10-30 修：模型连续两次模板拒答时，AgentLoop 会返回一句兜底话术
             // （"我这边模型刚才卡了一下…"）。定时任务原来把它当**成功结果**存进 last_result
             // 并推给用户——线上真的发生过（任务 11 的 lastResult 就是这句话）。
             // 现在：判定为失败、保留上一次的有效结果、只告诉用户"这次没拿到"，下次到点再试。
+            // 2026-11-01（按用户要求）：不做拒答重试，也不猜原因——上游没给出东西就直接报上游异常。
             if (reply == null || reply.isBlank()
                     || com.liche.qqagent.agent.AgentLoop.looksLikeCannedRefusal(reply)) {
-                log.warn("定时任务没有得到有效结果 id={} user={} replyLength={}",
-                        current.getId(), userId, reply == null ? 0 : reply.length());
-                sendToUser(userId, "⏰ 「" + current.getTitle() + "」这次没拿到结果，下次到点再试。");
+                log.warn("定时任务上游模型异常 id={} user={} reply={}",
+                        current.getId(), userId, reply == null ? "" : reply.strip());
+                sendToUser(userId, "⏰ 「" + current.getTitle() + "」这次没执行成：上游模型异常。");
                 persistRunResult(current, ScheduledTask.STATUS_FAILED, current.getLastResult(),
-                        "模型未给出有效结果（疑似上游抖动）");
-                return "执行失败：这次没有拿到有效结果";
+                        "上游模型异常：" + shorten(reply == null ? "空回复" : reply.strip(), 200));
+                return "执行失败：上游模型异常";
             }
             String text = reply.strip();
             // 省略号也要算进 lastResult 的 2000 字符列宽里，否则 MySQL 严格模式会拒绝这条 update（任务会卡在 RUNNING）

@@ -80,6 +80,10 @@ public class AgentOrchestrator {
         this.videoFrameService = videoFrameService;
     }
 
+    /** 读"这一段聊到哪了"（STATE，2026-11-01）：摘要已由提取顺带产出，这里只读最新的那条 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.memory.MemoryService memoryService;
+
     /** 分享卡片里的视频由系统先读（2026-11-01）：不让模型自己决定"读不读"——它上次读完了却没答视频 */
     private com.liche.qqagent.bilibili.BilibiliTool bilibiliTool;
 
@@ -95,8 +99,6 @@ public class AgentOrchestrator {
     private int contextMaxChars = DEFAULT_CONTEXT_MAX_CHARS;
 
     /** 长对话压缩（2026-10-26）：窗口外的更早对话压成摘要，而不是直接丢 */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private ContextSummaryService contextSummaryService;
 
     /**
      * 压缩前"记忆抢救"（2026-10-30）。
@@ -617,6 +619,20 @@ public class AgentOrchestrator {
     }
 
     private List<ContextTurn> durableHistory(String userId) {
+        // 2026-11-01（用户要求）：轮次上下文**从 Redis 读**（快），库里只是持久化。
+        // Redis 空了（重启/过期）才回落到库；回落本身是对的，但不能每轮都去查库。
+        if (contextStore != null) {
+            try {
+                List<ContextTurn> cached = contextStore.getRecent(userId);
+                if (cached != null && !cached.isEmpty()) {
+                    return withOlderSummary(userId, cached,
+                            contextMaxTurns > 0 ? contextMaxTurns : DEFAULT_CONTEXT_MAX_TURNS,
+                            contextMaxChars > 0 ? contextMaxChars : DEFAULT_CONTEXT_MAX_CHARS);
+                }
+            } catch (RuntimeException exception) {
+                log.debug("读 Redis 上下文失败，回落到库：{}", exception.getMessage());
+            }
+        }
         if (conversationMemoryService != null) {
             int maxTurns = contextMaxTurns > 0 ? contextMaxTurns : DEFAULT_CONTEXT_MAX_TURNS;
             int maxChars = contextMaxChars > 0 ? contextMaxChars : DEFAULT_CONTEXT_MAX_CHARS;
@@ -677,11 +693,39 @@ public class AgentOrchestrator {
         });
     }
 
+
+    /**
+     * 取最近一条状态摘要（STATE），供"更早的对话"那条注入用。
+     *
+     * <p>它由记忆提取顺带产出（不再是一次独立的摘要调用）。取最新的那条；没有就返回 null——
+     * 按用户要求，这时候不再临时生成摘要，宁可这段历史空着。
+     */
+    private String latestState(String userId) {
+        try {
+            if (memoryService == null) {
+                return null;
+            }
+            java.util.List<com.liche.qqagent.memory.Memory> states = memoryService.listActive(userId, "STATE");
+            if (states == null || states.isEmpty()) {
+                return null;
+            }
+            return states.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.util.Comparator.comparing(
+                            com.liche.qqagent.memory.Memory::getUpdatedAt,
+                            java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                    .map(com.liche.qqagent.memory.Memory::getContent)
+                    .orElse(null);
+        } catch (RuntimeException exception) {
+            log.debug("读取状态摘要失败（当没有处理）：{}", exception.getMessage());
+            return null;
+        }
+    }
+
     private List<ContextTurn> withOlderSummary(String userId, List<ContextTurn> kept,
                                                int maxTurns, int maxChars) {
-        if (contextSummaryService == null || !contextSummaryService.enabled()) {
-            return kept;
-        }
+        // 2026-11-01：摘要服务已删除，这里只剩"取 STATE + 拼历史"两件事
+
         try {
             // 多取一段，才能知道"被截掉的是什么"
             List<ContextTurn> wider = conversationMemoryService.recentForContext(userId,
@@ -693,10 +737,9 @@ public class AgentOrchestrator {
             List<ContextTurn> dropped = wider.subList(0, droppedCount);
             rescueMemoryBeforeCompaction(userId, dropped);
             // 2026-11-01：摘要不再阻塞回复——只用缓存，没有就后台补（用户指出它应该是后台任务）
-            String summary = contextSummaryService.cached(userId, dropped);
-            if (summary == null || summary.isBlank()) {
-                contextSummaryService.generateAsync(userId, dropped);
-            }
+            // 2026-11-01（用户要求）：不再单独生成摘要——改用提取时顺带产出的 STATE。
+            // 没有 STATE 时这段历史就空着，也不再临时调模型补（那是原来堵回复 20 秒的元凶）。
+            String summary = latestState(userId);
             if (summary == null || summary.isBlank()) {
                 return kept;
             }
