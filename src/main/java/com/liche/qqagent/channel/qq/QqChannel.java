@@ -693,7 +693,8 @@ public class QqChannel implements ChatChannel {
         QqArkCard card = QqArkCard.fromEvent(data);
         // 2026-10-27：QQ 的表情是内联标签（<faceType=1,faceId="5",ext="...">），原样进上下文
         // 模型只会看到一串乱码（实测它回了一句"这串乱码你自己刷得挺开心啊"）。这里统一转成 [表情]。
-        String content = cleanInlineTags(card.applyTo(message.content()));
+        // 2026-11-01：卡片改写成一句人话（原来平台那串 [卡片消息]…source_logo:… 模型读不懂，会接着上一轮话题编）
+        String content = cleanInlineTags(card.isEmpty() ? message.content() : card.normalize(message.content()));
         java.util.List<String> images = card.withPreview(payload.images());
         if (!card.isEmpty()) {
             // 只记类型与字段名，不记正文：既要能判断"有没有 jump_url"，又不要把用户转发的内容写进日志

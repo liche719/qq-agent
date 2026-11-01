@@ -68,6 +68,38 @@ record QqArkCard(String arkType, String arkName, String title, String desc, Stri
      * 上下文话术复述进了回复（"这次带上链接了"「卡片的标题和你平时发的不一样」），而这件事
      * **系统提示词规则 26 已经写死了**，内容里那段是冗余的 —— 所以撤掉，用户消息保持干净。
      */
+
+    /**
+     * 把卡片渲染成一**句人话**（2026-11-01）。
+     *
+     * <p>为什么需要：平台把卡片塞成 {@code [卡片消息] 小程序 摘要: [QQ小程序]标题 source_logo: http://...}，
+     * 标题混在一堆英文字段里。实测模型没把它当"他给我发了个视频"，而是接着上一轮的话题往下编
+     * （读完了视频却回答"明天推进 RAG 重排"）。这里改写成一句明确的话，并把垃圾字段丢掉。
+     */
+    String normalize(String rawContent) {
+        if (isEmpty()) {
+            return rawContent == null ? "" : rawContent;
+        }
+        String base = rawContent == null ? "" : rawContent;
+        boolean video = !title.isBlank() && (base.contains("小程序") || base.contains("视频")
+                || arkName.contains("小程序") || arkName.contains("视频"));
+        StringBuilder text = new StringBuilder();
+        text.append(video ? "他转发了一条 B 站视频" : "他转发了一个卡片");
+        if (!title.isBlank()) {
+            text.append("《").append(title).append("》");
+        }
+        if (!desc.isBlank() && !desc.equals(title)) {
+            text.append("。简介：").append(desc);
+        }
+        if (!jumpUrl.isBlank()) {
+            text.append("\n链接：").append(jumpUrl);
+        }
+        if (!video) {
+            text.append("。");
+        }
+        return text.toString();
+    }
+
     String applyTo(String existingContent) {
         if (isEmpty()) {
             return existingContent == null ? "" : existingContent;

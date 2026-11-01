@@ -80,6 +80,14 @@ public class AgentOrchestrator {
         this.videoFrameService = videoFrameService;
     }
 
+    /** 分享卡片里的视频由系统先读（2026-11-01）：不让模型自己决定"读不读"——它上次读完了却没答视频 */
+    private com.liche.qqagent.bilibili.BilibiliTool bilibiliTool;
+
+    @Autowired(required = false)
+    public void setBilibiliTool(com.liche.qqagent.bilibili.BilibiliTool bilibiliTool) {
+        this.bilibiliTool = bilibiliTool;
+    }
+
     @Value("${memory.context-max-turns:40}")
     private int contextMaxTurns = DEFAULT_CONTEXT_MAX_TURNS;
 
@@ -847,13 +855,57 @@ public class AgentOrchestrator {
         }
     }
 
+
+    /**
+     * 他转发的是视频卡片时，**系统先把它读完**再交给模型（2026-11-01）。
+     *
+     * <p>实测问题：卡片正文是平台渲染的碎片，模型虽然自己去读了视频，但回答时被上一轮话题带跑
+     * （读到了内容，却回"明天推进 RAG 重排"）。所以这里不再把"读不读"交给模型判断：
+     * 识别出是分享的视频卡片，就先读完，把结论作为这一轮的上下文，并明确告诉他
+     * "这次只发了这条视频，别接着上一轮说"。
+     */
+    private String prefetchSharedVideo(String content, String userId) {
+        if (content == null || !content.startsWith("他转发了一条 B 站视频")) {
+            return null;
+        }
+        if (bilibiliTool == null) {
+            return null;
+        }
+        int start = content.indexOf('《');
+        int end = content.indexOf('》', start + 1);
+        if (start < 0 || end <= start + 1) {
+            return null;
+        }
+        String title = content.substring(start + 1, end).trim();
+        if (title.isBlank()) {
+            return null;
+        }
+        try {
+            toolStatusService.push("我正在看这条视频…");
+            var result = bilibiliTool.readBilibiliVideo(title);
+            if (result == null || !result.successful()) {
+                return null;
+            }
+            log.info("分享卡片视频已由系统预读 user={} 标题={}", userId, title);
+            return "【他刚转发的视频，已经替你读完了】\n" + result.content()
+                    + "\n（他这次只发了这条视频、没有别的话：直接就这条视频回应他，别接着上一轮的话题往下说。）";
+        } catch (RuntimeException exception) {
+            log.warn("预读分享视频失败 user={} 标题={} 原因={}", userId, title, exception.getMessage());
+            return null;
+        }
+    }
+
     // Invokes the model with the current media, quote, history, and document context.
     private String invokeAgent(InboundMessageBatch batch, String userId, String content, UserProfile profile,
                                MemoryLoader.LoadedMemory memory, List<ContextTurn> history,
                                List<ExtractedDocument> documents, StreamReplySink sink,
                                List<String> documentFailures, List<String> videoFrameImages,
                                List<String> videoNotes) {
+        String sharedVideo = prefetchSharedVideo(content, userId);
         String agentText = quotePrompt(content, batch.quotedContent()) + mediaToolContextService.promptSection();
+        if (sharedVideo != null && !sharedVideo.isBlank()) {
+            agentText = agentText + "\n" + sharedVideo;
+        }
         if (videoNotes != null) {
             // 视频的说明要贴在这一轮里：告诉模型这些图是"同一个视频按时间抽的帧"，不是几段独立照片
             for (String note : videoNotes) {

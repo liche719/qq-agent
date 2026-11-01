@@ -156,13 +156,21 @@ public class PlanCoordinator {
         return names.size();
     }
 
-    /** 这一轮用户到底要什么：取第一条用户消息 */
+    /**
+     * 这一轮用户到底要什么：取**最后一条**用户消息（2026-11-01 修）。
+     *
+     * <p>原来取第一条。当时 messages 里只有本轮，取第一条没问题；后来把 40 轮历史也塞进来了，
+     * "第一条"就变成**几十轮之前**那句话。实测代价很真实：他转发一条视频，规划器却按上一轮的
+     * "改简历"生成计划，于是先播报"寒假实习倒计时还剩 14 天"，再回一句 RAG 重排——视频读完了却没人用它。
+     *
+     * <p>注意：历史里最后一条用户消息就是本轮那句话（历史写在前，本轮追加在后）。
+     */
     static String firstUserText(List<ChatMessage> messages) {
         if (messages == null) {
             return "";
         }
-        for (ChatMessage message : messages) {
-            if (message instanceof UserMessage user) {
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            if (messages.get(index) instanceof UserMessage user) {
                 String text = user.singleText();
                 if (text != null && !text.isBlank()) {
                     return text;
