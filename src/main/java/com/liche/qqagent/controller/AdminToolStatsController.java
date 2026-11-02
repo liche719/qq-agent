@@ -30,9 +30,13 @@ public class AdminToolStatsController {
     private final JdbcTemplate jdbc;
     private final ToolRegistry toolRegistry;
 
-    public AdminToolStatsController(JdbcTemplate jdbc, ToolRegistry toolRegistry) {
+    private final com.liche.qqagent.agent.LoopGuardMetrics loopGuardMetrics;
+
+    public AdminToolStatsController(JdbcTemplate jdbc, ToolRegistry toolRegistry,
+                                    com.liche.qqagent.agent.LoopGuardMetrics loopGuardMetrics) {
         this.jdbc = jdbc;
         this.toolRegistry = toolRegistry;
+        this.loopGuardMetrics = loopGuardMetrics;
     }
 
     @GetMapping("/stats")
@@ -86,6 +90,10 @@ public class AdminToolStatsController {
         result.put("totalFailed", byTool.values().stream().mapToLong(stat -> stat[1]).sum());
         result.put("rows", table);
         result.put("neverUsed", new ArrayList<>(never));
+        // 2026-11-02：防循环口径——拦了多少次、平均每轮调几次工具
+        if (loopGuardMetrics != null) {
+            result.put("loopGuard", loopGuardMetrics.snapshot());
+        }
         return result;
     }
 

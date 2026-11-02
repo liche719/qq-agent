@@ -759,6 +759,9 @@ public class AgentLoop {
             replyText = replyText.stripTrailing() + "\n\n" + notice;
         }
         replyText = appendToolFailureNotice(replyText, failedTools, toolDisplayNames, toolFailureNoticeEnabled);
+        if (loopGuardMetrics != null) {
+            loopGuardMetrics.turn();
+        }
         TurnMetrics.logTurn(userId, TurnLatency.firstTokenMillis(), TurnLatency.totalMillis(),
                 successfulTools.size());
         TurnLatency.clear();
@@ -851,6 +854,9 @@ public class AgentLoop {
                 continue;
             }
             log.info("同参重复失败，要求换策略 user={} tool={} 次数={}", userId, request.name(), count);
+            if (loopGuardMetrics != null) {
+                loopGuardMetrics.repeatGuardHit();
+            }
             messages.add(dev.langchain4j.data.message.UserMessage.from(
                     "（系统提示：你刚才用**同样的参数**又调了一次「" + request.name()
                             + "」，结果一样失败。同样的入参不会有不同结果——"
@@ -871,13 +877,39 @@ public class AgentLoop {
                                      Set<String> successfulTools, Map<String, ToolExecutionOutcome> failedTools,
                                      Map<String, ToolExecutionOutcome> toolResults,
                                      TurnScope scope, Set<String> announcedTools) {
-        toolRoundExecutor().run(requests, new ToolRoundExecutor.Hooks(
+        // 2026-11-02：**动作类工具一轮只允许一次**。防的是"模型自我怀疑 → 再启动一次任务"：
+        // 副作用工具重复执行 = 用户收到两条提醒 / 两个任务，比死循环更难收拾。
+        // 判据是 @NonIdempotentTool 标注 + 本轮已成功执行过，不依赖提示词。
+        List<ToolExecutionRequest> allowed = new java.util.ArrayList<>();
+        for (ToolExecutionRequest request : requests) {
+            boolean actionLike = toolRegistry.isNonIdempotent(request.name());
+            if (actionLike && successfulTools.contains(request.name())) {
+                if (loopGuardMetrics != null) {
+                    loopGuardMetrics.actionDedupHit();
+                }
+                log.info("动作类工具本轮已执行过，跳过重复调用 user={} tool={}", userId, request.name());
+                recordOutcome(request, ToolExecutionOutcome.failure(
+                                "「" + request.name() + "」这一轮已经执行成功了，不要重复执行；"
+                                        + "如果还没达成目的，先说明上一步结果，再决定要不要换方法。", 0),
+                        messages, successfulTools, failedTools, toolResults);
+                continue;
+            }
+            allowed.add(request);
+        }
+        if (allowed.isEmpty()) {
+            return;
+        }
+        toolRoundExecutor().run(allowed, new ToolRoundExecutor.Hooks(
                 this::parallelSafe,
                 request -> executeOne(request, userId, scope),
                 request -> announce(request, announcedTools),
                 (request, outcome) -> recordOutcome(request, outcome, messages,
                         successfulTools, failedTools, toolResults)));
     }
+
+    /** 防循环指标（2026-11-02）：拦截次数与平均轮次，供工具统计接口展示 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LoopGuardMetrics loopGuardMetrics;
 
     /** 报一句进度（同一轮同一个工具只报一次） */
     private void announce(ToolExecutionRequest request, Set<String> announcedTools) {
@@ -886,6 +918,9 @@ public class AgentLoop {
 
     /** 执行单个工具：异常一律转成失败结果，绝不让它逃出去 */
     private ToolExecutionOutcome executeOne(ToolExecutionRequest request, String userId, TurnScope scope) {
+        if (loopGuardMetrics != null) {
+            loopGuardMetrics.toolCall();
+        }
         ToolExecutionClass executionClass = toolRegistry.executionClass(request.name());
         java.util.concurrent.ScheduledFuture<?> heartbeat = startProgressHeartbeat(request, executionClass);
         try {

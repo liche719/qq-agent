@@ -171,6 +171,20 @@ public class ToolRegistry {
         return org.springframework.util.ClassUtils.getUserClass(tool.getClass()).getSimpleName();
     }
 
+    /** 这个工具是否是"动作类"（有副作用/不可逆/标了 @NonIdempotentTool）——一轮只允许执行一次 */
+    public boolean isNonIdempotent(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        ToolEntry entry = entries.get(name);
+        if (entry == null) {
+            return false;
+        }
+        ToolPolicySnapshot policy = ToolPolicySnapshot.from(entry.policy());
+        return policy.hasSideEffect() || policy.destructive()
+                || entry.method().isAnnotationPresent(NonIdempotentTool.class);
+    }
+
     public ToolExecutionClass executionClass(String name) {
         ToolEntry entry = entries.get(name);
         return policy(name).executionClass();
