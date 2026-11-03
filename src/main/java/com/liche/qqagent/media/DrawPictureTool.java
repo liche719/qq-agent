@@ -52,6 +52,8 @@ public class DrawPictureTool implements AgentToolProvider {
 
     /** 一轮最多画几张（2026-10-24）：他"没让你画"的时候连着画了 4 张，用硬上限兜住 */
     private final int maxPerTurn;
+    /** 他明确要的画，一轮最多几张（0 = 不限制） */
+    private final int userMaxPerTurn;
     /** 先把要求改写成规范提示词，再交给生图（2026-10-24 用户要求） */
     /** 上一次画了什么（2026-11-03）：用户说"不像/重画/改成…"时，要在上一版基础上改，而不是从头来 */
     private volatile LastDraw lastDraw;
@@ -69,6 +71,7 @@ public class DrawPictureTool implements AgentToolProvider {
                            ToolStatusService statusService,
                            @Value("${llm.image-self-daily-limit:5}") int selfDailyLimit,
                            @Value("${llm.image-max-per-turn:1}") int maxPerTurn,
+                           @Value("${llm.image-user-max-per-turn:0}") int userMaxPerTurn,
                            @Value("${llm.image-prompt-design:true}") boolean designPrompt,
                            @Value("${llm.image-persona:}") String persona,
                            dev.langchain4j.model.chat.ChatModel chatModel,
@@ -77,6 +80,7 @@ public class DrawPictureTool implements AgentToolProvider {
         this.statusService = statusService;
         this.selfDailyLimit = Math.max(0, selfDailyLimit);
         this.maxPerTurn = Math.max(1, Math.min(3, maxPerTurn));
+        this.userMaxPerTurn = userMaxPerTurn <= 0 ? Integer.MAX_VALUE : Math.max(1, Math.min(10, userMaxPerTurn));
         this.designPrompt = designPrompt;
         this.persona = persona == null ? "" : persona.trim();
         this.chatModel = chatModel;
@@ -260,9 +264,12 @@ public class DrawPictureTool implements AgentToolProvider {
         if (prompt == null || prompt.isBlank()) {
             return ToolBusinessResult.failure("没说要画什么。问他要画什么。");
         }
-        if (!com.liche.qqagent.media.DrawBudget.tryConsume(maxPerTurn)) {
-            return ToolBusinessResult.failure("这一轮已经画过 " + maxPerTurn
-                    + " 张了，不要自己接着画。要是他觉得不对，先问清楚哪里不对再画下一张。");
+        // 2026-11-03（用户要求）：**他明确要的画不设额度**——只有"自己主动画"才受限制。
+        // 原来这条不分来源一律 1 张/轮，导致他说"再画一张"被拒，看着像被限流。
+        int turnCap = com.liche.qqagent.self.SelfTurnMark.active() ? maxPerTurn : userMaxPerTurn;
+        if (!com.liche.qqagent.media.DrawBudget.tryConsume(turnCap)) {
+            return ToolBusinessResult.failure("这一轮已经画过 " + turnCap
+                    + " 张了，先别接着画。要是他觉得不对，先问清楚哪里不对再画下一张。");
         }
         if (quotaExceeded()) {
             return ToolBusinessResult.failure("今天你自己主动画的张数到上限了（" + selfDailyLimit
