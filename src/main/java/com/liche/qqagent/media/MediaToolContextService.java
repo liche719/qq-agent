@@ -17,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class MediaToolContextService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MediaToolContextService.class);
+
     private static final long DEFAULT_PENDING_MEDIA_TTL_MINUTES = 30;
     private static final int DEFAULT_MAX_PENDING_MEDIA_PER_CONVERSATION = 8;
     private static final int DEFAULT_EXCERPT_MAX_CHARS = 4_000;
@@ -61,6 +63,14 @@ public class MediaToolContextService {
     private final ThreadLocal<CurrentMedia> current = new ThreadLocal<>();
     private final Map<PendingMediaKey, PendingMedia> pendingBySource = new ConcurrentHashMap<>();
     private final long pendingMediaTtlMillis;
+
+    /** 未保存媒体也写一份到 Redis（2026-11-04）：内存里的重启就没了，Redis 的还在 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> redisProvider;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper MEDIA_JSON = new com.fasterxml.jackson.databind.ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            .configure(com.fasterxml.jackson.databind.SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
     private final int maxPendingMediaPerConversation;
     private final int excerptMaxChars;
 
@@ -102,8 +112,10 @@ public class MediaToolContextService {
         if (!candidates.isEmpty()) {
             long now = System.currentTimeMillis();
             pendingKey = new PendingMediaKey(scope, messageId);
-            pendingBySource.put(pendingKey, new PendingMedia(messageId, List.copyOf(candidates), now,
-                    now + pendingMediaTtlMillis));
+            PendingMedia pending = new PendingMedia(messageId, List.copyOf(candidates), now,
+                    now + pendingMediaTtlMillis);
+            pendingBySource.put(pendingKey, pending);
+            persistPending(pendingKey, pending);
             prunePending(scope, now);
         }
         current.set(new CurrentMedia(userId, scope, taskId == null ? messageId : taskId, messageId,
@@ -324,6 +336,69 @@ public class MediaToolContextService {
         return text.toString();
     }
 
+    /** 把未保存媒体写一份到 Redis（带 TTL），失败不影响内存路径 */
+    private void persistPending(PendingMediaKey key, PendingMedia pending) {
+        org.springframework.data.redis.core.StringRedisTemplate redis = redis();
+        if (redis == null) {
+            return;
+        }
+        try {
+            String json = MEDIA_JSON.writeValueAsString(pending);
+            long ttl = Math.max(60_000L, pending.expiresAt() - System.currentTimeMillis());
+            redis.opsForValue().set(redisKey(key), json, java.time.Duration.ofMillis(ttl));
+        } catch (Exception exception) {
+            log.debug("媒体上下文写 Redis 失败（不影响本轮）：{}", exception.getMessage());
+        }
+    }
+
+    /** 内存里没有时，从 Redis 找同一会话里最近的一条未保存媒体 */
+    private PendingMediaKey loadNewestPendingFromRedis(CurrentMedia media, long now) {
+        org.springframework.data.redis.core.StringRedisTemplate redis = redis();
+        if (redis == null) {
+            return null;
+        }
+        try {
+            String prefix = "media:pending:" + media.scope().channel() + ":" + media.scope().botId()
+                    + ":" + media.scope().userId() + ":";
+            java.util.Set<String> keys = redis.keys(prefix + "*");
+            if (keys == null || keys.isEmpty()) {
+                return null;
+            }
+            PendingMedia newest = null;
+            for (String key : keys) {
+                String raw = redis.opsForValue().get(key);
+                if (raw == null || raw.isBlank()) {
+                    continue;
+                }
+                PendingMedia pending = MEDIA_JSON.readValue(raw, PendingMedia.class);
+                if (pending.expiresAt() <= now || pending.sourceMessageId().equals(media.messageId())) {
+                    continue;
+                }
+                if (newest == null || pending.createdAt() > newest.createdAt()) {
+                    newest = pending;
+                }
+            }
+            if (newest == null) {
+                return null;
+            }
+            PendingMediaKey key = new PendingMediaKey(media.scope(), newest.sourceMessageId());
+            pendingBySource.put(key, newest);
+            return key;
+        } catch (Exception exception) {
+            log.debug("媒体上下文读 Redis 失败（退回内存）：{}", exception.getMessage());
+            return null;
+        }
+    }
+
+    private org.springframework.data.redis.core.StringRedisTemplate redis() {
+        return redisProvider == null ? null : redisProvider.getIfAvailable();
+    }
+
+    private static String redisKey(PendingMediaKey key) {
+        return "media:pending:" + key.scope().channel() + ":" + key.scope().botId() + ":"
+                + key.scope().userId() + ":" + key.sourceMessageId();
+    }
+
     private void removeSavedPendingCandidate(CurrentMedia media, int mediaIndex) {
         PendingMediaKey pendingKey = media.pendingKey();
         if (pendingKey == null) {
@@ -340,6 +415,10 @@ public class MediaToolContextService {
 
     private PendingMediaKey findMostRecentPending(CurrentMedia media, long now) {
         prunePending(media.scope(), now);
+        PendingMediaKey fromRedis = loadNewestPendingFromRedis(media, now);
+        if (fromRedis != null) {
+            return fromRedis;
+        }
         return pendingBySource.entrySet().stream()
                 .filter(entry -> entry.getKey().scope().equals(media.scope()))
                 .filter(entry -> !entry.getKey().sourceMessageId().equals(media.messageId()))
