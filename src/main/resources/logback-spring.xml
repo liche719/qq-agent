@@ -2,7 +2,7 @@
 <configuration>
     <springProperty scope="context" name="LOG_DIR" source="logging.file.path" defaultValue="logs"/>
 
-    <!-- 控制台 -->
+    <!-- 控制台（docker logs 看到的副本；重建容器即清空，真正排障看文件） -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level [%X{userScope:-system} %X{taskId:-}] %logger{36} - %msg%n</pattern>
@@ -15,7 +15,9 @@
         <file>${LOG_DIR}/system/agent.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/system/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+            <!-- 2026-11-03：保留 30 天 + 总量上限，防止刷屏把磁盘写满 -->
             <maxHistory>30</maxHistory>
+            <totalSizeCap>800MB</totalSizeCap>
         </rollingPolicy>
         <encoder>
             <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{40} - %msg%n</pattern>
@@ -35,6 +37,7 @@
                 <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
                     <fileNamePattern>${LOG_DIR}/user/${userScope}/agent.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
                     <maxHistory>30</maxHistory>
+                    <totalSizeCap>400MB</totalSizeCap>
                 </rollingPolicy>
                 <encoder>
                     <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{40} - %msg%n</pattern>
@@ -44,9 +47,22 @@
         </sift>
     </appender>
 
+    <!-- 异步写盘：磁盘 IO 不该拖慢对话。队列 2048；discardingThreshold=0 表示队列满也不丢 INFO 以上 -->
+    <appender name="ASYNC-SYSTEM" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>2048</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="SYSTEM"/>
+    </appender>
+
+    <appender name="ASYNC-SIFT" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>2048</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="SIFT"/>
+    </appender>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="SIFT"/>
-        <appender-ref ref="SYSTEM"/>
+        <appender-ref ref="ASYNC-SIFT"/>
+        <appender-ref ref="ASYNC-SYSTEM"/>
     </root>
 </configuration>

@@ -699,8 +699,17 @@ logging:
     path: logs
   level:
     root: INFO
+    # 业务日志全开（工具、轮次、提取、定时任务都在 INFO）
     com.liche.qqagent: INFO
+    # 2026-11-03：下面这些每请求/每连接打一行，对我们排障没有价值 → 压到 WARN
     org.quartz: WARN
+    com.zaxxer.hikari: WARN
+    org.springframework.web: WARN
+    org.springframework.boot.web: WARN
+    org.apache.catalina: WARN
+    org.apache.tomcat: WARN
+    dev.langchain4j: WARN
+    io.netty: WARN
 
 conversation:
   trace:
