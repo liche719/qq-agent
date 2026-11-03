@@ -117,27 +117,46 @@ public class DrawPictureTool implements AgentToolProvider {
         return "。画面干净、主体结构完整，不要出现文字、水印、logo 或多余肢体。";
     }
 
+    /**
+     * 按用途选尺寸（2026-11-03 细化）。
+     *
+     * <p>百炼实测任何比例都接受（512~4096），但**极端比例质量会掉**——4:1 的图容易拉伸变形。
+     * 所以按用途给几档"常见且质量稳定"的尺寸，而不是让模型随便选。
+     *
+     * <p>优先级：调用方显式指定 > 按用词推断 > 方图。
+     */
     private String resolveSize(String explicit, String rawPrompt, String designedPrompt) {
         if (com.liche.qqagent.media.ImageGenClient.validSize(explicit)) {
             return explicit.trim();
         }
         String text = (rawPrompt == null ? "" : rawPrompt) + " " + (designedPrompt == null ? "" : designedPrompt);
-        if (text.matches("(?s).*(壁纸|竖屏|竖版|手机|头像|海报|长图).*")) {
-            return "768x1344";
+        // 超宽/超高（横幅、长图、漫画条）——比例极端，单独一档
+        if (text.matches("(?s).*(长图|条漫|横幅|超宽|全景图|滚动长图).*")) {
+            return "1024x2048";
         }
-        if (text.matches("(?s).*(横屏|横版|电脑壁纸|桌面|banner|宽幅|全景).*")) {
+        if (text.matches("(?s).*(banner|横幅图|头图|封面图|公众号封面).*")) {
+            return "2048x512";
+        }
+        // 手机壁纸 / 竖版海报：2:3 比 9:16 更稳，裁到手机上也不难看
+        if (text.matches("(?s).*(手机壁纸|竖屏|竖版|海报|手机壳|锁屏).*")) {
+            return "1024x1536";
+        }
+        // 头像是方图；表情包也要方图
+        if (text.matches("(?s).*(头像|图标|logo|表情包|贴纸).*")) {
+            return "1024x1024";
+        }
+        // 电脑壁纸 / 横版
+        if (text.matches("(?s).*(电脑壁纸|桌面|横屏|横版|宽幅|宽屏).*")) {
             return "1536x1024";
         }
         return "1024x1024";
     }
 
-
     /**
      * 按反馈改写上一版提示词（2026-11-03）。
      *
-     * <p>为什么要单独一条：用户说"不像""眼睛太大"时，如果当新请求处理，
-     * 模型会重新编一套描述，**上一版的构图、光线、风格全丢**——结果越改越差。
-     * 这里明确要求"在上一版基础上只改他说的那点"。
+     * <p>为什么需要：用户说"不像""眼睛太大"时，如果当新请求处理，模型会重新编一套描述，
+     * 上一版的构图、光线、风格全丢——结果越改越差。这里要求"在上一版基础上只改他说的那点"。
      */
     private String revise(String previousFinalPrompt, String feedback, String rawPrompt) {
         try {
