@@ -62,6 +62,10 @@ public class AgentOrchestrator {
     private final ConversationMemoryService conversationMemoryService;
     private final AgentTaskStateStore taskStateStore;
 
+    /** 「这一轮在做什么」（2026-11-04）：落 Redis，重启后还能知道上一轮被打断的是什么 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TurnInflightStore turnInflightStore;
+
     /**
      * 多气泡拆分（2026-10-21）。**用 setter 注入**：那条构造器有一串单测在用，
      * 为它加参数会连带改一排装配（坑 45）；这里为 null 时就是"一条发完"，行为不变。
@@ -271,6 +275,9 @@ public class AgentOrchestrator {
                         batch.quotedImages().size() + batch.quotedAttachments().size(),
                         Math.max(0, System.currentTimeMillis() - enqueuedAt));
                 conversationTraceLogger.inbound(batch.replyAnchor());
+                if (turnInflightStore != null) {
+                    turnInflightStore.markStart(batch.userId(), batch.content());
+                }
                 HandledReply handled = handleSafely(batch, taskId);
                 reply = handled.text();
                 sink = handled.sink();
@@ -296,6 +303,9 @@ public class AgentOrchestrator {
                         taskStateStore.finish(taskId, "SUCCEEDED", batch.userId(), batch.replyToMsgId());
                     }
                     taskStateStore.step(taskId, processingFailed ? "FAILED" : "REPLY_READY");
+                }
+                if (turnInflightStore != null && !processingFailed) {
+                    turnInflightStore.clear(batch.userId());
                 }
                 log.info("agent_task_finish task={} user={} replyTo={} replyChars={} streamed={}", taskId, batch.userId(), batch.replyToMsgId(),
                         reply == null ? 0 : reply.length(), sink != null && sink.isDone());
@@ -733,7 +743,15 @@ public class AgentOrchestrator {
                                                int maxTurns, int maxChars) {
         try {
             String state = latestState(userId);
+            // 2026-11-04：上一轮被打断（重启/崩溃）时，留了一条"他在做什么"的标记。
+            // 拼进摘要里，模型才可能在他说「继续」时接得上；否则它会顺着系统提示词念规则。
+            String inflight = turnInflightStore == null ? null : turnInflightStore.takeStale(userId);
             List<ContextTurn> merged = new java.util.ArrayList<>();
+            if (inflight != null) {
+                merged.add(new ContextTurn("summary",
+                        "<上一轮中断>\n" + inflight
+                                + "他如果说「继续」，指的就是这件事；不确定就先问一句，**不要复述你自己的规则**。\n</上一轮中断>"));
+            }
             if (state == null || state.isBlank()) {
                 // 没有 STATE 就明确说"更早的没有记录"——不然模型会假装记得（2026-11-01）
                 merged.add(new ContextTurn("summary",
