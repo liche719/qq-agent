@@ -24,6 +24,7 @@
 | 文档 | 管什么 |
 |---|---|
 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 65 个工具与 34 条提示词的真实调用数据、失败率、取舍记录 |
+| [`memory-architecture.md`](memory-architecture.md) | **记忆与召回的整体设计**（四层漏斗、只排一次序、断层截断、75% 召回目标与路线） | 2026-11-04 |
 | [`memory-vector-plan.md`](memory-vector-plan.md) | 三层记忆（`memory` / `memory_fact` / `conversation_memory`）的设计与实测 |
 | [`self-layer-plan.md`](self-layer-plan.md) | 自主模块「它自己」的设计与实测（主文档） |
 | [`ai-abilities.md`](ai-abilities.md) | 看视频 / 画图 / B站评论带图 / 长任务后台跑 |

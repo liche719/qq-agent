@@ -23,6 +23,12 @@
     </properties>
 
     <dependencies>
+        <!-- 中文分词（2026-11-04）：记忆的字面检索用 BM25，PG 默认分词器不认中文 -->
+        <dependency>
+            <groupId>com.huaban</groupId>
+            <artifactId>jieba-analysis</artifactId>
+            <version>1.0.2</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
