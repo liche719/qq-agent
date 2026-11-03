@@ -139,6 +139,26 @@ public class MediaToolContextService {
      * 只在模型已经判断用户明确指代“刚才/上一条”的未保存媒体时调用。
      * 常规消息绝不会自动看到 pendingByUser 中的旧媒体。
      */
+    /**
+     * 把当前媒体上下文**带过线程边界**（2026-11-03）。
+     *
+     * <p>工具现在跑在线程池里，而媒体上下文是 ThreadLocal——不带走的话，
+     * `saveImportantMedia` / `inspectRecentUnstoredMedia` 里的
+     * "用户上下文一致性"校验会直接失败（线上实测：他说"把刚才那张图改成日漫风"，
+     * 工具报"媒体与当前用户上下文不一致"）。返回 Object 是为了不把私有 record 暴露出去。
+     */
+    public Object snapshot() {
+        return current.get();
+    }
+
+    public void restore(Object snapshot) {
+        if (snapshot instanceof CurrentMedia media) {
+            current.set(media);
+        } else {
+            current.remove();
+        }
+    }
+
     public String inspectRecentUnstoredMedia(String userReference) {
         CurrentMedia media = current.get();
         if (media == null) {

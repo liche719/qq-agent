@@ -934,11 +934,19 @@ public class AgentLoop {
             String boundBotId = toolStatusService.currentBotId();
             String boundChannel = toolStatusService.currentChannel();
             String boundReplyTo = toolStatusService.currentReplyToMsgId();
+            // 2026-11-03：媒体上下文也要一起带过线程边界，否则"改刚才那张图"必然失败
+            Object mediaSnapshot = mediaToolContextService == null ? null : mediaToolContextService.snapshot();
             java.util.concurrent.Future<ToolExecutionOutcome> future = toolTimeoutPool().submit(() -> {
                 toolStatusService.bind(userId, boundReplyTo, boundBotId, boundChannel);
+                if (mediaToolContextService != null) {
+                    mediaToolContextService.restore(mediaSnapshot);
+                }
                 try {
                     return executeTool(request, userId);
                 } finally {
+                    if (mediaToolContextService != null) {
+                        mediaToolContextService.restore(null);
+                    }
                     toolStatusService.unbind();
                 }
             });
