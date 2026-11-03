@@ -125,6 +125,24 @@ public class DrawPictureTool implements AgentToolProvider {
      *
      * <p>优先级：调用方显式指定 > 按用词推断 > 方图。
      */
+    /**
+     * 尺寸是否"说不清"（2026-11-03）。
+     *
+     * <p>说了壁纸/海报/封面，但没提手机还是电脑、横还是竖——这时候猜错就是白画一张，
+     * 不如让模型问一句。只在**第一次**画时判断；他已经在改上一张时不问。
+     */
+    private boolean sizeAmbiguous(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return false;
+        }
+        boolean wantsCanvas = prompt.matches("(?s).*(壁纸|海报|封面|头图|横幅).*");
+        if (!wantsCanvas) {
+            return false;
+        }
+        boolean saysOrientation = prompt.matches("(?s).*(手机|竖|横|电脑|桌面|宽屏|长图|条漫|banner|方图|头像).*");
+        return !saysOrientation;
+    }
+
     private String resolveSize(String explicit, String rawPrompt, String designedPrompt) {
         if (com.liche.qqagent.media.ImageGenClient.validSize(explicit)) {
             return explicit.trim();
@@ -250,6 +268,13 @@ public class DrawPictureTool implements AgentToolProvider {
             return ToolBusinessResult.failure("今天你自己主动画的张数到上限了（" + selfDailyLimit
                     + " 张/天）。**他要你画的不受影响**——这一轮就别画了，或者跟他说一声"
                     + "\"今天我自己画满了，你要我画就说\"。");
+        }
+
+        // 2026-11-03：说"壁纸/海报/封面"但没说是手机还是电脑时，**先问一句**，别猜错尺寸白画一张
+        if (!com.liche.qqagent.media.ImageGenClient.validSize(size)
+                && feedback == null && lastDraw == null && sizeAmbiguous(prompt)) {
+            return ToolBusinessResult.needsInput(
+                    "他要的是横版还是竖版？比如手机壁纸（竖）还是电脑壁纸（横）？先问清楚再画。");
         }
 
         String finalPrompt;
