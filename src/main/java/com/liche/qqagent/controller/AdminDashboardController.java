@@ -42,6 +42,12 @@ public class AdminDashboardController {
     private final UserProfileRepository users;
     private final ConversationMemoryRepository conversations;
     private final MemoryService memoryService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment environment;
+
+    /** 记忆召回评测用（2026-11-04）：把召回结果原样吐出来，才能算命中率 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.memory.MemoryRetrievalService memoryRetrievalService;
     private final MemoryRepository memoryRepository;
     private final ReminderTaskRepository reminders;
     private final OperationLogRepository logs;
@@ -259,6 +265,45 @@ public class AdminDashboardController {
      * <p>数据来自**宿主机落盘的日志**（容器重建不会丢），不是 docker logs。
      * 返回：按 logger 聚合的 ERROR/WARN 计数 + 最近若干条原文。
      */
+    /**
+     * 记忆召回评测（2026-11-04）。
+     *
+     * <p>POST 一组 query，逐条跑真实召回路径，把**实际注入提示词的两段文本**原样返回。
+     * 有了它才能算"某条记忆到底有没有被召回"，而不是靠感觉。
+     *
+     * <p>只在面板层暴露，走管理员口令；不做写入，纯读。
+     */
+    @PostMapping("/memory/recall-eval")
+    public Map<String,Object> recallEval(@RequestBody List<String> queries,
+                                         @RequestParam(defaultValue="") String userId) {
+        Map<String,Object> out = new LinkedHashMap<>();
+        if (memoryRetrievalService == null) {
+            out.put("error", "召回服务不可用");
+            return out;
+        }
+        String target = userId == null || userId.isBlank() ? environment.getProperty("alert.qq-openid", "") : userId;
+        List<Map<String,Object>> rows = new ArrayList<>();
+        for (String query : queries) {
+            long started = System.currentTimeMillis();
+            Map<String,Object> row = new LinkedHashMap<>();
+            row.put("query", query);
+            try {
+                var retrieved = memoryRetrievalService.retrieve(target, query, 40, 6000, 40, 8000);
+                row.put("core", retrieved.coreSection());
+                row.put("work", retrieved.workSection());
+                row.put("chars", retrieved.coreSection().length() + retrieved.workSection().length());
+            } catch (RuntimeException exception) {
+                row.put("error", exception.getClass().getSimpleName() + ": " + exception.getMessage());
+            }
+            row.put("ms", System.currentTimeMillis() - started);
+            rows.add(row);
+        }
+        out.put("userId", target);
+        out.put("count", rows.size());
+        out.put("rows", rows);
+        return out;
+    }
+
     @GetMapping("/logs/issues") public Map<String,Object> logIssues(@RequestParam(defaultValue="2") int hours) {
         int span = Math.max(1, Math.min(72, hours));
         String since = java.time.LocalDateTime.now().minusHours(span)
