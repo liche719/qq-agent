@@ -54,8 +54,36 @@ public class ImageGenClient {
         return !model.isEmpty() && !baseUrl.isEmpty() && !apiKey.isEmpty();
     }
 
-    /** 生成一张图，返回它的下载地址 */
+    /** 允许的尺寸范围（代理实测：宽高都在 512~4096，格式 WxH） */
+    public static boolean validSize(String size) {
+        if (size == null) {
+            return false;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("^(\\d{3,4})x(\\d{3,4})$").matcher(size.trim());
+        if (!matcher.matches()) {
+            return false;
+        }
+        int width = Integer.parseInt(matcher.group(1));
+        int height = Integer.parseInt(matcher.group(2));
+        return width >= 512 && width <= 4096 && height >= 512 && height <= 4096;
+    }
+
+    /** 生成一张图（默认 1024x1024 方图） */
     public Result generate(String prompt) {
+        return generate(prompt, null);
+    }
+
+    /**
+     * 生成一张图，可指定尺寸（2026-11-03）。
+     *
+     * <p>为什么要它：这个模型**只有 5 个参数**（model/prompt/n/size/response_format），
+     * 没有 steps/cfg/seed/negative_prompt——尺寸是唯一能显著改变观感的旋钮。
+     * 之前一直不传，所以永远出 1024×1024 方图，"画个手机壁纸/头像"构图必然是错的。
+     *
+     * @param size 形如 {@code 768x1344}；null 或非法值走默认
+     */
+    public Result generate(String prompt, String size) {
         if (!enabled()) {
             return Result.failed("没配生图模型。");
         }
@@ -67,6 +95,9 @@ public class ImageGenClient {
             body.put("model", model);
             body.put("prompt", prompt);
             body.put("n", 1);
+            if (validSize(size)) {
+                body.put("size", size.trim());
+            }
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl.replaceAll("/+$", "") + "/images/generations"))

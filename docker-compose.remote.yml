@@ -100,7 +100,7 @@ services:
       # ⚠️ 这份默认值必须和 application.yml 的 llm.reasoning-effort **保持完全一致**。
       # 2026-10-21 踩过：这里留了旧值（没有 dialog_first / self_comment），
       # compose 的 ${VAR:-默认} 优先级高于 yml 的 ${VAR:默认}，
-      # 结果 yml 里新加的 dialog_first=high、self_comment=none,summary=none 全部失效，
+      # 结果 yml 里新加的 dialog_first=high、self_comment=none,summary=none,image_prompt=low 全部失效，
       # 但日志里只是两条「认不出的场景已忽略」的 WARN，很难注意到。
       # 唱歌（2026-11-03）：fun-music-v1 邀测模型，开通后把 VOICE_MUSIC_ENABLED 设 true 并配 WorkspaceId 端点
       VOICE_MUSIC_ENABLED: ${VOICE_MUSIC_ENABLED:-false}

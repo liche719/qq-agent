@@ -84,6 +84,27 @@ public class DrawPictureTool implements AgentToolProvider {
      * 结果三张都不是那个样子。现在先让文字模型补全（形象、动作、场景、构图、光线），
      * 再交给生图；成本约 0.01 元/次。
      */
+
+    /**
+     * 选尺寸（2026-11-03）。
+     *
+     * <p>优先级：调用方显式给的合法尺寸 > 按他的用词推断 > 方图。
+     * 之前的实现**从来不传 size**，所以不管要头像还是壁纸，永远出 1024×1024。
+     */
+    private String resolveSize(String explicit, String rawPrompt, String designedPrompt) {
+        if (com.liche.qqagent.media.ImageGenClient.validSize(explicit)) {
+            return explicit.trim();
+        }
+        String text = (rawPrompt == null ? "" : rawPrompt) + " " + (designedPrompt == null ? "" : designedPrompt);
+        if (text.matches("(?s).*(壁纸|竖屏|竖版|手机|头像|海报|长图).*")) {
+            return "768x1344";
+        }
+        if (text.matches("(?s).*(横屏|横版|电脑壁纸|桌面|banner|宽幅|全景).*")) {
+            return "1536x1024";
+        }
+        return "1024x1024";
+    }
+
     private String design(String raw) {
         if (!designPrompt) {
             return raw;
@@ -91,11 +112,12 @@ public class DrawPictureTool implements AgentToolProvider {
         try {
             String ask = "把下面这个画图要求，改写成一段给画图模型用的中文提示词。\n"
                     + "要求：主体与外观细节、动作、场景、构图/视角、光线、风格都要写清楚；80~150 字；"
+                    + "**不要添加他没提到的关键元素**（多出来的人物、道具、文字），只在光线、构图、质感上扩写；"
                     + "只输出提示词本身，不要解释、不要引号、不要分点。\n"
                     + (persona.isBlank() ? "" : "如果画的是「笨鱼」自己，固定形象是：" + persona + "\n")
                     + "用户要求：" + raw;
             String designed = com.liche.qqagent.config.LlmScenario.run(
-                    com.liche.qqagent.config.LlmScenario.DIALOG, () -> chatModel.chat(ask));
+                    com.liche.qqagent.config.LlmScenario.IMAGE_PROMPT, () -> chatModel.chat(ask));
             if (designed == null || designed.isBlank()) {
                 return raw;
             }
@@ -129,7 +151,10 @@ public class DrawPictureTool implements AgentToolProvider {
 
     @Tool(value = "画一张图发给他（「画个…」「做个图」）。**一轮只画一张**；他说不像/没让画就停手，先问清楚哪里不对。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
-    public ToolBusinessResult drawPicture(String prompt) {
+    public ToolBusinessResult drawPicture(
+            @dev.langchain4j.agent.tool.P("要画什么（用自然语言描述）") String prompt,
+            @dev.langchain4j.agent.tool.P(value = "尺寸，形如 768x1344；不确定就别传，会按内容自动选",
+                    required = false) String size) {
         if (!imageClient.enabled()) {
             return ToolBusinessResult.failure("生图能力没配置，画不了。如实跟他说。");
         }
@@ -147,8 +172,11 @@ public class DrawPictureTool implements AgentToolProvider {
         }
 
         String finalPrompt = design(prompt.trim());
-        log.info("画图提示词 原文={} → 设计后={}", clip(prompt.trim(), 40), clip(finalPrompt, 60));
-        ImageGenClient.Result result = imageClient.generate(finalPrompt);
+        // 2026-11-03：这个模型没有 negative_prompt，只能把"不要什么"写进正向提示词里
+        finalPrompt = finalPrompt + "。画面干净、主体结构完整，不要出现文字、水印、logo 或多余肢体。";
+        String chosenSize = resolveSize(size, prompt, finalPrompt);
+        log.info("画图提示词 原文={} → 设计后={} 尺寸={}", clip(prompt.trim(), 40), clip(finalPrompt, 60), chosenSize);
+        ImageGenClient.Result result = imageClient.generate(finalPrompt, chosenSize);
         if (!result.ok()) {
             return ToolBusinessResult.failure("没画成：" + result.url() + "。跟他说清楚没画出来。");
         }
@@ -167,9 +195,9 @@ public class DrawPictureTool implements AgentToolProvider {
                 return ToolBusinessResult.failure("图生成了但下载失败（HTTP " + response.statusCode() + "）。");
             }
             Files.write(file, response.body());
-            long size = Files.size(file);
-            if (size < 1024) {
-                return ToolBusinessResult.failure("下回来的图不对劲（只有 " + size + " 字节）。");
+            long bytes = Files.size(file);
+            if (bytes < 1024) {
+                return ToolBusinessResult.failure("下回来的图不对劲（只有 " + bytes + " 字节）。");
             }
 
             String fileName = "画的图-" + System.currentTimeMillis() + ".png";
@@ -186,7 +214,7 @@ public class DrawPictureTool implements AgentToolProvider {
                     // 记账失败不影响画图
                 }
             }
-            log.info("画图完成 发送={} 大小={}KB 提示词={}", sent, size / 1024, prompt.substring(0, Math.min(40, prompt.length())));
+            log.info("画图完成 发送={} 大小={}KB 提示词={}", sent, bytes / 1024, prompt.substring(0, Math.min(40, prompt.length())));
 
             if (sent) {
                 return ToolBusinessResult.success("画好了，已经发给他了。图是照着「" + prompt.trim()

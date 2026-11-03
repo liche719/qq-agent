@@ -112,7 +112,7 @@ llm:
   # 场景见 LlmScenario：dialog / extract / reflect / reminder_parse / schedule_parse
   # 这些场景用温度 0（只要结构化输出正确，不需要发散）；留空 = 用内置默认值
   # （extract,reflect,reminder_parse,schedule_parse）
-  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse}
+  zero-temperature-scenarios: ${LLM_ZERO_TEMPERATURE_SCENARIOS:extract,reflect,reminder_parse,schedule_parse,image_prompt}
   # 每个场景的**思考档位**（请求体的 reasoning_effort，取值 low/medium/high；没配的场景不传、用上游默认）。
   # 2026-09-18 用户要求：对话 / 提醒解析 / 定时任务解析 / 反思 都 low，只有**记忆提取 high**（质量优先、后台跑）。
   # 实测：low → 思考 984 token、4.8 秒；不传 → 3004、14.0 秒；high → 2368、11.2 秒。
