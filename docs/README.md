@@ -17,6 +17,7 @@
 | [`llm-call-modes.md`](llm-call-modes.md) | LLM 调用档位、思考模式、缓存计价（含 8 档实测表） | 2026-10-29 |
 | [`eval.md`](eval.md) | 记忆与 Agent 评测：用例结构、怎么跑、当前基线 | 2026-10-29 |
 | [`todo.md`](todo.md) | 待办与还没做的事 | 2026-10-27 |
+| [`logging.md`](logging.md) | **日志在哪、怎么查、级别怎么定**（排障第一步：`docker logs` 重建就没了，真日志在宿主机） | 2026-11-03 |
 
 ## 参考（查数据时看）
 
@@ -57,6 +58,7 @@
 
 ## 变更日志
 
+- **2026-11-03**：新增 `logging.md`（日志落盘位置、速查脚本、级别约定）；`pitfalls` 补第 104~106 条。
 - **2026-11-02**：整理文档。`plan-2026-10-26` / `refactor` / `refactor-summary` 进存档；
   `memory-extraction` 里重复的一节压成指针，细节统一到 `memory-window-design.md`。
 - **2026-11-01**：新增 `memory-window-design.md`（窗口与 STATE 设计）；`pitfalls` 补第 100、101 条。

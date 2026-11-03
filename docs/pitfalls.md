@@ -563,3 +563,39 @@
 3. 最后 `docker restart`（重启保留容器文件系统）。
 
 或者干脆重新构建镜像。**判定**：`docker exec qq-agent ls -l /app/app.jar` 的 mtime 没变就是没生效。
+
+## 104. logback 的 appender-ref 被改到异步 appender 自己身上 → 应用起不来（2026-11-03）
+
+想在 `logback-spring.xml` 里给 `SYSTEM` 套一层 `AsyncAppender`，用字符串替换把 `<appender-ref ref="SYSTEM"/>`
+换成了 `<appender-ref ref="ASYNC-SYSTEM"/>`——但那次替换命中的是**刚插进去的 ASYNC-SYSTEM 内部那一行**，
+于是它引用自己：
+
+```
+ERROR in AppenderRefModelHandler - Could not find an AppenderAttachable at the top of execution stack
+→ Application run failed，容器循环重启，站点 000，持续数分钟
+```
+
+**判定**：容器 `Restarting (1)`、`site=000`，宿主机日志里有 `Logback configuration error detected`。
+
+**教训**：logback 这种"配置错就起不来"的文件**不要用文本替换改**，整份重写；改完**先本地 `java -jar` 起一次**再上生产。
+
+## 105. 用 `<set>` 掩码验证环境变量，会把"没配置"看成"已配置"（2026-11-03）
+
+排查"生图说画不了"时，我用 `sed "s/=.*/=<set>/"` 检查容器环境变量，看到 `LLM_IMAGE_API_KEY=<set>`
+就以为配好了——**空值也会显示成 `<set>`**。真实情况是长度为 0。
+
+**正确做法**：打印**长度**，或者用 `docker compose config` 看解析后的值：
+
+```bash
+docker exec qq-agent sh -c 'eval v=\$LLM_IMAGE_API_KEY; echo len=\${#v}'   # 0 = 空
+docker compose -f docker-compose.remote.yml config | grep LLM_IMAGE_API_KEY
+```
+
+## 106. `docker compose up -d` 静默失败时，容器还用旧配置（2026-11-03）
+
+把 `up -d` 的输出重定向到 `/dev/null`，失败也看不见，于是"改了 compose 却没生效"，
+而 `docker restart` **不会**重新读 compose，只有 `--force-recreate` 才会。
+
+**判定**：容器 `Created` 时间早于 compose 文件的 `mtime`，或者 `printenv` 的值和 `compose config` 不一致。
+
+**做法**：recreate 后**必须核对一次生效值**（长度/内容），不要只看"Started"。
