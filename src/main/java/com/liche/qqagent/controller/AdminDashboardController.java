@@ -235,16 +235,89 @@ public class AdminDashboardController {
             Map<String,Object> item = new LinkedHashMap<>(); item.put("createdAt", entry.getCreatedAt()); item.put("userId", entry.getUserId()); item.put("action", entry.getAction()); item.put("detail", entry.getDetail()); item.put("source", "operation");
             if ((wantedLevel.isBlank() || entry.getAction().toUpperCase(Locale.ROOT).contains(wantedLevel)) && (wantedQuery.isBlank() || item.toString().toLowerCase(Locale.ROOT).contains(wantedQuery))) result.add(item);
         });
-        try {
-            Path file = logDirectory.resolve("spring.log").normalize();
-            if (file.startsWith(logDirectory) && Files.isRegularFile(file)) {
+        // 2026-11-03 修：原来读的是 logs/spring.log，但 logback 实际写 logs/system/agent.log，
+        // 所以面板的"应用日志"一直是空的（用户看到的只有操作审计）。
+        for (Path file : logFiles()) {
+            try {
                 for (String line : readTail(file, 200)) {
                     String detected = line.contains(" ERROR ") ? "ERROR" : line.contains(" WARN ") ? "WARN" : "INFO";
-                    if ((wantedLevel.isBlank() || wantedLevel.equals(detected)) && (wantedQuery.isBlank() || line.toLowerCase(Locale.ROOT).contains(wantedQuery))) result.add(Map.of("level", detected, "message", line, "source", "application"));
+                    if ((wantedLevel.isBlank() || wantedLevel.equals(detected))
+                            && (wantedQuery.isBlank() || line.toLowerCase(Locale.ROOT).contains(wantedQuery))) {
+                        result.add(Map.of("level", detected, "message", line, "source", "application"));
+                    }
+                }
+            } catch (Exception ignored) {
+                // 单个文件读不到不影响整体
+            }
+        }
+        return result.stream().limit(300).toList();
+    }
+
+    /**
+     * 最近的问题汇总（2026-11-03）。
+     *
+     * <p>数据来自**宿主机落盘的日志**（容器重建不会丢），不是 docker logs。
+     * 返回：按 logger 聚合的 ERROR/WARN 计数 + 最近若干条原文。
+     */
+    @GetMapping("/logs/issues") public Map<String,Object> logIssues(@RequestParam(defaultValue="2") int hours) {
+        int span = Math.max(1, Math.min(72, hours));
+        String since = java.time.LocalDateTime.now().minusHours(span)
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        java.util.Map<String,Integer> byLogger = new LinkedHashMap<>();
+        List<Map<String,Object>> recent = new ArrayList<>();
+        int errors = 0, warns = 0;
+        java.util.regex.Pattern header = java.util.regex.Pattern
+                .compile("^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}):\\d{2}\\.\\d+ +(ERROR|WARN) +(\\S+) +- +(.*)$");
+        for (Path file : logFiles()) {
+            try {
+                for (String line : readTail(file, 4000)) {
+                    java.util.regex.Matcher m = header.matcher(line);
+                    if (!m.matches() || m.group(1).compareTo(since) < 0) continue;
+                    String level = m.group(2);
+                    if ("ERROR".equals(level)) errors++; else warns++;
+                    byLogger.merge(level + " " + m.group(3), 1, Integer::sum);
+                    if (recent.size() < 60) {
+                        Map<String,Object> row = new LinkedHashMap<>();
+                        row.put("time", m.group(1));
+                        row.put("level", level);
+                        row.put("logger", m.group(3));
+                        row.put("message", m.group(4).length() > 220 ? m.group(4).substring(0,220) + "…" : m.group(4));
+                        recent.add(row);
+                    }
+                }
+            } catch (Exception ignored) { }
+        }
+        List<Map<String,Object>> top = byLogger.entrySet().stream()
+                .sorted((a,b) -> Integer.compare(b.getValue(), a.getValue()))
+                .limit(12)
+                .map(e -> { Map<String,Object> row = new LinkedHashMap<>(); row.put("logger", e.getKey()); row.put("count", e.getValue()); return row; })
+                .toList();
+        Map<String,Object> out = new LinkedHashMap<>();
+        out.put("hours", span);
+        out.put("errors", errors);
+        out.put("warns", warns);
+        out.put("byLogger", top);
+        out.put("recent", recent);
+        return out;
+    }
+
+    /** 当前会写日志的文件（系统级 + 各用户），只读存在的 */
+    private List<Path> logFiles() {
+        List<Path> files = new ArrayList<>();
+        try {
+            Path system = logDirectory.resolve("system/agent.log").normalize();
+            if (system.startsWith(logDirectory) && Files.isRegularFile(system)) files.add(system);
+            Path userRoot = logDirectory.resolve("user").normalize();
+            if (userRoot.startsWith(logDirectory) && Files.isDirectory(userRoot)) {
+                try (var stream = Files.list(userRoot)) {
+                    stream.filter(Files::isDirectory)
+                            .map(dir -> dir.resolve("agent.log").normalize())
+                            .filter(path -> path.startsWith(logDirectory) && Files.isRegularFile(path))
+                            .forEach(files::add);
                 }
             }
         } catch (Exception ignored) { }
-        return result.stream().limit(300).toList();
+        return files;
     }
 
     @PostMapping("/actions/qq/reconnect") public Map<String,Object> reconnect(HttpServletRequest request) {

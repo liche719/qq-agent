@@ -11,6 +11,8 @@ const props = defineProps({
 const level = ref('')
 const query = ref('')
 const entries = ref([])
+/** 最近问题汇总（2026-11-03）：来自宿主机落盘的日志，容器重建不会丢 */
+const issues = ref(null)
 const error = ref('')
 const busy = ref(false)
 
@@ -32,6 +34,7 @@ async function load() {
     const data = await api('/logs?level=' + encodeURIComponent(level.value) + '&query=' + encodeURIComponent(query.value))
     if (my !== seq) return
     entries.value = data || []
+    issues.value = await api('/logs/issues?hours=6').catch(() => null)
     error.value = ''
   } catch (caught) {
     if (my !== seq) return
@@ -48,6 +51,16 @@ onMounted(() => load())
 <template>
   <section class="glass panel">
     <div class="panel-head"><h2>运行日志</h2><span class="hint">操作审计（最近 100 条）与应用日志尾部（200 行）</span></div>
+
+    <div v-if="issues" class="hint" style="margin: 6px 0 10px">
+      最近 {{ issues.hours }} 小时：
+      <strong :style="{ color: issues.errors ? '#c0392b' : 'inherit' }">错误 {{ issues.errors }}</strong>
+      ·
+      <strong>警告 {{ issues.warns }}</strong>
+      <span v-if="issues.byLogger && issues.byLogger.length">
+        ｜最多：{{ issues.byLogger.slice(0, 3).map(x => x.logger.replace(/^\S+ /, '') + ' ×' + x.count).join('，') }}
+      </span>
+    </div>
 
     <div class="toolbar">
       <select v-model="level" aria-label="日志级别">
