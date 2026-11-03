@@ -102,6 +102,10 @@ services:
       # compose 的 ${VAR:-默认} 优先级高于 yml 的 ${VAR:默认}，
       # 结果 yml 里新加的 dialog_first=high、self_comment=none,summary=none 全部失效，
       # 但日志里只是两条「认不出的场景已忽略」的 WARN，很难注意到。
+      # 唱歌（2026-11-03）：fun-music-v1 邀测模型，开通后把 VOICE_MUSIC_ENABLED 设 true 并配 WorkspaceId 端点
+      VOICE_MUSIC_ENABLED: ${VOICE_MUSIC_ENABLED:-false}
+      VOICE_MUSIC_BASE_URL: ${VOICE_MUSIC_BASE_URL:-}
+      VOICE_MUSIC_MODEL: ${VOICE_MUSIC_MODEL:-fun-music-v1}
       LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-dialog_first=high,dialog=low,extract=low,reminder_parse=low,schedule_parse=low,reflect=low,self_comment=none}
       # max_tokens 上限：0 = 不设；思考 token 也算进上限，对话默认不设
       # 结构化档 2026-09-18 提到 16384：提取窗口变大后一次思考就能吃掉 3500+ token，

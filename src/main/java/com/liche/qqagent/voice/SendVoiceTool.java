@@ -32,6 +32,9 @@ public class SendVoiceTool implements AgentToolProvider {
     private static final Logger log = LoggerFactory.getLogger(SendVoiceTool.class);
 
     private final TtsClient ttsClient;
+
+    /** 唱歌用（2026-11-03）：邀测模型，没开通时自动降级成"念歌词" */
+    private final MusicClient musicClient;
     private final ToolStatusService statusService;
     /** 它自己主动发语音的每日上限（用户明确要听的不算） */
     private final int selfDailyLimit;
@@ -42,16 +45,75 @@ public class SendVoiceTool implements AgentToolProvider {
     private final ConcurrentHashMap<String, AtomicInteger> selfUsedToday = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LocalDate> usedDates = new ConcurrentHashMap<>();
 
-    public SendVoiceTool(TtsClient ttsClient,
+    public SendVoiceTool(TtsClient ttsClient, MusicClient musicClient,
                          ToolStatusService statusService,
                          @Value("${voice.tts.self-daily-limit:10}") int selfDailyLimit,
                          @Value("${voice.tts.price-yuan-per-10k-chars:0.8}") double pricePer10kChars,
                          org.springframework.beans.factory.ObjectProvider<com.liche.qqagent.config.LlmCallSink> auditSink) {
         this.ttsClient = ttsClient;
+        this.musicClient = musicClient;
         this.statusService = statusService;
         this.selfDailyLimit = Math.max(0, selfDailyLimit);
         this.pricePer10kChars = java.math.BigDecimal.valueOf(Math.max(0, pricePer10kChars));
         this.auditSink = auditSink.getIfAvailable();
+    }
+
+    /**
+     * 唱歌（2026-11-03）。
+     *
+     * <p>和 {@code sendVoice} 的区别：那边是"把话念出来"，这边是"按歌词谱曲并唱"。
+     * 用阿里云 {@code fun-music-v1} 生成，返回 mp3 地址后走同一条语音发送链路。
+     *
+     * <p><b>失败一定降级、而且要说实话</b>：没开通/超时/额度不足时改成念歌词，
+     * 并且明确告诉他"这次没唱成"——绝不能假装唱了。
+     */
+    @Tool(value = "唱一首歌给他听。他说「唱首歌」「唱一段」，或你想用一首歌回应时用。"
+            + "lyrics 是你写的歌词（中文 5~350 字，可以带 [verse]/[chorus] 标记）；"
+            + "style 是风格描述（如「温柔民谣，木吉他，慢速」），可省略。")
+    @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
+    public ToolBusinessResult singSong(
+            @dev.langchain4j.agent.tool.P("歌词，中文 5~350 字") String lyrics,
+            @dev.langchain4j.agent.tool.P(value = "风格描述，可省略", required = false) String style) {
+        String text = lyrics == null ? "" : Lyrics.clean(lyrics);
+        if (text.isEmpty()) {
+            return ToolBusinessResult.failure("没有歌词。");
+        }
+        if (quotaExceeded()) {
+            return ToolBusinessResult.failure("今天主动发的语音到上限了（" + selfDailyLimit + " 条/天），这一首先别唱。");
+        }
+        if (musicClient.enabled()) {
+            MusicClient.Result song = musicClient.sing(text, style);
+            if (song.ok()) {
+                if (SelfTurnMark.active()) {
+                    countSelfUse();
+                }
+                log.info("唱歌完成 歌词={}字 时长={}s 用时={}ms", text.length(), song.durationSeconds(), song.costMs());
+                boolean sent = statusService.sendVoice(song.url());
+                if (!sent) {
+                    com.liche.qqagent.agent.VoiceOutbox.put(song.url());
+                    return ToolBusinessResult.success("歌已经写好了（" + song.durationSeconds()
+                            + " 秒），**会在这一轮末尾补发**。别提前说「已经发了」。");
+                }
+                return ToolBusinessResult.success("唱好了，**已经发出去了**（" + song.durationSeconds()
+                        + " 秒）。别再补一段歌词复述，顶多说一句你想表达的。");
+            }
+            log.warn("唱歌失败，降级为念歌词：{}", song.error());
+        }
+        // 降级：念歌词（并如实说明）
+        String spoken = Lyrics.speakable(text);
+        if (spoken.length() > ttsClient.maxChars()) {
+            spoken = spoken.substring(0, ttsClient.maxChars());
+        }
+        TtsClient.Result speech = ttsClient.synthesize(spoken);
+        if (!speech.ok()) {
+            return ToolBusinessResult.failure("这次没唱成，语音也没合成出来。用文字跟他说，别装作唱了。");
+        }
+        if (SelfTurnMark.active()) {
+            countSelfUse();
+        }
+        statusService.sendVoice(speech.url());
+        return ToolBusinessResult.success("这次没能真唱（音乐生成没开通或暂时不可用），"
+                + "我改成了把歌词念给他听。**要跟他说清楚这是念的、不是唱的**。");
     }
 
     @Tool(value = "把一句话念出来发语音。他说「说一句/念出来」，或这句话用声音更合适时用。语音就是回复，发完别再补一篇文字。")

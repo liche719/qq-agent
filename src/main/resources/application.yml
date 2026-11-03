@@ -142,6 +142,14 @@ llm:
 # QQ 的语音接口支持 file_type=3 + url，由平台自己下载 —— 所以这里不落文件、不转码、不碰 silk。
 # 计费按字符（响应里的 usage.characters）；音色见阿里云 Qwen-TTS 音色列表。
 voice:
+  music:
+    enabled: ${VOICE_MUSIC_ENABLED:false}
+    base-url: ${VOICE_MUSIC_BASE_URL:}
+    api-key: ${VOICE_MUSIC_API_KEY:${EMBEDDING_API_KEY:}}
+    model: ${VOICE_MUSIC_MODEL:fun-music-v1}
+    gender: ${VOICE_MUSIC_GENDER:female}
+    max-lyrics-chars: ${VOICE_MUSIC_MAX_LYRICS_CHARS:350}
+    timeout-seconds: ${VOICE_MUSIC_TIMEOUT_SECONDS:120}
   tts:
     enabled: ${VOICE_TTS_ENABLED:true}
     base-url: ${VOICE_TTS_BASE_URL:https://dashscope.aliyuncs.com/api/v1}
