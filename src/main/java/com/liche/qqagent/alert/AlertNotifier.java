@@ -50,6 +50,10 @@ public class AlertNotifier {
     private final Map<String, String> active = new ConcurrentHashMap<>();
     /** 每个问题上次推送时间 */
     private final Map<String, Long> sentAt = new ConcurrentHashMap<>();
+
+    /** 告警状态写一份到 Redis（2026-11-04）：重启后不会把同一件事再推一遍 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<org.springframework.data.redis.core.StringRedisTemplate> redisProvider;
     /** 应用启动时刻，用于跳过启动初期的误报 */
     private final long startedAt = System.currentTimeMillis();
 
@@ -91,7 +95,9 @@ public class AlertNotifier {
 
         for (Map.Entry<String, String> problem : problems.entrySet()) {
             boolean isNew = !active.containsKey(problem.getKey());
-            Long last = sentAt.get(problem.getKey());
+            Long last = sentAt.containsKey(problem.getKey())
+                    ? sentAt.get(problem.getKey())
+                    : lastSentFromRedis(problem.getKey());
             if (isNew || last == null || now - last >= repeat) {
                 if (deliver("【运维告警】" + problem.getValue() + "\n时间：" + now())) {
                     pushed.add(problem.getKey());
@@ -100,6 +106,7 @@ public class AlertNotifier {
                 // 会绕过 repeat-minutes 每分钟重试一次，把 QQ 主动消息额度持续打满，
                 // 结果真正的告警反而发不出去。
                 sentAt.put(problem.getKey(), now);
+                rememberSent(problem.getKey(), now);
             }
         }
         for (Map.Entry<String, String> entry : new LinkedHashMap<>(active).entrySet()) {
@@ -318,4 +325,36 @@ public class AlertNotifier {
             return ZoneId.of("Asia/Shanghai");
         }
     }
+
+    /** 把"上次推送时间"写进 Redis；失败不影响内存路径 */
+    private void rememberSent(String key, long at) {
+        org.springframework.data.redis.core.StringRedisTemplate redis = redis();
+        if (redis == null || key == null) {
+            return;
+        }
+        try {
+            redis.opsForValue().set("alert:sent:" + key, String.valueOf(at), java.time.Duration.ofHours(24));
+        } catch (RuntimeException exception) {
+            log.debug("告警状态写 Redis 失败：{}", exception.getMessage());
+        }
+    }
+
+    /** 服务刚重启时内存是空的，从 Redis 取上次推送时间，避免重复推送 */
+    private Long lastSentFromRedis(String key) {
+        org.springframework.data.redis.core.StringRedisTemplate redis = redis();
+        if (redis == null || key == null) {
+            return null;
+        }
+        try {
+            String raw = redis.opsForValue().get("alert:sent:" + key);
+            return raw == null || raw.isBlank() ? null : Long.parseLong(raw);
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private org.springframework.data.redis.core.StringRedisTemplate redis() {
+        return redisProvider == null ? null : redisProvider.getIfAvailable();
+    }
+
 }
