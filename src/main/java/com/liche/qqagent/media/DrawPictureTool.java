@@ -53,6 +53,13 @@ public class DrawPictureTool implements AgentToolProvider {
     /** 一轮最多画几张（2026-10-24）：他"没让你画"的时候连着画了 4 张，用硬上限兜住 */
     private final int maxPerTurn;
     /** 先把要求改写成规范提示词，再交给生图（2026-10-24 用户要求） */
+    /** 上一次画了什么（2026-11-03）：用户说"不像/重画/改成…"时，要在上一版基础上改，而不是从头来 */
+    private volatile LastDraw lastDraw;
+
+    /** 上一版的信息：他的原始要求、最终提示词、尺寸 */
+    private record LastDraw(String rawPrompt, String finalPrompt, String size) {
+    }
+
     private final boolean designPrompt;
     /** 笨鱼自己的固定形象：写死在配置里，画"你自己"时自动带上，省得每次瞎编 */
     private final String persona;
@@ -124,6 +131,38 @@ public class DrawPictureTool implements AgentToolProvider {
         return "1024x1024";
     }
 
+
+    /**
+     * 按反馈改写上一版提示词（2026-11-03）。
+     *
+     * <p>为什么要单独一条：用户说"不像""眼睛太大"时，如果当新请求处理，
+     * 模型会重新编一套描述，**上一版的构图、光线、风格全丢**——结果越改越差。
+     * 这里明确要求"在上一版基础上只改他说的那点"。
+     */
+    private String revise(String previousFinalPrompt, String feedback, String rawPrompt) {
+        try {
+            String ask = "这是给画图模型用的上一版提示词：\n"
+                    + previousFinalPrompt + "\n\n"
+                    + "用户看了图之后说：「" + feedback + "」\n"
+                    + "用户这次的整体要求（可能只是重复）：" + rawPrompt + "\n\n"
+                    + "请在**保留主体、构图、光线、风格**的前提下，只按反馈修改需要改的地方，"
+                    + "输出一段新的画图提示词。要求：80~150 字；只输出提示词本身，不要解释、不要引号、不要分点。";
+            String revised = com.liche.qqagent.config.LlmScenario.run(
+                    com.liche.qqagent.config.LlmScenario.IMAGE_PROMPT, () -> chatModel.chat(ask));
+            if (revised == null || revised.isBlank()) {
+                return design(rawPrompt);
+            }
+            String cleaned = revised.strip();
+            cleaned = cleaned.replaceAll("^[\\p{Punct}「」“”]+", "");
+            cleaned = cleaned.replaceAll("[\\p{Punct}「」“”]+$", "");
+            return cleaned.length() < 10 ? design(rawPrompt)
+                    : (cleaned.length() > 400 ? cleaned.substring(0, 400) : cleaned);
+        } catch (RuntimeException exception) {
+            log.warn("按反馈改写失败，退回重新设计：{}", exception.getMessage());
+            return design(rawPrompt);
+        }
+    }
+
     private String design(String raw) {
         if (!designPrompt) {
             return raw;
@@ -171,9 +210,13 @@ public class DrawPictureTool implements AgentToolProvider {
     @Tool(value = "画一张图发给他（「画个…」「做个图」）。**一轮只画一张**；他说不像/没让画就停手，先问清楚哪里不对。")
     @ToolExecutionPolicy(ToolExecutionClass.SLOW_EXTERNAL)
     public ToolBusinessResult drawPicture(
-            @dev.langchain4j.agent.tool.P("要画什么（用自然语言描述）") String prompt,
+            @dev.langchain4j.agent.tool.P("要画什么（用自然语言描述）；如果是在上一张基础上改，这里仍写主体的整体要求")
+            String prompt,
             @dev.langchain4j.agent.tool.P(value = "尺寸，形如 768x1344；不确定就别传，会按内容自动选",
-                    required = false) String size) {
+                    required = false) String size,
+            @dev.langchain4j.agent.tool.P(value = "他对上一张图不满意的地方（如「不像」「眼睛太大」「要橘猫」）。"
+                    + "**只要是在上一张的基础上改，就一定要传这个**，否则会从头画、丢掉原来的构图",
+                    required = false) String feedback) {
         if (!imageClient.enabled()) {
             return ToolBusinessResult.failure("生图能力没配置，画不了。如实跟他说。");
         }
@@ -190,10 +233,19 @@ public class DrawPictureTool implements AgentToolProvider {
                     + "\"今天我自己画满了，你要我画就说\"。");
         }
 
-        String finalPrompt = design(prompt.trim());
+        String finalPrompt;
+        if (feedback != null && !feedback.isBlank() && lastDraw != null) {
+            // 2026-11-03：在**上一版**基础上改，而不是当新请求重画
+            finalPrompt = revise(lastDraw.finalPrompt(), feedback.trim(), prompt.trim());
+            log.info("按反馈改写 上一版={} 反馈={} → 新提示词={}", clip(lastDraw.finalPrompt(), 40),
+                    clip(feedback.trim(), 20), clip(finalPrompt, 60));
+        } else {
+            finalPrompt = design(prompt.trim());
+        }
         // 2026-11-03：这个模型没有 negative_prompt，只能把"不要什么"写进正向提示词里
         finalPrompt = finalPrompt + constraintFor(prompt + " " + finalPrompt);
         String chosenSize = resolveSize(size, prompt, finalPrompt);
+        lastDraw = new LastDraw(prompt.trim(), finalPrompt, chosenSize);
         log.info("画图提示词 原文={} → 设计后={} 尺寸={}", clip(prompt.trim(), 40), clip(finalPrompt, 60), chosenSize);
         ImageGenClient.Result result = imageClient.generate(finalPrompt, chosenSize);
         if (!result.ok()) {
