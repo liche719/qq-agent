@@ -91,6 +91,25 @@ public class DrawPictureTool implements AgentToolProvider {
      * <p>优先级：调用方显式给的合法尺寸 > 按他的用词推断 > 方图。
      * 之前的实现**从来不传 size**，所以不管要头像还是壁纸，永远出 1024×1024。
      */
+
+    /**
+     * 正向约束（2026-11-03）。
+     *
+     * <p>这个模型没有 negative_prompt，只能把"不要什么"写进正向提示词。但**不能一刀切**：
+     * 实测赛博朋克那张要求"不要出现文字"，霓虹招牌照样长出字——因为招牌本身就要字形，
+     * 强行压制只会让画面变糊。所以按题材分两档：
+     * 带招牌/屏幕/书页/海报这类"文字本来就是内容"的题材，只要它清晰、不加乱码；
+     * 其他题材才禁止出现文字与水印。
+     */
+    private String constraintFor(String text) {
+        String lower = text == null ? "" : text;
+        boolean textNative = lower.matches("(?s).*(招牌|霓虹|广告牌|路牌|屏幕|界面|UI|海报|封面|书|报纸|漫画|字幕|标牌|店招|菜单).*");
+        if (textNative) {
+            return "。画面干净、主体结构完整；牌面与屏幕上的文字要清晰自然、不要乱码或错别字，不要水印或多余肢体。";
+        }
+        return "。画面干净、主体结构完整，不要出现文字、水印、logo 或多余肢体。";
+    }
+
     private String resolveSize(String explicit, String rawPrompt, String designedPrompt) {
         if (com.liche.qqagent.media.ImageGenClient.validSize(explicit)) {
             return explicit.trim();
@@ -173,7 +192,7 @@ public class DrawPictureTool implements AgentToolProvider {
 
         String finalPrompt = design(prompt.trim());
         // 2026-11-03：这个模型没有 negative_prompt，只能把"不要什么"写进正向提示词里
-        finalPrompt = finalPrompt + "。画面干净、主体结构完整，不要出现文字、水印、logo 或多余肢体。";
+        finalPrompt = finalPrompt + constraintFor(prompt + " " + finalPrompt);
         String chosenSize = resolveSize(size, prompt, finalPrompt);
         log.info("画图提示词 原文={} → 设计后={} 尺寸={}", clip(prompt.trim(), 40), clip(finalPrompt, 60), chosenSize);
         ImageGenClient.Result result = imageClient.generate(finalPrompt, chosenSize);
