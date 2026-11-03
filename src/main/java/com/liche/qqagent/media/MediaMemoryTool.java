@@ -43,7 +43,8 @@ public class MediaMemoryTool implements com.liche.qqagent.tool.AgentToolProvider
         return outcome.message();
     }
 
-    @Tool(value = "他说「刚才那张图」但还没保存时：取回那条未保存的图片/文件。userReference 原样抄他的话。")
+    @Tool(value = "他提到「刚才那张图/上次那个文件」时**必须先调这个**再回答：取回之前那条消息里未保存的图片/文件。"
+            + "**不要凭记忆回答「我看不到」——先查，查完再说。** userReference 原样抄他的话。")
     public String inspectRecentUnstoredMedia(String userReference) {
         String userId = requireCurrentUser();
         if (!userId.equals(mediaContext.currentUserId())) {

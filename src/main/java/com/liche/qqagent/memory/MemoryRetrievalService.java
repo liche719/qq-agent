@@ -131,6 +131,7 @@ public class MemoryRetrievalService {
         // 一次算好"当前这句"的向量，中期事项 / 经历 / 历史对话三处共用（省调用，也保证口径一致）
         float[] queryVector = embedQuery(userId, normalizedQuery);
         long tEmbed = System.currentTimeMillis();
+        long tProfile0 = tEmbed;
 
         // ① 长期设定：无条件注入，按字面相关度 + 重要度 + 最近确认排序（没有向量门槛）
         List<Memory> profiles = profileCandidates(userId, normalizedQuery);
@@ -139,7 +140,9 @@ public class MemoryRetrievalService {
                 Math.max(1, coreMaxLoad), Math.max(1, coreMaxChars));
 
         // ②③ 中期事项 + 经历：都按向量挑，共用 workMaxChars 预算
+        long tProfile1 = System.currentTimeMillis();
         List<Memory> experiences = rankByVector(userId, queryVector, episodeVectorFloor, Memory.KIND_EXPERIENCE);
+        long tVector1 = System.currentTimeMillis();
         int totalWorkBudget = Math.max(1, workMaxChars);
         int episodeBudget = experiences.isEmpty() ? 0
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
@@ -148,7 +151,9 @@ public class MemoryRetrievalService {
         List<Memory> selectedTasks = select(tasks, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, workMaxLoad), activeWorkBudget);
+        long tTask1 = System.currentTimeMillis();
         touchUsage(now, selectedProfiles, selectedTasks, experiences, usageTouchIntervalMinutes);
+        long tTouch1 = System.currentTimeMillis();
 
         List<Memory> selectedExperiences = select(experiences,
                 Memory::getContent, this::formatEpisode, historicalLimit, episodeBudget);
@@ -163,8 +168,10 @@ public class MemoryRetrievalService {
         long tHistory = System.currentTimeMillis();
         long total = tHistory - t0;
         if (total > 800) {
-            log.info("记忆召回偏慢 user={} total={}ms 媒体={}ms 向量={}ms 画像与排序={}ms 历史={}ms",
-                    userId, total, tMedia - t0, tEmbed - tMedia, tRank - tEmbed, tHistory - tRank);
+            log.info("记忆召回偏慢 user={} total={}ms 媒体={}ms 向量={}ms 画像与排序={}ms 历史={}ms"
+                            + " [细分 画像={}ms 经历向量={}ms 任务={}ms 写使用时间={}ms]",
+                    userId, total, tMedia - t0, tEmbed - tMedia, tRank - tEmbed, tHistory - tRank,
+                    tProfile1 - tProfile0, tVector1 - tProfile1, tTask1 - tVector1, tTouch1 - tTask1);
         }
         String coreSection = format(selectedProfiles, memory -> "- " + memory.getContent()
                 + mediaSuffix(memory.getSourceMediaIds(), linkedMedia));

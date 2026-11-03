@@ -84,7 +84,9 @@ llm:
   image-base-url: ${LLM_IMAGE_BASE_URL:https://dashscope.aliyuncs.com}
   image-api-key: ${LLM_IMAGE_API_KEY:${DASHSCOPE_API_KEY:}}
   image-model: ${LLM_IMAGE_MODEL:qwen-image-3.0}
-  image-prompt-extend: ${LLM_IMAGE_PROMPT_EXTEND:true}
+  # 2026-11-04 实测：百炼自带扩写 63.2s，关掉 4.2s（差 15 倍），而且它会加用户没要的东西。
+  # 我们自己的 design()（温度 0）已经够详细，所以默认关。
+  image-prompt-extend: ${LLM_IMAGE_PROMPT_EXTEND:false}
   image-timeout-seconds: ${LLM_IMAGE_TIMEOUT_SECONDS:120}
   # 生图（2026-10-24 用户要求）：先用文字模型把要求改写成规范提示词，再交给生图模型；
   # 一轮最多画 1 张（他"没让你画"的时候连着画过 4 张）；画"你自己"时带上固定形象，省得每次瞎编。
