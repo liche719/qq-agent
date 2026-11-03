@@ -79,7 +79,12 @@ llm:
   video-max-output-tokens: ${LLM_VIDEO_MAX_OUTPUT_TOKENS:4000}
   # 生图（2026-10-21）：qwen-image-2.0 / wan2.7-image 都是 0.2 元一张。
   # 留空 = 不启用（工具会如实说画不了）。
-  image-model: ${LLM_IMAGE_MODEL:qwen-image-2.0}
+  # 生图（2026-11-03 换成阿里云百炼原生）：与对话的 base-url/api-key 分开配，
+  # 因为它们是两家厂商——混用会让"画图失败"变成"整轮对话失败"
+  image-base-url: ${LLM_IMAGE_BASE_URL:https://dashscope.aliyuncs.com}
+  image-api-key: ${LLM_IMAGE_API_KEY:${DASHSCOPE_API_KEY:}}
+  image-model: ${LLM_IMAGE_MODEL:qwen-image-3.0}
+  image-prompt-extend: ${LLM_IMAGE_PROMPT_EXTEND:true}
   image-timeout-seconds: ${LLM_IMAGE_TIMEOUT_SECONDS:120}
   # 生图（2026-10-24 用户要求）：先用文字模型把要求改写成规范提示词，再交给生图模型；
   # 一轮最多画 1 张（他"没让你画"的时候连着画过 4 张）；画"你自己"时带上固定形象，省得每次瞎编。

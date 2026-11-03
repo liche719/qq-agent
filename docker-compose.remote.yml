@@ -81,7 +81,6 @@ services:
       # 视频模型看不成时回落抽帧
       BILIBILI_FRAME_FALLBACK: ${BILIBILI_FRAME_FALLBACK:-true}
       # 2026-10-21：生图。她自己主动画一天 5 张；用户让她画的不占额度（靠 SelfTurnMark 区分）。
-      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-qwen-image-2.0}
       LLM_IMAGE_SELF_DAILY_LIMIT: ${LLM_IMAGE_SELF_DAILY_LIMIT:-5}
       LLM_MODEL: ${LLM_MODEL:-deepseek-v4.1-flash-1017}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -103,6 +102,10 @@ services:
       # 结果 yml 里新加的 dialog_first=high、self_comment=none,summary=none,image_prompt=low 全部失效，
       # 但日志里只是两条「认不出的场景已忽略」的 WARN，很难注意到。
       # 唱歌（2026-11-03）：fun-music-v1 邀测模型，开通后把 VOICE_MUSIC_ENABLED 设 true 并配 WorkspaceId 端点
+      # 生图（2026-11-03）：与对话分开配，两家厂商
+      LLM_IMAGE_BASE_URL: ${LLM_IMAGE_BASE_URL:-https://dashscope.aliyuncs.com}
+      LLM_IMAGE_API_KEY: ${LLM_IMAGE_API_KEY:-}
+      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-qwen-image-3.0}
       VOICE_MUSIC_ENABLED: ${VOICE_MUSIC_ENABLED:-false}
       VOICE_MUSIC_BASE_URL: ${VOICE_MUSIC_BASE_URL:-}
       VOICE_MUSIC_MODEL: ${VOICE_MUSIC_MODEL:-fun-music-v1}
