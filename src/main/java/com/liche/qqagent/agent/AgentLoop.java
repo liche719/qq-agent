@@ -934,22 +934,13 @@ public class AgentLoop {
             String boundBotId = toolStatusService.currentBotId();
             String boundChannel = toolStatusService.currentChannel();
             String boundReplyTo = toolStatusService.currentReplyToMsgId();
-            // 2026-11-03：媒体上下文也要一起带过线程边界，否则"改刚才那张图"必然失败
-            Object mediaSnapshot = mediaToolContextService == null ? null : mediaToolContextService.snapshot();
-            java.util.concurrent.Future<ToolExecutionOutcome> future = toolTimeoutPool().submit(() -> {
-                toolStatusService.bind(userId, boundReplyTo, boundBotId, boundChannel);
-                if (mediaToolContextService != null) {
-                    mediaToolContextService.restore(mediaSnapshot);
-                }
-                try {
-                    return executeTool(request, userId);
-                } finally {
-                    if (mediaToolContextService != null) {
-                        mediaToolContextService.restore(null);
-                    }
-                    toolStatusService.unbind();
-                }
-            });
+            // 2026-11-03：**统一**把上下文搬过线程边界（ToolContextBundle），并自检。
+            // 之前逐个搬，漏了 MediaToolContextService，导致"改刚才那张图"必失败。
+            // 2026-11-03：上下文**显式**传进执行层，这里（以及线程池里）不再手工搬任何东西。
+            var toolContext = new com.liche.qqagent.tool.ToolContext(userId, boundBotId, boundChannel, boundReplyTo,
+                    mediaToolContextService == null ? null : mediaToolContextService.snapshot());
+            java.util.concurrent.Future<ToolExecutionOutcome> future = toolTimeoutPool()
+                    .submit(() -> executeTool(request, userId, toolContext));
             try {
                 return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException timeout) {
@@ -1448,11 +1439,12 @@ public class AgentLoop {
         }
     }
 
-    private ToolExecutionOutcome executeTool(ToolExecutionRequest request, String userId) {
+    private ToolExecutionOutcome executeTool(ToolExecutionRequest request, String userId,
+                                            com.liche.qqagent.tool.ToolContext context) {
         String traceId = UUID.randomUUID().toString();
         long started = System.nanoTime();
         try {
-            ToolExecutionOutcome outcome = toolRegistry.execute(request, userId);
+            ToolExecutionOutcome outcome = toolRegistry.execute(request, context);
             // 2026-11-01（用户要求）：一轮里只留“工具 + 基本参数 + 结果”，不再单独记一条 phase=call 的过程行。
             recordToolEvent(userId, traceId, request.name(),
                     request.arguments(), outcome.content(), millisSince(started));

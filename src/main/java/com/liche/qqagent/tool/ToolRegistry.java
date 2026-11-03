@@ -40,6 +40,13 @@ public class ToolRegistry {
     private final ToolInvocationService invocationService;
     private final com.liche.qqagent.agent.AgentTaskStateStore taskStateStore;
 
+    /** 工具执行时要装上的上下文（2026-11-03）：装与清都在 execute(request, context) 里 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ToolStatusService statusService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.liche.qqagent.media.MediaToolContextService mediaContext;
+
     /** 副作用工具的幂等保护（2026-10-29）；没配 Redis 时为 null，行为退回"只靠提示" */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ToolIdempotencyGuard idempotencyGuard;
@@ -193,6 +200,41 @@ public class ToolRegistry {
     public ToolPolicySnapshot policy(String name) {
         ToolEntry entry = entries.get(name);
         return entry == null ? ToolPolicySnapshot.defaults() : ToolPolicySnapshot.from(entry.policy());
+    }
+
+    /**
+     * 带**显式上下文**的执行入口（2026-11-03）。
+     *
+     * <p>装上下文这件事只在这里做一次：反射调用工具的前一刻装、调用完清掉。
+     * 线程池、定时任务、后台任务、测试都走这里，所以不存在"某条路径忘了搬"。
+     *
+     * <p>上下文为空**直接失败**，绝不退回到 ThreadLocal 里的残留——那种"用上一次的用户"
+     * 比报错严重得多。
+     */
+    public ToolExecutionOutcome execute(ToolExecutionRequest request, ToolContext context) {
+        if (context == null || !context.valid()) {
+            return ToolExecutionOutcome.failure("工具调用缺少上下文（用户未知），这次不能执行。", 0);
+        }
+        Object previousMedia = null;
+        boolean mediaRestored = false;
+        try {
+            if (statusService != null) {
+                statusService.bind(context.userId(), context.replyToMsgId(), context.botId(), context.channel());
+            }
+            if (mediaContext != null && context.mediaSnapshot() != null) {
+                previousMedia = mediaContext.snapshot();
+                mediaContext.restore(context.mediaSnapshot());
+                mediaRestored = true;
+            }
+            return execute(request, (Object) context.userId());
+        } finally {
+            if (mediaRestored) {
+                mediaContext.restore(previousMedia);
+            }
+            if (statusService != null) {
+                statusService.unbind();
+            }
+        }
     }
 
     public ToolExecutionOutcome execute(ToolExecutionRequest request, Object memoryId) {
