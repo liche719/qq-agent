@@ -135,6 +135,14 @@ public class MemoryRetrievalService {
         }
         LocalDateTime now = LocalDateTime.now();
         String normalizedQuery = normalize(query);
+
+        // 2026-11-04：**寒暄类不翻旧账**。一句"哈哈"也要查库 + 算 embedding，
+        // 实测白花 600~900ms 和一次模型调用。但**画像照给**——它得知道"你是谁"。
+        if (isSmallTalk(normalizedQuery)) {
+            List<Memory> quickProfiles = profileCandidates(userId, normalizedQuery);
+            String quickCore = format(quickProfiles, memory -> "- " + memory.getContent());
+            return new RetrievedMemory(quickCore.isBlank() ? "（暂无）" : quickCore, "（暂无）");
+        }
         // 2026-11-04：指代型问题（"我上次说的你还清楚吗"）没有可检索的词，
         // 先用最近几轮对话把它补全成具体查询；正常问题原样返回，不花这次调用。
         if (queryRewriter != null) {
@@ -596,6 +604,33 @@ public class MemoryRetrievalService {
 
     private boolean ownedBy(String owner, String userId) {
         return owner != null && userId != null && owner.equals(userId);
+    }
+
+    /**
+     * 是不是"寒暄/附和"（2026-11-04）。
+     *
+     * <p>判据刻意保守：**短 + 寒暄词 + 没有疑问 + 没有数字/英文**。
+     * 只要有一点像是在问事（"好吗""那个呢""6e206"），就走完整检索——
+     * 宁可多花 700ms，也不能让它对着重要上下文装失忆。
+     */
+    private boolean isSmallTalk(String query) {
+        if (query == null) {
+            return false;
+        }
+        String text = query.trim();
+        if (text.isEmpty() || text.length() > 8) {
+            return false;
+        }
+        if (text.matches(".*[0-9A-Za-z].*")) {
+            return false;
+        }
+        if (text.matches(".*(吗|呢|啥|什么|哪|谁|多少|咋|怎么|为什么|是不是|能不能).*")) {
+            return false;
+        }
+        if (text.matches(".*(上次|之前|那次|刚才|后来|那件事|记得).*")) {
+            return false;
+        }
+        return text.matches(".*(哈|嘿|嗯|哦|噢|好|行|对|是|谢谢|谢|牛|棒|厉害|可以|收到|懂了|知道了|真的|确实).*");
     }
 
     private boolean validUserId(String userId) {
