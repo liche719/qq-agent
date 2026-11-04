@@ -104,6 +104,10 @@ services:
       # 唱歌（2026-11-03）：fun-music-v1 邀测模型，开通后把 VOICE_MUSIC_ENABLED 设 true 并配 WorkspaceId 端点
       # 生图（2026-11-03）：与对话分开配，两家厂商
       # 记忆检索（2026-11-04）：精排额度用光后默认关；BM25+RRF 是主力
+      # 上下文窗口（2026-11-04 压到 14 轮，省约 2500 token/轮）
+      MEMORY_CONTEXT_ROUNDS: ${MEMORY_CONTEXT_ROUNDS:-19}
+      MEMORY_CONTEXT_MAX_TURNS: ${MEMORY_CONTEXT_MAX_TURNS:-19}
+      MEMORY_CONTEXT_MAX_CHARS: ${MEMORY_CONTEXT_MAX_CHARS:-15000}
       MEMORY_RERANK_ENABLED: ${MEMORY_RERANK_ENABLED:-false}
       MEMORY_BM25_ENABLED: ${MEMORY_BM25_ENABLED:-true}
       LLM_IMAGE_BASE_URL: ${LLM_IMAGE_BASE_URL:-https://dashscope.aliyuncs.com}
