@@ -103,6 +103,9 @@ services:
       # 但日志里只是两条「认不出的场景已忽略」的 WARN，很难注意到。
       # 唱歌（2026-11-03）：fun-music-v1 邀测模型，开通后把 VOICE_MUSIC_ENABLED 设 true 并配 WorkspaceId 端点
       # 生图（2026-11-03）：与对话分开配，两家厂商
+      # 记忆检索（2026-11-04）：精排额度用光后默认关；BM25+RRF 是主力
+      MEMORY_RERANK_ENABLED: ${MEMORY_RERANK_ENABLED:-false}
+      MEMORY_BM25_ENABLED: ${MEMORY_BM25_ENABLED:-true}
       LLM_IMAGE_BASE_URL: ${LLM_IMAGE_BASE_URL:-https://dashscope.aliyuncs.com}
       LLM_IMAGE_API_KEY: ${LLM_IMAGE_API_KEY:-}
       LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-qwen-image-3.0}
