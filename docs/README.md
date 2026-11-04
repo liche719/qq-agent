@@ -11,8 +11,7 @@
 | 文档 | 管什么 | 最后更新 |
 |---|---|---|
 | [`pitfalls.md`](pitfalls.md) | **踩坑第一步**：103 条坑 + 判定方法 + 修法 | 2026-11-02 |
-| [`memory-window-design.md`](memory-window-design.md) | **上下文窗口 / 提取窗口 / STATE 的完整设计**：19 轮、15+2+2、游标防丢、实测数据 | 2026-11-02 |
-| [`memory-extraction.md`](memory-extraction.md) | 记忆提取的触发、窗口、成本、写什么不写什么 | 2026-11-01 |
+| [`memory-architecture.md`](memory-architecture.md) | **记忆系统唯一事实来源**：当前链路、配置、变更清单、待验证项、工作纪律 | 2026-11-04 |
 | [`agent-loop.md`](agent-loop.md) | Agent 循环：计划三档、失败分级、反思与重规划、软预算、进度降级 | 2026-10-28 |
 | [`llm-call-modes.md`](llm-call-modes.md) | LLM 调用档位、思考模式、缓存计价（含 8 档实测表） | 2026-10-29 |
 | [`eval.md`](eval.md) | 记忆与 Agent 评测：用例结构、怎么跑、当前基线 | 2026-10-29 |
@@ -24,8 +23,6 @@
 | 文档 | 管什么 |
 |---|---|
 | [`tools-and-prompt-inventory.md`](tools-and-prompt-inventory.md) | 65 个工具与 34 条提示词的真实调用数据、失败率、取舍记录 |
-| [`memory-architecture.md`](memory-architecture.md) | **记忆与召回的整体设计**（四层漏斗、只排一次序、断层截断、75% 召回目标与路线） | 2026-11-04 |
-| [`memory-vector-plan.md`](memory-vector-plan.md) | 三层记忆（`memory` / `memory_fact` / `conversation_memory`）的设计与实测 |
 | [`self-layer-plan.md`](self-layer-plan.md) | 自主模块「它自己」的设计与实测（主文档） |
 | [`ai-abilities.md`](ai-abilities.md) | 看视频 / 画图 / B站评论带图 / 长任务后台跑 |
 | [`backup.md`](backup.md) | 备份改版与恢复步骤 |
@@ -44,7 +41,10 @@
 |---|---|
 | [`resume-project.md`](resume-project.md) | 简历里这个项目的条目素材（写取舍、数据、验证方式） |
 
-## 存档（已完结，只读）
+## 存档（只读，不维护）
+
+> 2026-11-04 整理：`memory-vector-plan.md`（v2 设计方案）、`memory-extraction.md`（9-14 现状快照）、`memory-window-design.md`（窗口设计，内容已并入 memory-architecture.md）已移入 `archive/`。
+（已完结，只读）
 
 | 文档 | 是什么 |
 |---|---|
@@ -59,6 +59,7 @@
 
 ## 变更日志
 
+- **2026-11-04**：`memory-architecture.md` 重写成**唯一事实来源**（当前链路/配置/变更清单/待验证项）；`memory-vector-plan` / `memory-extraction` / `memory-window-design` 三份并入后移入存档；根目录 24 → 21 份。
 - **2026-11-03**：新增 `logging.md`（日志落盘位置、速查脚本、级别约定）；`pitfalls` 补第 104~106 条。
 - **2026-11-02**：整理文档。`plan-2026-10-26` / `refactor` / `refactor-summary` 进存档；
   `memory-extraction` 里重复的一节压成指针，细节统一到 `memory-window-design.md`。
