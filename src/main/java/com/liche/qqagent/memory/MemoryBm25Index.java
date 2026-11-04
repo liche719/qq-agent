@@ -33,6 +33,7 @@ public class MemoryBm25Index {
     /** 索引缓存有效期：记忆写入后最迟这么久生效（简单、够用） */
     private static final long TTL_MILLIS = 5 * 60 * 1000L;
 
+    private final boolean enabled;
     private final MemoryRepository repository;
     private final JiebaSegmenter segmenter = new JiebaSegmenter();
     private final double k1;
@@ -43,9 +44,11 @@ public class MemoryBm25Index {
     private final Map<String, Snapshot> cache = new java.util.concurrent.ConcurrentHashMap<>();
 
     public MemoryBm25Index(MemoryRepository repository,
+                           @Value("${memory.bm25.enabled:true}") boolean enabled,
                            @Value("${memory.bm25.k1:1.2}") double k1,
                            @Value("${memory.bm25.b:0.75}") double b,
                            @Value("${memory.bm25.max-chars:600}") int maxChars) {
+        this.enabled = enabled;
         this.repository = repository;
         this.k1 = k1;
         this.b = b;
@@ -62,7 +65,7 @@ public class MemoryBm25Index {
      * @param limit 最多返回几条
      */
     public List<Memory> search(String userId, String query, int limit) {
-        if (userId == null || userId.isBlank() || query == null || query.isBlank()) {
+        if (!enabled || userId == null || userId.isBlank() || query == null || query.isBlank()) {
             return List.of();
         }
         Snapshot snapshot = snapshotOf(userId);
@@ -154,6 +157,7 @@ public class MemoryBm25Index {
         }
         try {
             List<Memory> memories = repository.findByUserId(userId);
+            log.info("记忆索引取材 user=[{}] 查到={} 条", userId, memories == null ? -1 : memories.size());
             if (memories == null || memories.isEmpty()) {
                 Snapshot empty = new Snapshot(now, Map.of(), Map.of(), Map.of(), Map.of(), 0, 0);
                 cache.put(userId, empty);

@@ -38,6 +38,9 @@ import java.util.regex.Pattern;
 @Component
 public class MemoryRetrievalService {
 
+    /** RRF 的平滑常数（原论文推荐 60）：越大越弱化名次差异 */
+    private static final int RRF_K = 60;
+
     private static final Logger log = LoggerFactory.getLogger(MemoryRetrievalService.class);
 
     private static final Pattern HAN_OR_WORD = Pattern.compile("[\\p{IsHan}]{2,}|[a-zA-Z0-9_]{2,}");
@@ -151,7 +154,7 @@ public class MemoryRetrievalService {
         // ②③ 中期事项 + 经历：都按向量挑，共用 workMaxChars 预算
         long tProfile1 = System.currentTimeMillis();
         List<Memory> experiences = rankByVector(userId, queryVector, episodeVectorFloor, Memory.KIND_EXPERIENCE);
-        experiences = mergeLexical(userId, normalizedQuery, experiences, Memory.KIND_EXPERIENCE, 8);
+        experiences = rrfMerge(userId, normalizedQuery, experiences, Memory.KIND_EXPERIENCE, 12);
         experiences = rerank(normalizedQuery, experiences, 3);
         long tVector1 = System.currentTimeMillis();
         int totalWorkBudget = Math.max(1, workMaxChars);
@@ -159,7 +162,7 @@ public class MemoryRetrievalService {
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
         int activeWorkBudget = Math.max(1, totalWorkBudget - episodeBudget);
         List<Memory> tasks = rankByVector(userId, queryVector, workVectorFloor, Memory.KIND_TASK);
-        tasks = mergeLexical(userId, normalizedQuery, tasks, Memory.KIND_TASK, 8);
+        tasks = rrfMerge(userId, normalizedQuery, tasks, Memory.KIND_TASK, 12);
         tasks = rerank(normalizedQuery, tasks, 4);
         List<Memory> selectedTasks = select(tasks, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
@@ -212,47 +215,63 @@ public class MemoryRetrievalService {
      * <p>不启用 / 调用失败 / 候选太少时**原样返回**——精排只是减噪，不能让它变成单点故障。
      */
     /**
-     * 把 BM25 命中并进向量候选（2026-11-04）。
+     * 向量 + BM25 的 RRF 融合（2026-11-04）。
      *
-     * <p>为什么取并集而不是 RRF：后面还有 rerank 精排，**排序交给它更准**；
-     * 召回阶段只需要保证"该在候选里的别漏"。RRF 是"没有精排"时的替代品。
+     * <p><b>为什么从"并集"改成 RRF</b>：实测并集会让候选从 8 条涨到 16 条，
+     * 后面 rerank 在更嘈杂的池子里挑 4 条，把原来向量已经挑中的挤掉了——
+     * 召回率 53.6% → 52.8%，注入字数 1335 → 2797。**堆在一起不等于融合。**
+     *
+     * <p>RRF 只看"在各路里的名次"：{@code score = Σ 1/(k + rank)}，k=60。
+     * 这样某一路塞再多候选也不会淹没另一路——名次才是发言权。
      */
-    private List<Memory> mergeLexical(String userId, String query, List<Memory> vectorHits,
-                                      String kind, int lexicalLimit) {
-        if (bm25Index == null) {
+    private List<Memory> rrfMerge(String userId, String query, List<Memory> vectorHits,
+                                  String kind, int limit) {
+        if (bm25Index == null || vectorHits == null || vectorHits.isEmpty()) {
             return vectorHits;
         }
+        List<Memory> lexical;
         try {
-            List<Memory> lexical = bm25Index.search(userId, query, lexicalLimit * 3);
-            if (lexical == null || lexical.isEmpty()) {
-                return vectorHits;
-            }
-            java.util.Set<Long> seen = new java.util.HashSet<>();
-            if (vectorHits != null) {
-                for (Memory memory : vectorHits) {
-                    if (memory != null && memory.getId() != null) {
-                        seen.add(memory.getId());
-                    }
-                }
-            }
-            List<Memory> merged = new ArrayList<>(vectorHits == null ? List.of() : vectorHits);
-            int added = 0;
-            for (Memory memory : lexical) {
-                if (added >= lexicalLimit) {
-                    break;
-                }
-                if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())
-                        || seen.contains(memory.getId())) {
-                    continue;
-                }
-                seen.add(memory.getId());
-                merged.add(memory);
-                added++;
-            }
-            return merged;
+            lexical = bm25Index.search(userId, query, Math.max(limit * 4, 20));
         } catch (RuntimeException exception) {
             return vectorHits;
         }
+        if (lexical == null || lexical.isEmpty()) {
+            return vectorHits;
+        }
+        java.util.Map<Long, Double> scores = new java.util.LinkedHashMap<>();
+        java.util.Map<Long, Memory> byId = new java.util.LinkedHashMap<>();
+        java.util.Set<Long> bm25Ids = new java.util.HashSet<>();
+        for (Memory memory : lexical) {
+            if (memory != null && memory.getId() != null) {
+                bm25Ids.add(memory.getId());
+            }
+        }
+        for (int rank = 0; rank < vectorHits.size(); rank++) {
+            Memory memory = vectorHits.get(rank);
+            if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())) {
+                continue;
+            }
+            // 两路都命中的给加权：向量名次 + BM25 名次各算一份，重合说明更可信
+            scores.merge(memory.getId(), 1.0 / (RRF_K + rank + 1), Double::sum);
+            byId.putIfAbsent(memory.getId(), memory);
+        }
+        for (int rank = 0; rank < lexical.size(); rank++) {
+            Memory memory = lexical.get(rank);
+            if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())) {
+                continue;
+            }
+            scores.merge(memory.getId(), 1.0 / (RRF_K + rank + 1), Double::sum);
+            byId.putIfAbsent(memory.getId(), memory);
+        }
+        if (scores.isEmpty()) {
+            return vectorHits;
+        }
+        return scores.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .limit(Math.max(1, limit))
+                .map(entry -> byId.get(entry.getKey()))
+                .filter(java.util.Objects::nonNull)
+                .toList();
     }
 
     private List<Memory> rerank(String query, List<Memory> candidates, int maxKeep) {

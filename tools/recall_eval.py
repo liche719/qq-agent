@@ -70,7 +70,7 @@ def psql(sql):
 def sample_memories(limit):
     sql = ("select id || '|' || kind || '|' || replace(replace(content, chr(10), ' '), '|', ' ') "
            "from memory where kind in ('PROFILE','TASK','EXPERIENCE') "
-           "and length(content) between 25 and 200 order by random() limit {0}".format(limit))
+           "and length(content) between 25 and 200 order by md5(id::text) limit {0}".format(limit))
     rows = []
     for line in psql(sql).splitlines():
         parts = line.split("|", 2)
@@ -145,25 +145,48 @@ def run_eval(pairs):
     return results
 
 
-def main():
-    print("抽样 {0} 条记忆…".format(SAMPLE), flush=True)
-    memories = sample_memories(SAMPLE)
-    print("拿到 {0} 条".format(len(memories)), flush=True)
+CACHE = os.path.join(tempfile.gettempdir(), "recall_questions.json")
+
+
+def load_or_build(memories):
+    """题库缓存：第一次生成后存下来，之后的 A/B 用同一份（否则温度 0.3 会让两次题库不同）"""
+    if os.path.exists(CACHE):
+        with open(CACHE, encoding="utf-8") as handle:
+            cached = json.load(handle)
+        by_id = {m["id"]: m for m in memories}
+        pairs = []
+        for item in cached:
+            memory = by_id.get(item["id"])
+            if memory and item.get("key"):
+                pairs.append((item["question"], memory, item["key"]))
+        if pairs:
+            print("复用题库 {0} 条（{1}）".format(len(pairs), CACHE), flush=True)
+            return pairs
 
     pairs = []
+    total_batches = (len(memories) + BATCH - 1) // BATCH
     for index in range(0, len(memories), BATCH):
         chunk = memories[index:index + BATCH]
         questions = make_questions(chunk)
-        if not questions:
-            print("  第 {0} 批出题失败，跳过".format(index // BATCH + 1), flush=True)
-            continue
         for memory, question in zip(chunk, questions):
             if not question:
                 continue
             key = key_of(memory["content"])
             if key:
                 pairs.append((question, memory, key))
-        print("  出题累计 {0}".format(len(pairs)), flush=True)
+        print("  出题 {0}/{1}（累计 {2}）".format(index // BATCH + 1, total_batches, len(pairs)), flush=True)
+    with open(CACHE, "w", encoding="utf-8") as handle:
+        json.dump([{"id": m["id"], "question": q, "key": k} for q, m, k in pairs], handle, ensure_ascii=False)
+    print("题库已存 {0}".format(CACHE), flush=True)
+    return pairs
+
+
+def main():
+    print("抽样 {0} 条记忆…".format(SAMPLE), flush=True)
+    memories = sample_memories(SAMPLE)
+    print("拿到 {0} 条".format(len(memories)), flush=True)
+
+    pairs = load_or_build(memories)
     print("题库 {0} 条，开始评测…".format(len(pairs)), flush=True)
 
     results = run_eval(pairs)
