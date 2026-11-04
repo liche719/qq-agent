@@ -56,6 +56,10 @@ public class MemoryRetrievalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MemoryBm25Index bm25Index;
 
+    /** 说话意图判别（词表在配置里，不写死在代码） */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MemorySignal memorySignal;
+
     /** 指代型查询改写（2026-11-04）：把"上次那件事"补成有具体词的查询 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MemoryQueryRewriter queryRewriter;
@@ -614,23 +618,7 @@ public class MemoryRetrievalService {
      * 宁可多花 700ms，也不能让它对着重要上下文装失忆。
      */
     private boolean isSmallTalk(String query) {
-        if (query == null) {
-            return false;
-        }
-        String text = query.trim();
-        if (text.isEmpty() || text.length() > 8) {
-            return false;
-        }
-        if (text.matches(".*[0-9A-Za-z].*")) {
-            return false;
-        }
-        if (text.matches(".*(吗|呢|啥|什么|哪|谁|多少|咋|怎么|为什么|是不是|能不能).*")) {
-            return false;
-        }
-        if (text.matches(".*(上次|之前|那次|刚才|后来|那件事|记得).*")) {
-            return false;
-        }
-        return text.matches(".*(哈|嘿|嗯|哦|噢|好|行|对|是|谢谢|谢|牛|棒|厉害|可以|收到|懂了|知道了|真的|确实).*");
+        return memorySignal != null && memorySignal.isSmallTalk(query);
     }
 
     private boolean validUserId(String userId) {

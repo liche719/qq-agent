@@ -40,6 +40,10 @@ public class MemoryQueryRewriter {
     private final int maxChars;
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
+    /** 意图判别（词表在配置里） */
+    @Autowired(required = false)
+    private MemorySignal signal;
+
     @Autowired(required = false)
     private ConversationMemoryService conversationMemoryService;
 
@@ -58,29 +62,9 @@ public class MemoryQueryRewriter {
 
     /** 是不是"自己没说清"的问题 */
     public boolean referential(String query) {
-        if (query == null || query.isBlank()) {
-            return false;
-        }
-        String text = query.trim();
-        for (String marker : REFERENTIAL) {
-            if (text.contains(marker)) {
-                return true;
-            }
-        }
-        // 2026-11-04 踩过：原来用"很短 + 没数字"当判据，把"哈哈记得真好"这种**夸奖**
-        // 也当成指代型去改写了（结果它去检索"恩儿 电话手表 521"，纯粹浪费一次调用）。
-        // 现在只在**确实在追问**时才触发：短句 + 疑问词，或明确指向过去。
-        boolean asking = text.matches(".*(吗|呢|啥|什么|哪|谁|多少|咋|怎么|还记得|记不记得|来着).*");
-        boolean pointingBack = text.contains("上次") || text.contains("之前") || text.contains("那次")
-                || text.contains("那件事") || text.contains("刚才") || text.contains("后来");
-        return pointingBack || (text.length() <= 8 && asking);
+        return signal != null && signal.isReferential(query);
     }
 
-    /**
-     * 需要就改写成具体查询，不需要就原样返回。
-     *
-     * <p>失败一律**退回原句**——改写是为了帮忙，不能变成新的故障点。
-     */
     public String expand(String userId, String query) {
         if (!enabled() || !referential(query)) {
             return query;
