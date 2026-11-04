@@ -48,6 +48,10 @@ public class MemoryService {
     /** 相似但不同的下限（2026-10-28）：落在 [floor, dedupThreshold) 时，旧条目标 SUPERSEDED 而不是并存 */
     @org.springframework.beans.factory.annotation.Value("${memory.supersede-floor:0.65}")
     private double supersedeFloor = 0.65d;
+    /** 近似去重阈值（2026-11-04）：同事件多次记录实测相似度普遍 >0.95，取 0.92 留余量 */
+    @org.springframework.beans.factory.annotation.Value("${memory.duplicate-threshold:0.92}")
+    private double duplicateThreshold;
+
     private final EmbeddingClient embeddingClient;
     private final PgVectorStore vectorStore;
     private final int coreMaxContentChars;
@@ -746,6 +750,47 @@ public class MemoryService {
         return vectorStore == null ? Set.of() : vectorStore.idsWithEmbedding(TABLE, userId);
     }
 
+    /**
+     * 写入后的**近似去重**（2026-11-04）。
+     *
+     * <p><b>为什么要有</b>：实测同一条经历被存了 8 次（措辞不同、语义一样），
+     * 检索时这 8 条互相稀释相似度，"上次那事"因此排不上去。
+     *
+     * <p><b>为什么是"写入后"而不是"写入前"</b>：向量是落库之后才算的（{@link #indexVector}）。
+     * 写入前算一次、写入后再算一次，等于每条记忆多花一次 embedding 调用——
+     * 这里只在**算完向量之后**比对，零额外调用。
+     *
+     * <p><b>怎么处理新来的</b>：如果和已有记忆高度相似，**保留更早的那条，把新的标 SUPERSEDED**。
+     * 不删数据（可回滚），检索默认只看 ACTIVE。
+     */
+    private void supersedeIfDuplicate(Memory saved, float[] vector) {
+        if (saved == null || saved.getId() == null || vectorStore == null || vector == null) {
+            return;
+        }
+        try {
+            java.util.Map<Long, Double> scores = vectorStore.scores(TABLE, saved.getUserId(), vector);
+            if (scores == null || scores.isEmpty()) {
+                return;
+            }
+            Long twin = scores.entrySet().stream()
+                    .filter(entry -> entry.getKey() != null && !entry.getKey().equals(saved.getId()))
+                    .filter(entry -> entry.getValue() != null && entry.getValue() > duplicateThreshold)
+                    .filter(entry -> entry.getKey() < saved.getId())
+                    .max(java.util.Map.Entry.comparingByValue())
+                    .map(java.util.Map.Entry::getKey)
+                    .orElse(null);
+            if (twin == null) {
+                return;
+            }
+            saved.setStatus(MemoryStatus.SUPERSEDED.name());
+            repository.save(saved);
+            log.info("记忆近似重复，标为 SUPERSEDED id={} 旧 id={} 相似度={}",
+                    saved.getId(), twin, String.format("%.3f", scores.get(twin)));
+        } catch (RuntimeException exception) {
+            log.debug("近似去重失败（不影响写入）：{}", exception.getMessage());
+        }
+    }
+
     /** 给一条记忆算向量并写回（失败只记日志，记忆本身已经落库） */
     private void indexVector(Memory memory) {
         if (memory == null || memory.getId() == null || embeddingClient == null || vectorStore == null
@@ -755,6 +800,8 @@ public class MemoryService {
         float[] vector = embeddingClient.embedOne(vectorText(memory));
         if (vector != null) {
             vectorStore.saveEmbedding(TABLE, memory.getId(), vector, embeddingClient.model());
+            // 2026-11-04：向量已经算好了，顺手比对一次近似重复（不额外调模型）
+            supersedeIfDuplicate(memory, vector);
         }
     }
 
