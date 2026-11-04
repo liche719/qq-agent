@@ -55,6 +55,10 @@ public class MemoryRetrievalService {
     /** 字面检索（2026-11-04）：BM25 补"专有名词/编号"这一路，和向量取并集后交给精排 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MemoryBm25Index bm25Index;
+
+    /** 指代型查询改写（2026-11-04）：把"上次那件事"补成有具体词的查询 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MemoryQueryRewriter queryRewriter;
     private final double conversationVectorFloor;
     private final int conversationRecallLimit;
     private final int historicalLimit;
@@ -131,6 +135,15 @@ public class MemoryRetrievalService {
         }
         LocalDateTime now = LocalDateTime.now();
         String normalizedQuery = normalize(query);
+        // 2026-11-04：指代型问题（"我上次说的你还清楚吗"）没有可检索的词，
+        // 先用最近几轮对话把它补全成具体查询；正常问题原样返回，不花这次调用。
+        if (queryRewriter != null) {
+            try {
+                normalizedQuery = normalize(queryRewriter.expand(userId, normalizedQuery));
+            } catch (RuntimeException ignored) {
+                // 改写失败就用原句，不阻塞
+            }
+        }
         boolean historicalQuery = containsHistoryMarker(normalizedQuery);
         // 2026-11-01：召回整体实测偶发 10 秒以上，分段计时定位（超过 800ms 才打）
         long t0 = System.currentTimeMillis();
@@ -168,8 +181,9 @@ public class MemoryRetrievalService {
         List<Memory> selectedExperiences = select(experiences,
                 Memory::getContent, this::formatEpisode, historicalLimit, episodeBudget);
 
+        final String matchQuery = normalizedQuery;
         boolean hasRelevantActiveMemory = !tasks.isEmpty()
-                || profiles.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), normalizedQuery)
+                || profiles.stream().anyMatch(memory -> score(memory.getContent(), memory.getKeywords(), matchQuery)
                         >= minimumHistoricalScore)
                 || !experiences.isEmpty();
         long tRank = System.currentTimeMillis();
