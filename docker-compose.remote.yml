@@ -6,6 +6,11 @@ services:
   agent:
     image: ${AGENT_IMAGE:-qq-agent:latest}
     container_name: qq-agent
+    # 2026-11-04：**内存上限**。原来没设 limit，JVM 用 MaxRAMPercentage=75 看到 1.83 GB
+    # 就允许自己长到 1.4 GB 堆，而机器只有 1.87 GB —— 内核只能把 Java 页换到 swap
+    # （实测 swap 用了 1.5 GB，java 占 966 MB，检索因此偶发慢到 3~21 秒）。
+    # 应用实际只用 ~80 MB，640 MB 上限给足余量。
+    mem_limit: 640m
     restart: unless-stopped
     # 与 MySQL/Redis/SearXNG 共用宿主网络：容器内 127.0.0.1 即服务器本机。
     # 面板由应用**自带 HTTPS**（原 nginx 网关已移除），对外监听标准端口 443，
@@ -24,6 +29,8 @@ services:
         max-size: "10m"
         max-file: "3"
     environment:
+      # 堆上限跟着容器内存上限（640m × 50% ≈ 320m）。原来 75% 会让堆能长到 1.4GB。
+      JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=50 -Djava.security.egd=file:/dev/./urandom}
       SERVER_ADDRESS: ${SERVER_ADDRESS:-0.0.0.0}
       SERVER_PORT: ${SERVER_PORT:-443}
       SERVER_SSL_ENABLED: "true"

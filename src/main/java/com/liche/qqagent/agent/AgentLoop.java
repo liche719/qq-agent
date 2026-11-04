@@ -934,8 +934,8 @@ public class AgentLoop {
             String boundBotId = toolStatusService.currentBotId();
             String boundChannel = toolStatusService.currentChannel();
             String boundReplyTo = toolStatusService.currentReplyToMsgId();
-            // 2026-11-03：**统一**把上下文搬过线程边界（ToolContextBundle），并自检。
-            // 之前逐个搬，漏了 MediaToolContextService，导致"改刚才那张图"必失败。
+            // 2026-11-03：上下文**显式**传进执行层（ToolContext），这里不再手工搬任何东西。
+            // 之前逐个搬 ThreadLocal，漏了 MediaToolContextService，导致"改刚才那张图"必失败。
             // 2026-11-03：上下文**显式**传进执行层，这里（以及线程池里）不再手工搬任何东西。
             var toolContext = new com.liche.qqagent.tool.ToolContext(userId, boundBotId, boundChannel, boundReplyTo,
                     mediaToolContextService == null ? null : mediaToolContextService.snapshot());
