@@ -98,6 +98,9 @@ public class MemoryExtractionScheduler {
     private final ConversationMemoryRepository conversationMemory;
     private final MemoryExtractionRunRepository runs;
     private final int rounds;
+    /** 积压阈值（2026-11-04）：待处理超过这么多轮就提前触发，不等攒满 */
+    @org.springframework.beans.factory.annotation.Value("${memory.extraction-backlog-rounds:6}")
+    private int backlogRounds;
     private final int maxIdleHours;
     private final int coalesceSeconds;
     private final int minIntervalSeconds;
@@ -239,6 +242,12 @@ public class MemoryExtractionScheduler {
         Pending pending = pending(userId);
         if (pending.turns() >= rounds) {
             return "ROUNDS";
+        }
+        // 2026-11-04：**积压优先**。原来只有攒够 rounds 才跑，一旦积压（实测出现过 41 行）
+        // 就只能等下一轮攒够再清 40 行，追不上流入速度。现在超过 backlogRounds 就立刻跑，
+        // 用更小的批量、更勤的频率把积压清掉。
+        if (pending.turns() >= backlogRounds) {
+            return "BACKLOG";
         }
         if (pending.turns() > 0 && pending.oldest() != null
                 && pending.oldest().isBefore(LocalDateTime.now().minusHours(maxIdleHours))) {
