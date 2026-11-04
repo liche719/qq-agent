@@ -51,9 +51,6 @@ public class MemoryRetrievalService {
     private final double workVectorFloor;
     private final double episodeVectorFloor;
 
-    /** 精排（2026-11-04）：召回照旧，精排后按分数断层截断，把注入字数压下来 */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private MemoryRerankClient rerankClient;
 
     /** 字面检索（2026-11-04）：BM25 补"专有名词/编号"这一路，和向量取并集后交给精排 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -146,7 +143,6 @@ public class MemoryRetrievalService {
 
         // ① 长期设定：无条件注入，按字面相关度 + 重要度 + 最近确认排序（没有向量门槛）
         List<Memory> profiles = profileCandidates(userId, normalizedQuery);
-        profiles = rerank(normalizedQuery, profiles, 6);
         List<Memory> selectedProfiles = select(profiles, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, coreMaxLoad), Math.max(1, coreMaxChars));
@@ -154,16 +150,14 @@ public class MemoryRetrievalService {
         // ②③ 中期事项 + 经历：都按向量挑，共用 workMaxChars 预算
         long tProfile1 = System.currentTimeMillis();
         List<Memory> experiences = rankByVector(userId, queryVector, episodeVectorFloor, Memory.KIND_EXPERIENCE);
-        experiences = rrfMerge(userId, normalizedQuery, experiences, Memory.KIND_EXPERIENCE, 12);
-        experiences = rerank(normalizedQuery, experiences, 3);
+        experiences = mergeLexical(userId, normalizedQuery, experiences, Memory.KIND_EXPERIENCE, 4);
         long tVector1 = System.currentTimeMillis();
         int totalWorkBudget = Math.max(1, workMaxChars);
         int episodeBudget = experiences.isEmpty() ? 0
                 : Math.min(totalWorkBudget, Math.max(80, Math.min(600, totalWorkBudget / 2)));
         int activeWorkBudget = Math.max(1, totalWorkBudget - episodeBudget);
         List<Memory> tasks = rankByVector(userId, queryVector, workVectorFloor, Memory.KIND_TASK);
-        tasks = rrfMerge(userId, normalizedQuery, tasks, Memory.KIND_TASK, 12);
-        tasks = rerank(normalizedQuery, tasks, 4);
+        tasks = mergeLexical(userId, normalizedQuery, tasks, Memory.KIND_TASK, 4);
         List<Memory> selectedTasks = select(tasks, Memory::getContent,
                 memory -> memory.getContent() + mediaSuffix(memory.getSourceMediaIds(), linkedMedia),
                 Math.max(1, workMaxLoad), activeWorkBudget);
@@ -215,75 +209,64 @@ public class MemoryRetrievalService {
      * <p>不启用 / 调用失败 / 候选太少时**原样返回**——精排只是减噪，不能让它变成单点故障。
      */
     /**
-     * 向量 + BM25 的 RRF 融合（2026-11-04）。
+     * 向量候选 + BM25 候选合并（2026-11-04 定稿）。
      *
-     * <p><b>为什么从"并集"改成 RRF</b>：实测并集会让候选从 8 条涨到 16 条，
-     * 后面 rerank 在更嘈杂的池子里挑 4 条，把原来向量已经挑中的挤掉了——
-     * 召回率 53.6% → 52.8%，注入字数 1335 → 2797。**堆在一起不等于融合。**
+     * <p><b>为什么不是 RRF</b>：实测 RRF 后召回 27.6%（向量+rerank 是 53.6%）。
+     * 原因是我们的两路候选高度重叠、且 RRF 分数是 1/61 量级，把原有的阈值/截断全废掉了，
+     * 结果取满上限、语义被抹平——TASK 类掉到 15%。
      *
-     * <p>RRF 只看"在各路里的名次"：{@code score = Σ 1/(k + rank)}，k=60。
-     * 这样某一路塞再多候选也不会淹没另一路——名次才是发言权。
+     * <p><b>为什么不是简单并集 + rerank</b>：rerank 额度已停用，而且并集后 rerank 重排
+     * 会把向量已经挑中的挤掉（实测 53.6% → 52.8%）。
+     *
+     * <p><b>现在的做法</b>：**向量顺序原样保留**，BM25 独有的命中按分数插到后面。
+     * 排序仍然是向量的语义相似度（这是目前最可靠的信号），BM25 只负责"补漏"。
+     * 字数预算在 select() 里截，所以补进来的不会挤掉原来那几条。
      */
-    private List<Memory> rrfMerge(String userId, String query, List<Memory> vectorHits,
-                                  String kind, int limit) {
-        if (bm25Index == null || vectorHits == null || vectorHits.isEmpty()) {
+    private List<Memory> mergeLexical(String userId, String query, List<Memory> vectorHits,
+                                      String kind, int lexicalLimit) {
+        if (bm25Index == null) {
+            return vectorHits;
+        }
+        // 只在**查询里带编号/英文/数字**时才补字面命中（2026-11-04 实测结论）：
+        // 250 题里 68% 是"纯指代"（我上次说的那件事），字面通道对它们没有任何信号，
+        // 补进来只会把注入字数从 1335 涨到 2772、召回还掉了 1 个点。
+        // 而"6e206 是哪门课""521 那次"这类，字面通道一枪命中——所以按查询特征按需启用。
+        if (query == null || !query.matches(".*[0-9A-Za-z].*")) {
             return vectorHits;
         }
         List<Memory> lexical;
         try {
-            lexical = bm25Index.search(userId, query, Math.max(limit * 4, 20));
+            lexical = bm25Index.search(userId, query, Math.max(lexicalLimit * 3, 20));
         } catch (RuntimeException exception) {
             return vectorHits;
         }
         if (lexical == null || lexical.isEmpty()) {
             return vectorHits;
         }
-        java.util.Map<Long, Double> scores = new java.util.LinkedHashMap<>();
-        java.util.Map<Long, Memory> byId = new java.util.LinkedHashMap<>();
-        java.util.Set<Long> bm25Ids = new java.util.HashSet<>();
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        List<Memory> merged = new java.util.ArrayList<>();
+        if (vectorHits != null) {
+            for (Memory memory : vectorHits) {
+                if (memory != null && memory.getId() != null) {
+                    seen.add(memory.getId());
+                }
+                merged.add(memory);
+            }
+        }
+        int added = 0;
         for (Memory memory : lexical) {
-            if (memory != null && memory.getId() != null) {
-                bm25Ids.add(memory.getId());
+            if (added >= lexicalLimit) {
+                break;
             }
-        }
-        for (int rank = 0; rank < vectorHits.size(); rank++) {
-            Memory memory = vectorHits.get(rank);
-            if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())) {
+            if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())
+                    || seen.contains(memory.getId())) {
                 continue;
             }
-            // 两路都命中的给加权：向量名次 + BM25 名次各算一份，重合说明更可信
-            scores.merge(memory.getId(), 1.0 / (RRF_K + rank + 1), Double::sum);
-            byId.putIfAbsent(memory.getId(), memory);
+            seen.add(memory.getId());
+            merged.add(memory);
+            added++;
         }
-        for (int rank = 0; rank < lexical.size(); rank++) {
-            Memory memory = lexical.get(rank);
-            if (memory == null || memory.getId() == null || !kind.equals(memory.getKind())) {
-                continue;
-            }
-            scores.merge(memory.getId(), 1.0 / (RRF_K + rank + 1), Double::sum);
-            byId.putIfAbsent(memory.getId(), memory);
-        }
-        if (scores.isEmpty()) {
-            return vectorHits;
-        }
-        return scores.entrySet().stream()
-                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
-                .limit(Math.max(1, limit))
-                .map(entry -> byId.get(entry.getKey()))
-                .filter(java.util.Objects::nonNull)
-                .toList();
-    }
-
-    private List<Memory> rerank(String query, List<Memory> candidates, int maxKeep) {
-        if (rerankClient == null || !rerankClient.enabled() || candidates == null || candidates.size() <= maxKeep) {
-            return candidates;
-        }
-        List<String> documents = candidates.stream().map(Memory::getContent).toList();
-        List<Integer> kept = rerankClient.rank(query, documents, maxKeep);
-        if (kept == null || kept.isEmpty()) {
-            return candidates;
-        }
-        return kept.stream().map(candidates::get).toList();
+        return merged;
     }
 
     private List<Memory> profileCandidates(String userId, String normalizedQuery) {

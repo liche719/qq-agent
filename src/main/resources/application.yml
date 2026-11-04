@@ -475,19 +475,6 @@ bilibili:
     max-chars: ${BILIBILI_COMMENT_MAX_CHARS:200}
 
 memory:
-  # 记忆精排（2026-11-04）：召回不变，精排后按分数断层截断，把注入字数压下来
-  rerank:
-    enabled: ${MEMORY_RERANK_ENABLED:true}
-    base-url: ${MEMORY_RERANK_BASE_URL:https://dashscope.aliyuncs.com}
-    api-key: ${MEMORY_RERANK_API_KEY:${EMBEDDING_API_KEY:}}
-    model: ${MEMORY_RERANK_MODEL:qwen3.7-text-rerank}
-    gap: ${MEMORY_RERANK_GAP:0.15}
-    floor: ${MEMORY_RERANK_FLOOR:0.30}
-    min-docs: ${MEMORY_RERANK_MIN_DOCS:8}
-    price-yuan-per-1k-docs: ${MEMORY_RERANK_PRICE_PER_1K_DOCS:0.26}
-  # 字面检索（2026-11-04）：BM25 + jieba，补"专有名词/编号"这一路；关掉退回纯向量
-  bm25:
-    enabled: ${MEMORY_BM25_ENABLED:true}
   extraction-thread-pool-size: ${MEMORY_EXTRACTION_THREAD_POOL_SIZE:2}
   extraction-thread-name-prefix: ${MEMORY_EXTRACTION_THREAD_NAME_PREFIX:memory-extract-}
   context-rounds: ${MEMORY_CONTEXT_ROUNDS:19}
