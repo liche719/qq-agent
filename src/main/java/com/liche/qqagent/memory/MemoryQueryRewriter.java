@@ -67,8 +67,13 @@ public class MemoryQueryRewriter {
                 return true;
             }
         }
-        // 很短又没有数字/英文的，多半也是"你懂的"那种问法
-        return text.length() <= 6 && !text.matches(".*[0-9A-Za-z].*");
+        // 2026-11-04 踩过：原来用"很短 + 没数字"当判据，把"哈哈记得真好"这种**夸奖**
+        // 也当成指代型去改写了（结果它去检索"恩儿 电话手表 521"，纯粹浪费一次调用）。
+        // 现在只在**确实在追问**时才触发：短句 + 疑问词，或明确指向过去。
+        boolean asking = text.matches(".*(吗|呢|啥|什么|哪|谁|多少|咋|怎么|还记得|记不记得|来着).*");
+        boolean pointingBack = text.contains("上次") || text.contains("之前") || text.contains("那次")
+                || text.contains("那件事") || text.contains("刚才") || text.contains("后来");
+        return pointingBack || (text.length() <= 8 && asking);
     }
 
     /**
